@@ -1,7 +1,7 @@
 import os
 import httpx
 
-from mcp_server.session import load_config
+from mcp_server.session import load_config, get_refresh_token, update_tokens
 
 load_config()
 
@@ -20,18 +20,55 @@ def _handle_error(response: httpx.Response) -> None:
         raise RuntimeError(f"psamvault API error {response.status_code}: {detail}")
 
 
+def _refresh_access_token(refresh_token: str) -> tuple[str, str]:
+    """POST /auth/refresh — returns (new_access_token, new_refresh_token)."""
+    response = httpx.post(
+        f"{BASE_URL}/auth/refresh",
+        json={"refresh_token": refresh_token},
+        timeout=30.0,
+    )
+    _handle_error(response)
+    data = response.json()
+    return data["access_token"], data["refresh_token"]
+
+
+def _refresh_and_retry(retry_fn):
+    """
+    Refresh the access token using the stored refresh token, persist both
+    new tokens to the session file, then retry the original request.
+    Raises RuntimeError if the refresh itself fails (session truly expired).
+    """
+    try:
+        refresh_token = get_refresh_token()
+        new_access, new_refresh = _refresh_access_token(refresh_token)
+        update_tokens(new_access, new_refresh)
+        return retry_fn(new_access)
+    except Exception as e:
+        raise RuntimeError(
+            "Session expired. Run  psamvault login  in your terminal to re-authenticate."
+        ) from e
+
+
 def list_vault_entries(access_token: str) -> list[dict]:
     """
     GET /vault — return all vault entries as lightweight list items.
     Returns site names and username hints only — no credential values.
     """
-    response = httpx.get(
-        f"{BASE_URL}/vault",
-        headers=_auth_headers(access_token),
-        timeout=30.0
-    )
-    _handle_error(response)
-    return response.json().get("entries", [])
+    def _call(token: str):
+        response = httpx.get(
+            f"{BASE_URL}/vault",
+            headers=_auth_headers(token),
+            timeout=30.0
+        )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json().get("entries", [])
+
+    result = _call(access_token)
+    if result is None:
+        return _refresh_and_retry(_call)
+    return result
 
 
 def get_vault_entry(access_token: str, site_name: str) -> dict:
@@ -39,13 +76,21 @@ def get_vault_entry(access_token: str, site_name: str) -> dict:
     GET /vault/{site_name} — return the encrypted blob and iv for a site.
     The MCP server decrypts this locally before passing to the proxy.
     """
-    response = httpx.get(
-        f"{BASE_URL}/vault/{site_name}",
-        headers=_auth_headers(access_token),
-        timeout=30.0,
-    )
-    _handle_error(response)
-    return response.json()
+    def _call(token: str):
+        response = httpx.get(
+            f"{BASE_URL}/vault/{site_name}",
+            headers=_auth_headers(token),
+            timeout=30.0,
+        )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = _call(access_token)
+    if result is None:
+        return _refresh_and_retry(_call)
+    return result
     
     
 def check_site_exists(access_token: str, site_name: str) -> dict:
@@ -53,13 +98,21 @@ def check_site_exists(access_token: str, site_name: str) -> dict:
     GET /vault/proxy/check/{site_name} — verify a credential is stored.
     Returns exists bool and username_hint — never the password.
     """
-    response = httpx.get(
-        f"{BASE_URL}/vault/proxy/check/{site_name}",
-        headers=_auth_headers(access_token),
-        timeout=30.0,
-    )
-    _handle_error(response)
-    return response.json()
+    def _call(token: str):
+        response = httpx.get(
+            f"{BASE_URL}/vault/proxy/check/{site_name}",
+            headers=_auth_headers(token),
+            timeout=30.0,
+        )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = _call(access_token)
+    if result is None:
+        return _refresh_and_retry(_call)
+    return result
 
 
 def proxy_request(
@@ -83,28 +136,35 @@ def proxy_request(
     outbound call to the target.
     """
     request_body = body or {}
-    
-    # Embed credential fields for backend injection
-    # These are stripped server-side before the outbound request
     request_body["_credential_username"] = credential_username
     request_body["_credential_password"] = credential_password
-    
-    response = httpx.post(
-        f"{BASE_URL}/vault/proxy",
-        headers=_auth_headers(access_token),
-        json={
-            "site_name": site_name,
-            "target_url": target_url,
-            "method": method,
-            "inject_as": inject_as,
-            "header_name": header_name,
-            "body": request_body,
-            "extra_headers": extra_headers,
-        },
-        timeout=60.0,
-    )
-    _handle_error(response)
-    return response.json()
+
+    payload = {
+        "site_name": site_name,
+        "target_url": target_url,
+        "method": method,
+        "inject_as": inject_as,
+        "header_name": header_name,
+        "body": request_body,
+        "extra_headers": extra_headers,
+    }
+
+    def _call(token: str):
+        response = httpx.post(
+            f"{BASE_URL}/vault/proxy",
+            headers=_auth_headers(token),
+            json=payload,
+            timeout=60.0,
+        )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = _call(access_token)
+    if result is None:
+        return _refresh_and_retry(_call)
+    return result
     
     
     
