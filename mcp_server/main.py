@@ -191,22 +191,30 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
+async def _run_server() -> None:
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options(),
+        )
+
+
 def main() -> None:
     """Start the psamvault MCP server over stdio."""
     print(
         "psamvault MCP server starting...",
         file=sys.stderr
     )
-    
+
     if not is_logged_in():
         print(
             "Warning: not logged in to psamvault. "
             "Run psamvault login before using vault tools",
             file=sys.stderr
         )
-        
-    
-    asyncio.run(stdio_server(server))
+
+    asyncio.run(_run_server())
     
 
 if __name__ == "__main__":
