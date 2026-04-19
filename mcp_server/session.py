@@ -86,6 +86,24 @@ def get_vek() -> bytes:
     return bytes.fromhex(vek_hex)
 
 
+def get_refresh_token() -> str:
+    """Return the current refresh token from the session"""
+    return load_session()["refresh_token"]
+
+
+def update_tokens(access_token: str, refresh_token: str) -> None:
+    """
+    Overwrite both access_token and refresh_token in the session file.
+    Called after a successful token rotation so the new refresh token
+    is persisted — without this the old revoked token gets reused on
+    the next request, causing a permanent 401 loop.
+    """
+    session = load_session()
+    session["access_token"] = access_token
+    session["refresh_token"] = refresh_token
+    SESSION_FILE.write_text(json.dumps(session, indent=2))
+
+
 def get_kdf_salt() -> str:
     """Return the kdf salt from the session"""
     return load_session()["kdf_salt"]
