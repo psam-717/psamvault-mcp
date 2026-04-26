@@ -127,6 +127,59 @@ TOOL_DEFINITIONS = [
             },
             "required": ["site_name"]
         }
+    ),
+    Tool(
+        name="debug_dump_credential",
+        description=(
+            "DIAGNOSTIC TOOL — decrypts a stored credential and writes the username "
+            "and password to a plaintext file at ~/psamvault_debug_dump.txt. "
+            "Use this to verify that credential retrieval and decryption work correctly, "
+            "independently of the browser flow. "
+            "Requires user consent. The user should delete the file after testing."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "site_name": {
+                    "type": "string",
+                    "description": "The vault site to dump, e.g. 'github.com'."
+                }
+            },
+            "required": ["site_name"]
+        }
+    ),
+    Tool(
+        name="browser_login",
+        description=(
+            "Open a visible browser and securely log into a site using a stored psamvault credential. "
+            "Playwright navigates from the site homepage, finds the sign-in link, and handles the "
+            "full login flow — including multi-step flows (e.g., 'Continue with Email' → email → Next → password → submit). "
+            "The credential is NEVER returned to you — psamvault fills the fields directly inside its own browser. "
+            "The user will be shown a consent prompt and must approve before any credential is used. "
+            "Only site_name is required. All selectors are optional and auto-detected."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "site_name": {
+                    "type": "string",
+                    "description": "The vault site whose credential to use, e.g. 'github.com' or 'z.ai'. psamvault will navigate from the homepage and find the login page automatically."
+                },
+                "username_selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector for the username/email field. Auto-detected if not provided."
+                },
+                "password_selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector for the password field. Auto-detected if not provided."
+                },
+                "submit_selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector for the submit button. Auto-detected if not provided."
+                }
+            },
+            "required": ["site_name"]
+        }
     )
 ]
 
@@ -160,15 +213,15 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
     
     try:
         if name == "list_vault_sites":
-            result = tools.list_vault_sites()
+            result = await tools.list_vault_sites()
         
         elif name == "check_credential_exists":
-            result = tools.check_credential_exists(
-                site_name= arguments["site_name"]
+            result = await tools.check_credential_exists(
+                site_name=arguments["site_name"]
             )
 
         elif name == "use_credential":
-            result = tools.use_credential(
+            result = await tools.use_credential(
                 site_name=arguments["site_name"],
                 target_url=arguments["target_url"],
                 method=arguments.get("method", "GET"),
@@ -179,10 +232,23 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
             
         elif name == "get_username_for_site":
-            result = tools.get_username_for_site(
+            result = await tools.get_username_for_site(
                 site_name=arguments["site_name"]
             )
-        
+
+        elif name == "debug_dump_credential":
+            result = await tools.debug_dump_credential(
+                site_name=arguments["site_name"]
+            )
+
+        elif name == "browser_login":
+            result = await tools.browser_login(
+                site_name=arguments["site_name"],
+                username_selector=arguments.get("username_selector"),
+                password_selector=arguments.get("password_selector"),
+                submit_selector=arguments.get("submit_selector"),
+            )
+
         else:
             result = {"error": f"Unknown tool: {name}"}
     
