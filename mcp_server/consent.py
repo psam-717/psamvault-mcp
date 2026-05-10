@@ -1,6 +1,11 @@
 import sys
 
 
+class ConsentGUIUnavailableError(RuntimeError):
+    """Raised when no GUI is available to display the consent dialog."""
+    pass
+
+
 def request_consent(
     site_name: str,
     target_url: str,
@@ -53,8 +58,12 @@ def request_consent(
         print(f"  {message.replace(chr(10), chr(10) + '  ')}", file=sys.stderr)
         print(f"  (GUI dialog unavailable: {e})", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
-        approved = False
-        print("  Auto-denied — no GUI available for consent.", file=sys.stderr)
+        print("  Cannot show consent dialog — no GUI available.", file=sys.stderr)
+        raise ConsentGUIUnavailableError(
+            f"No GUI is available to display the credential consent dialog "
+            f"(tkinter is missing or this is a headless environment). "
+            f"Detail: {e}"
+        ) from e
 
     if approved:
         print(f"  psamvault: approved — credential for '{site_name}' will be used.", file=sys.stderr)
