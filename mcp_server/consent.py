@@ -1,5 +1,11 @@
 import sys
 
+
+class ConsentGUIUnavailableError(RuntimeError):
+    """Raised when no GUI is available to display the consent dialog."""
+    pass
+
+
 def request_consent(
     site_name: str,
     target_url: str,
@@ -7,54 +13,71 @@ def request_consent(
     agent_description: str = "An AI agent"
 ) -> bool:
     """
-    Display a consent prompt in the user's terminal and wait for approval
-    before any credential is used.
- 
-    This is the critical security gate — no credential access proceeds
-    without explicit user approval. The prompt is shown in the terminal
-    where the MCP server is running, not in the agent's interface.
- 
+    Show a native GUI dialog asking the user to approve credential access.
+
+    Works on Windows, macOS, and Linux (requires a desktop environment).
+    The dialog blocks until the user clicks Yes or No.
+
     Args:
         site_name:         The vault site whose credential will be used.
         target_url:        The URL the request will be sent to.
         inject_as:         How the credential will be injected.
         agent_description: Description of the requesting agent.
- 
+
     Returns:
-        True if the user approved, False if denied
+        True if the user approved, False if denied.
     """
-    print("\n" + "=" * 60, file=sys.stderr)
-    print("  psamvault — CREDENTIAL ACCESS REQUEST", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    print(f"  Agent    : {agent_description}", file=sys.stderr)
-    print(f"  Site     : {site_name}", file=sys.stderr)
-    print(f"  Target   : {target_url}", file=sys.stderr)
-    print(f"  Auth mode: {inject_as}", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    print("  The agent wants to use your stored credential.", file=sys.stderr)
-    print("  The credential will NOT be shown to the agent.", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    
+    message = (
+        f"{agent_description} wants to use your stored credential.\n\n"
+        f"  Site   : {site_name}\n"
+        f"  Target : {target_url}\n"
+        f"  Mode   : {inject_as}\n\n"
+        f"The credential will NOT be shown to the agent.\n\n"
+        f"Allow access?"
+    )
+
     try:
-        response = input("  Allow? [y/N]: ").strip().lower()
-        approved = response in ("y", "yes")
-    except (EOFError, KeyboardInterrupt):
-        approved = False
-    
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes("-topmost", True)
+        approved = messagebox.askyesno(
+            title="psamvault — Credential Access Request",
+            message=message,
+            icon=messagebox.WARNING,
+        )
+        root.destroy()
+    except Exception as e:
+        # Fallback: tkinter unavailable (headless server, missing python3-tk, etc.)
+        print("\n" + "=" * 60, file=sys.stderr)
+        print("  psamvault — CREDENTIAL ACCESS REQUEST", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print(f"  {message.replace(chr(10), chr(10) + '  ')}", file=sys.stderr)
+        print(f"  (GUI dialog unavailable: {e})", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print("  Cannot show consent dialog — no GUI available.", file=sys.stderr)
+        raise ConsentGUIUnavailableError(
+            f"No GUI is available to display the credential consent dialog "
+            f"(tkinter is missing or this is a headless environment). "
+            f"Detail: {e}"
+        ) from e
+
     if approved:
-        print(f"  Approved — using credential for {site_name}.\n", file=sys.stderr)
+        print(f"  psamvault: approved — credential for '{site_name}' will be used.", file=sys.stderr)
     else:
-        print(" Denied - credential access blocked.\n", file=sys.stderr)
-    
-    
+        print(f"  psamvault: denied — credential for '{site_name}' was blocked.", file=sys.stderr)
+
     return approved
+
 
 def notify_completion(site_name: str, status_code: int, target_url: str) -> None:
     """
     Print a notification after a proxy request completes so the user
     can see what happened without reading agent output.
     """
-
     print(
         f"  psamvault: credential for '{site_name}' used → "
         f"{target_url} responded {status_code}",

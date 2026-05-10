@@ -2,16 +2,29 @@ import json
 import os
 from pathlib import Path
 
+import keyring
+import keyring.errors
+
 # the user must already be logged in via "psamvault login" before the MCP
 # server can access their vault
+
+_SERVICE = "psamvault"
+
+_SESSION_KEYS = [
+    "session.access_token",
+    "session.refresh_token",
+    "session.kdf_salt",
+    "session.vek",
+]
 
 SESSION_FILE = Path.home() / ".psamvault" / "session.json"
 CONFIG_FILE = Path.home() / ".psamvault" / "config.env"
 
 def load_config() -> None:
     """
-    Load PSAMVAULT_API_URL and PSAMVAULT_PEPPER from the CLI config file
-    into os.environ so api_client.py and crypto.py pick them up correctly
+    Load PSAMVAULT_API_URL from the CLI config file into os.environ so
+    api_client.py picks it up correctly. config.env holds only the
+    non-sensitive API URL — all secrets live in the OS keychain.
     """
     if not CONFIG_FILE.exists():
         return
@@ -26,85 +39,94 @@ def load_config() -> None:
             os.environ[key] = value
 
 
+def _get_keychain(key: str) -> str:
+    """
+    Read a value from the OS keychain under the psamvault service.
 
-def load_session() -> dict:
-    """
-    Load the psamvault session created by  psamvault login.
- 
-    The session file contains:
-      access_token   — short-lived JWT for API authentication
-      refresh_token  — long-lived token for renewing the access token
-      vek            — the raw Vault Encryption Key (hex-encoded 32 bytes)
-                       decrypted locally by the CLI at login time using:
-                       login_password → HMAC(pepper) → master_password
-                       → PBKDF2(kdf_salt) → login_key
-                       → AES-GCM-decrypt(encrypted_vek) → VEK
-                       The VEK is the direct key for all vault entries.
- 
-    The server never has the VEK — it only stores the AES-GCM-encrypted
-    version (encrypted_vek). Only the client can produce the raw VEK.
- 
     Raises:
-        RuntimeError: If the session file does not exist.
+        RuntimeError: If the key is missing — the user needs to log in again.
     """
-    if not SESSION_FILE.exists():
+    value = keyring.get_password(_SERVICE, key)
+    if value is None:
         raise RuntimeError(
-            "psamvault session not found. "
-            "Run psamvault login in your terminal first"
+            f"Session value '{key}' not found in keychain. "
+            "Run  psamvault login  in your terminal to restore your session."
         )
-    return json.loads(SESSION_FILE.read_text())
+    return value
+
+
+def _migrate_legacy_session() -> None:
+    """
+    One-time migration: if session.json still holds the old plaintext fields
+    from a pre-keychain version of psamvault, move them to the keychain and
+    replace the file with an empty presence marker.
+    """
+    raw = SESSION_FILE.read_text().strip()
+    if not raw or raw == "{}":
+        return
+    try:
+        old_data = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    if not old_data:
+        return
+
+    # Write any recognised fields into the keychain
+    field_map = {
+        "access_token":  "session.access_token",
+        "refresh_token": "session.refresh_token",
+        "kdf_salt":      "session.kdf_salt",
+        "vek":           "session.vek",
+    }
+    for field, keychain_key in field_map.items():
+        if field in old_data:
+            keyring.set_password(_SERVICE, keychain_key, old_data[field])
+
+    # Replace file with empty presence marker
+    SESSION_FILE.write_text("{}")
 
 
 def is_logged_in() -> bool:
-    """Return True if the user is logged in"""
+    """
+    Return True if a psamvault session is active.
+
+    Checks only for the presence marker file — no keychain call needed.
+    The CLI writes this file on login and removes it on logout.
+    """
     return SESSION_FILE.exists()
 
 
 def get_access_token() -> str:
-    """Return the current access token from the session"""
-    return load_session()["access_token"]
+    """Return the current access token from the keychain."""
+    return _get_keychain("session.access_token")
 
 
 def get_vek() -> bytes:
-    """Return the Vault Encryption Key (VEK) as raw bytes.
- 
-    The VEK is stored as a hex string in the session file after being
-    decrypted locally at login. It is the direct AES-256 key used to
-    encrypt and decrypt every vault entry — no further derivation needed.
- 
+    """
+    Return the Vault Encryption Key (VEK) as raw bytes.
+
+    The VEK is the direct AES-256 key used to decrypt every vault entry.
+    It is stored in the OS keychain after being decrypted locally at
+    login time (login_password → HMAC → PBKDF2 → AES-GCM-decrypt → VEK).
+
     Returns:
         32 raw bytes — the AES-256 vault encryption key.
     """
-    session = load_session()
-    vek_hex = session.get("vek")
-    if not vek_hex:
-        raise RuntimeError(
-            "VEK not found in session. "
-            "This session was created with an older version of psamvault. "
-            "Run  psamvault login  again to refresh your session."
-        )
+    vek_hex = _get_keychain("session.vek")
     return bytes.fromhex(vek_hex)
 
 
 def get_refresh_token() -> str:
-    """Return the current refresh token from the session"""
-    return load_session()["refresh_token"]
+    """Return the current refresh token from the keychain."""
+    return _get_keychain("session.refresh_token")
 
 
 def update_tokens(access_token: str, refresh_token: str) -> None:
     """
-    Overwrite both access_token and refresh_token in the session file.
+    Overwrite both access_token and refresh_token in the keychain.
     Called after a successful token rotation so the new refresh token
     is persisted — without this the old revoked token gets reused on
     the next request, causing a permanent 401 loop.
     """
-    session = load_session()
-    session["access_token"] = access_token
-    session["refresh_token"] = refresh_token
-    SESSION_FILE.write_text(json.dumps(session, indent=2))
-
-
-def get_kdf_salt() -> str:
-    """Return the kdf salt from the session"""
-    return load_session()["kdf_salt"]
-        
+    keyring.set_password(_SERVICE, "session.access_token", access_token)
+    keyring.set_password(_SERVICE, "session.refresh_token", refresh_token)

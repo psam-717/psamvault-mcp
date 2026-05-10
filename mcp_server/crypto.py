@@ -12,7 +12,7 @@ def decrypt_credentials(
     Decrypt a vault entry blob using AES-256-GCM with the VEK.
  
     The VEK (Vault Encryption Key) is a random 32-byte key generated
-    at signup and stored in the session file after login. It is the
+    at signup and stored in the OS keychain after login. It is the
     direct AES-256 key for all vault entries — no derivation needed here.
  
     The full key hierarchy that produced this VEK was:

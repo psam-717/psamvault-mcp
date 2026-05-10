@@ -1,20 +1,22 @@
 """
 psamvault MCP tools.
- 
+
 These are the tools exposed to AI agents. Each tool is designed so that
 the agent can orchestrate credential use without ever seeing the plaintext
 value. The consent gate in each tool ensures the user approves every access.
- 
+
 Key architecture note:
-  The session file at ~/.psamvault/session.json contains the raw VEK
-  (Vault Encryption Key) produced by the CLI at login. The MCP server
-  reads this VEK and uses it directly to decrypt vault entries locally
-  with AES-256-GCM. No key derivation is needed here — the CLI did all
-  the derivation work (HMAC → PBKDF2 → AES-GCM-decrypt) at login time.
+  All sensitive session values (VEK, tokens, kdf_salt) are stored in the
+  OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret
+  Service) by the psamvault CLI at login time. The MCP server reads the
+  VEK from the keychain on every credential access via session.get_vek().
+  No key derivation is needed here — the CLI did all the derivation work
+  (HMAC → PBKDF2 → AES-GCM-decrypt) at login time.
 """
 
 
 from mcp_server import api_client, consent
+from mcp_server.consent import ConsentGUIUnavailableError
 from mcp_server.crypto import decrypt_credentials
 from mcp_server.session import (
     get_access_token,
@@ -25,54 +27,88 @@ from mcp_server.session import (
 
 # helper - fetch and decrypt a vault entry using the session VEK
 
-def _decrypt_site_credential(site_name: str) -> dict:
+async def _decrypt_site_credential(site_name: str) -> dict:
     """
     Fetch the encrypted vault entry from the API and decrypt it locally
-    using the VEK from the session file.
- 
-    The VEK is read fresh from the session file on every call so that
+    using the VEK from the OS keychain.
+
+    The VEK is read fresh from the keychain on every call so that
     if the user logs out mid-session the VEK is no longer accessible.
- 
+
     Returns:
         {"username": str, "password": str, "notes": str}
         Held in memory only — never logged or persisted.
- 
+
     Raises:
-        RuntimeError: If not logged in or VEK not in session.
+        RuntimeError: If not logged in or VEK not in keychain.
         cryptography.exceptions.InvalidTag: If decryption fails.
     """
     access_token = get_access_token()
-    entry = api_client.get_vault_entry(access_token, site_name)
-    
+    entry = await api_client.get_vault_entry(access_token, site_name)
+
     vek = get_vek()
-    
+
     return decrypt_credentials(
         vek=vek,
         encrypted_blob=entry["encrypted_blob"],
         iv=entry["iv"]
     )
-    
-    
+
+
+async def _request_consent_async(
+    site_name: str,
+    target_url: str,
+    inject_as: str,
+    agent_description: str = "AI agent via psamvault MCP",
+    timeout_seconds: int = 120,
+) -> bool:
+    """
+    Run the blocking consent dialog in a thread executor so it does not
+    block the async event loop. Auto-denies and returns False if the user
+    does not respond within timeout_seconds.
+    """
+    import asyncio
+    import sys
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                consent.request_consent,
+                site_name,
+                target_url,
+                inject_as,
+                agent_description,
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        print(
+            f"  psamvault: consent timed out after {timeout_seconds}s — auto-denied.",
+            file=sys.stderr,
+        )
+        return False
+
 
 # Tool functions
-def list_vault_sites() -> dict:
+async def list_vault_sites() -> dict:
     """
     List all sites stored in the vault.
- 
+
     Returns site names and username hints only — never passwords or VEK.
     Agents use this to discover what credentials are available.
- 
+
     Returns:
         {"sites": [{"site_name": "...", "username_hint": "..."}, ...], "total": N}
     """
     if not is_logged_in():
         return {
-            "error": "Not logged in. Run 'psamvault login' int your terminal first"
+            "error": "Not logged in. Run 'psamvault login' in your terminal first"
         }
-        
+
     try:
         access_token = get_access_token()
-        entries = api_client.list_vault_entries(access_token)
+        entries = await api_client.list_vault_entries(access_token)
         return {
             "sites": [
                 {
@@ -85,10 +121,9 @@ def list_vault_sites() -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
-    
-    
 
-def check_credential_exists(site_name: str) -> dict:
+
+async def check_credential_exists(site_name: str) -> dict:
     """
     Check whether a credential is stored for a given site.
  
@@ -109,12 +144,12 @@ def check_credential_exists(site_name: str) -> dict:
 
     try:
         access_token = get_access_token()
-        return api_client.check_site_exists(access_token, site_name)
+        return await api_client.check_site_exists(access_token, site_name)
     except Exception as e:
         return  {"error": str(e)}
     
 
-def use_credential(
+async def use_credential(
     site_name: str,
     target_url: str,
     method: str = "GET",
@@ -128,7 +163,7 @@ def use_credential(
  
     Flow:
       1. Show user a consent prompt — blocked without approval
-      2. Read VEK from ~/.psamvault/session.json
+      2. Read VEK from the OS keychain via session.get_vek()
       3. Fetch encrypted blob from psamvault API
       4. Decrypt locally with VEK using AES-256-GCM
       5. Pass plaintext credential to backend proxy over HTTPS
@@ -159,18 +194,20 @@ def use_credential(
         
     
     # User consent - mandatory gate before any credential is accessed
-    approved = consent.request_consent(
-        site_name=site_name,
-        target_url=target_url,
-        inject_as=inject_as,
-        agent_description="AI agent via psamvault MCP"
-    )
+    try:
+        approved = await _request_consent_async(
+            site_name=site_name,
+            target_url=target_url,
+            inject_as=inject_as,
+        )
+    except ConsentGUIUnavailableError as e:
+        return {"error": str(e)}
     
     if not approved:
         return {
             "error": (
                 f"Access denied by user. "
-                f"Credential for '{site_name}' was not used'"
+                f"Credential for '{site_name}' was not used"
             )
         }
         
@@ -178,7 +215,7 @@ def use_credential(
     # Decrypt credential locally using VEK from session
     # Never logged, never returned to agent
     try:
-        credentials = _decrypt_site_credential(site_name)
+        credentials = await _decrypt_site_credential(site_name)
     except RuntimeError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -193,7 +230,7 @@ def use_credential(
     
     try:
         access_token = get_access_token()
-        result = api_client.proxy_request(
+        result = await api_client.proxy_request(
             access_token=access_token,
             site_name=site_name,
             target_url=target_url,
@@ -218,7 +255,7 @@ def use_credential(
         return {"error": f"Proxy request failed: {str(e)}"}
     
 
-def get_username_for_site(site_name: str) -> dict:
+async def get_username_for_site(site_name: str) -> dict:
     """
     Return the username (not password) stored for a site.
  
@@ -238,19 +275,20 @@ def get_username_for_site(site_name: str) -> dict:
             "error": "Not logged in. Run  psamvault login  in your terminal first."
         }
         
-    approved = consent.request_consent(
-        site_name=site_name,
-        target_url="(username only — no HTTP request will be made)",
-        inject_as="username_only",
-        agent_description="AI agent via psamvault MCP",
-    )
+    try:
+        approved = await _request_consent_async(
+            site_name=site_name,
+            target_url="(username only — no HTTP request will be made)",
+            inject_as="username_only",
+        )
+    except ConsentGUIUnavailableError as e:
+        return {"error": str(e)}
     
     if not approved:
         return {"error": "Access denied by user"}
     
     try:
-        credentials = _decrypt_site_credential(site_name)
-        
+        credentials = await _decrypt_site_credential(site_name)
         return {
             "site_name": site_name,
             "username": credentials["username"]
@@ -259,3 +297,477 @@ def get_username_for_site(site_name: str) -> dict:
         return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
+
+
+async def browser_login(
+    site_name: str,
+    login_url: str | None = None,
+    username_selector: str | None = None,
+    password_selector: str | None = None,
+    submit_selector: str | None = None,
+    timeout_ms: int = 8000,
+) -> dict:
+    """
+    Open a headed browser and securely log into a site using a stored credential.
+
+    Flow:
+      1. Open a real Chromium browser (visible to the user).
+      2. Navigate to the site homepage (or login_url if provided).
+      3. Auto-discover the login page by looking for a sign-in link and
+         clicking it — NO credential access happens here.
+         Exception: if a saved session was loaded and no sign-in link is
+         found, the user is already authenticated — return success immediately
+         (step "session_reused_already_logged_in") without accessing any
+         credential or showing a consent dialog.
+      4. Take a screenshot of the confirmed login page so the user can see
+         exactly where their credential will be used.
+      5. Show the user a consent dialog with the confirmed login URL.
+      6. Only after approval: decrypt the credential and fill the form.
+      7. Handle multi-step flows (e.g., "Continue with Email" → email → Next →
+         password → submit) using semantic locators.
+      8. Persist the browser session on success for future reuse.
+
+    Uses semantic Playwright locators (get_by_role, get_by_label) that pierce
+    Shadow DOM, React, and Vue apps. Falls back to CSS selectors when needed.
+
+    All parameters except site_name are optional.
+
+    Args:
+        site_name:         Vault site whose credential to use, e.g. "github.com".
+        login_url:         Full URL of the login page (optional — auto-discovered if omitted).
+        username_selector: CSS selector for the username/email field (optional).
+        password_selector: CSS selector for the password field (optional).
+        submit_selector:   CSS selector for the final submit button (optional).
+        timeout_ms:        Per-step detection timeout in milliseconds (default 8000).
+
+    Returns:
+        {
+            "success":               bool,
+            "steps_completed":       list[str] — steps that succeeded before returning,
+            "failed_at":             str | None — step name where flow stopped (None on success),
+            "url":                   str | None — final page URL,
+            "title":                 str | None — final page title,
+            "error_text":            str | None — visible error message detected on page,
+            "hint":                  str | None — actionable suggestion when a step fails,
+            "login_page_screenshot": str | None — path to screenshot of the login page,
+        }
+    """
+    import asyncio
+    import re
+    import sys as _sys
+    from pathlib import Path
+    from playwright.async_api import async_playwright
+
+    STORAGE_DIR = Path.home() / ".psamvault" / "browser_sessions"
+    _safe_name = re.sub(r'[<>:"/\\|?*\s]', '_', site_name)
+    storage_path = STORAGE_DIR / f"{_safe_name}.json"
+
+    steps_completed: list[str] = []
+    failed_at: str | None = None
+    screenshot_path: "Path | None" = None
+
+    def _result(*, success: bool, url=None, title=None, error_text=None, hint=None) -> dict:
+        return {
+            "success": success,
+            "steps_completed": steps_completed,
+            "failed_at": failed_at,
+            "url": url,
+            "title": title,
+            "error_text": error_text,
+            "hint": hint,
+            "login_page_screenshot": str(screenshot_path) if screenshot_path else None,
+        }
+
+    if not is_logged_in():
+        return {"error": "Not logged in. Run  psamvault login  in your terminal first."}
+
+    import contextlib
+    # Protect the MCP stdio transport: Chromium can write to stdout on startup,
+    # which corrupts the JSON-RPC stream. redirect_stdout ensures restoration
+    # on every exit path (normal return, early return, or exception).
+    _stdout_redirect = contextlib.redirect_stdout(_sys.stderr)
+    _stdout_redirect.__enter__()
+    try:
+        async with async_playwright() as p:
+            context_kwargs: dict = {}
+            if storage_path.exists():
+                context_kwargs["storage_state"] = str(storage_path)
+
+            browser = await p.chromium.launch(
+                headless=False,
+                args=[
+                    "--disable-logging",
+                    "--log-level=3",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
+            context = await browser.new_context(**context_kwargs)
+            page = await context.new_page()
+
+            # ── Semantic field finder ─────────────────────────────────────
+            # Tries get_by_role / get_by_label first (pierces Shadow DOM),
+            # then falls back to CSS selectors.
+            async def _find_field(
+                semantic_patterns: list[str],
+                css_fallbacks: list[str],
+                t_ms: int = timeout_ms,
+            ):
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + t_ms / 1000
+                while loop.time() < deadline:
+                    for pattern in semantic_patterns:
+                        for loc in [
+                            page.get_by_role("textbox", name=re.compile(pattern, re.I)),
+                            page.get_by_label(re.compile(pattern, re.I)),
+                        ]:
+                            try:
+                                if await loc.first.is_visible(timeout=500):
+                                    return loc.first
+                            except Exception:
+                                pass
+                    for sel in css_fallbacks:
+                        try:
+                            loc = page.locator(sel).first
+                            if await loc.is_visible(timeout=500):
+                                return loc
+                        except Exception:
+                            pass
+                    await asyncio.sleep(0.25)
+                return None
+
+            # ── Semantic button/link finder ───────────────────────────────
+            async def _find_button(
+                text_patterns: list[str],
+                css_fallbacks: list[str],
+                t_ms: int = 3000,
+            ):
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + t_ms / 1000
+                while loop.time() < deadline:
+                    for pattern in text_patterns:
+                        for role in ("button", "link"):
+                            try:
+                                loc = page.get_by_role(role, name=re.compile(pattern, re.I))
+                                if await loc.first.is_visible(timeout=500):
+                                    return loc.first
+                            except Exception:
+                                pass
+                    for sel in css_fallbacks:
+                        try:
+                            loc = page.locator(sel).first
+                            if await loc.is_visible(timeout=500):
+                                return loc
+                        except Exception:
+                            pass
+                    await asyncio.sleep(0.25)
+                return None
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 0: Navigate ─────────────────────────────────────────
+            target = login_url or f"https://{site_name}"
+            await page.goto(target, wait_until="domcontentloaded")
+            steps_completed.append("navigated_to_site")
+
+            if not login_url:
+                sign_in_btn = await _find_button(
+                    text_patterns=[r"sign[\s\-]?in", r"log[\s\-]?in", r"^login$"],
+                    css_fallbacks=["[href*='login' i]", "[href*='signin' i]", "[href*='sign-in' i]"],
+                    t_ms=5000,
+                )
+                if sign_in_btn:
+                    await sign_in_btn.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                    steps_completed.append("found_and_clicked_login_link")
+                    login_url = page.url
+                else:
+                    # No sign-in button found. If we loaded a saved session the
+                    # user is likely already authenticated — treat as a successful
+                    # reuse and keep the browser open for continued use.
+                    if storage_path.exists():
+                        steps_completed.append("session_reused_already_logged_in")
+                        current_url = page.url
+                        current_title = await page.title()
+                        try:
+                            await page.wait_for_event("close", timeout=600_000)
+                        except Exception:
+                            pass
+                        return _result(
+                            success=True,
+                            url=current_url,
+                            title=current_title,
+                        )
+                    failed_at = "login_link_not_found"
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint=(
+                            f"Could not find a sign-in link on https://{site_name}. "
+                            "Provide login_url explicitly."
+                        ),
+                    )
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 0b: Screenshot ──────────────────────────────────────
+            # Capture the confirmed login page so the user can see exactly
+            # where their credential will be used before approving.
+            _screenshot_file = STORAGE_DIR / f"{_safe_name}_login_preview.png"
+            try:
+                STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                await page.screenshot(path=str(_screenshot_file), full_page=False)
+                screenshot_path = _screenshot_file
+                steps_completed.append("login_page_screenshot_taken")
+            except Exception:
+                pass  # Non-fatal — proceed without screenshot
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 0c: Consent ─────────────────────────────────────────
+            # Request consent NOW with the confirmed login URL so the user
+            # knows exactly which page their credential will be filled on.
+            try:
+                approved = await _request_consent_async(
+                    site_name=site_name,
+                    target_url=login_url,
+                    inject_as="browser_form_fill",
+                )
+            except ConsentGUIUnavailableError as e:
+                return {"error": str(e)}
+
+            if not approved:
+                return {"error": f"Access denied by user. Credential for '{site_name}' was not used."}
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 0d: Decrypt credential ──────────────────────────────
+            # Decrypt only after consent — credential is held in memory for
+            # the duration of the form-fill steps below, then discarded.
+            try:
+                credentials = await _decrypt_site_credential(site_name)
+            except RuntimeError as e:
+                return {"error": str(e)}
+            except Exception as e:
+                return {
+                    "error": (
+                        f"Could not decrypt credential for '{site_name}'. "
+                        f"Your session may be stale — try  psamvault login  again. "
+                        f"Detail: {str(e)}"
+                    )
+                }
+            # ─────────────────────────────────────────────────────────────
+            if username_selector:
+                username_field = page.locator(username_selector).first
+                try:
+                    await username_field.wait_for(state="visible", timeout=timeout_ms)
+                except Exception:
+                    failed_at = "username_selector_not_found"
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint=f"Provided username_selector '{username_selector}' was not visible.",
+                    )
+            else:
+                username_field = await _find_field(
+                    semantic_patterns=["email", "username", "user", "login"],
+                    css_fallbacks=["input[type='email']", "input[type='text']"],
+                    t_ms=2000,
+                )
+                if not username_field:
+                    # Try a gateway button (e.g. "Continue with Email")
+                    gateway = await _find_button(
+                        text_patterns=[
+                            r"continue.?with.?email", r"sign.?in.?with.?email",
+                            r"use.?email", r"^email$",
+                        ],
+                        css_fallbacks=["[data-provider='email']"],
+                        t_ms=4000,
+                    )
+                    if gateway:
+                        await gateway.click()
+                        steps_completed.append("clicked_gateway_button")
+                        username_field = await _find_field(
+                            semantic_patterns=["email", "username", "user"],
+                            css_fallbacks=["input[type='email']", "input[type='text']"],
+                            t_ms=6000,
+                        )
+
+            if not username_field:
+                failed_at = "username_field_not_found"
+                return _result(
+                    success=False,
+                    url=page.url,
+                    title=await page.title(),
+                    hint=(
+                        "Could not detect the username/email field. "
+                        "The page may use Shadow DOM or a non-standard flow. "
+                        "Provide username_selector explicitly."
+                    ),
+                )
+
+            await username_field.click()
+            await username_field.fill(credentials["username"])
+            await username_field.press("Tab")
+            await page.wait_for_load_state("domcontentloaded")
+            steps_completed.append("filled_username")
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 2: Locate and fill the password field ───────────────
+            if password_selector:
+                password_field = page.locator(password_selector).first
+                try:
+                    await password_field.wait_for(state="visible", timeout=timeout_ms)
+                except Exception:
+                    failed_at = "password_selector_not_found"
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint=f"Provided password_selector '{password_selector}' was not visible.",
+                    )
+            else:
+                password_field = await _find_field(
+                    semantic_patterns=["password", "pass"],
+                    css_fallbacks=["input[type='password']"],
+                    t_ms=1500,
+                )
+                if not password_field:
+                    # Multi-step: click Next/Continue to reveal the password field
+                    next_btn = await _find_button(
+                        text_patterns=[r"^next$", r"^continue$"],
+                        css_fallbacks=["button[type='submit']", "input[type='submit']"],
+                        t_ms=3000,
+                    )
+                    if next_btn:
+                        await next_btn.click()
+                        steps_completed.append("clicked_next")
+                        password_field = await _find_field(
+                            semantic_patterns=["password", "pass"],
+                            css_fallbacks=["input[type='password']"],
+                            t_ms=6000,
+                        )
+
+            if not password_field:
+                failed_at = "password_field_not_found"
+                return _result(
+                    success=False,
+                    url=page.url,
+                    title=await page.title(),
+                    hint=(
+                        "Could not detect the password field. "
+                        "The site may use OTP/magic-link or SSO. "
+                        "Provide password_selector explicitly."
+                    ),
+                )
+
+            await password_field.click()
+            await password_field.fill(credentials["password"])
+            await password_field.press("Tab")
+            await page.wait_for_load_state("domcontentloaded")
+            steps_completed.append("filled_password")
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Phase 3: Submit ───────────────────────────────────────────
+            if submit_selector:
+                submit_btn = page.locator(submit_selector).first
+                try:
+                    await submit_btn.wait_for(state="visible", timeout=timeout_ms)
+                except Exception:
+                    failed_at = "submit_selector_not_found"
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint=f"Provided submit_selector '{submit_selector}' was not visible.",
+                    )
+            else:
+                submit_btn = await _find_button(
+                    text_patterns=[
+                        r"sign[\s\-]?in", r"log[\s\-]?in", r"^login$",
+                        r"^continue$", r"^submit$",
+                    ],
+                    css_fallbacks=["button[type='submit']", "input[type='submit']"],
+                    t_ms=3000,
+                )
+                if not submit_btn:
+                    failed_at = "submit_button_not_found"
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint="Could not detect submit button. Provide submit_selector explicitly.",
+                    )
+
+            await submit_btn.click()
+            steps_completed.append("submitted_form")
+            # ─────────────────────────────────────────────────────────────
+
+            # Wait for navigation — relaxed timeout since CAPTCHA/2FA may appear.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+
+            final_url = page.url
+            final_title = await page.title()
+
+            # ── Detect visible error message on resulting page ────────────
+            error_text = None
+            for sel in [
+                "[role='alert']", ".error", ".flash-error", "#error",
+                ".alert-danger", ".alert-error",
+                "[class*='error' i]", "[class*='invalid' i]",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible():
+                        error_text = (await el.inner_text()).strip()
+                        break
+                except Exception:
+                    continue
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Determine success ─────────────────────────────────────────
+            # Login is considered successful only when:
+            #   (a) no visible error element is found on the result page, AND
+            #   (b) the browser navigated away from the login URL after submit.
+            # A page stuck on the same URL usually means credentials were
+            # rejected silently with no explicit error element shown.
+            url_changed = final_url != login_url
+            login_succeeded = error_text is None and url_changed
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Persist session state on success ─────────────────────────
+            if login_succeeded:
+                STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                await context.storage_state(path=str(storage_path))
+                steps_completed.append("session_state_saved")
+            # ─────────────────────────────────────────────────────────────
+
+            # Keep browser open for CAPTCHA / 2FA / continued session use.
+            try:
+                await page.wait_for_event("close", timeout=600_000)
+            except Exception:
+                pass
+
+            return _result(
+                success=login_succeeded,
+                url=final_url,
+                title=final_title,
+                error_text=error_text,
+                hint=(
+                    "Login may have failed — the page did not navigate away from "
+                    "the login URL after submission. Try providing login_url or "
+                    "username_selector/password_selector explicitly."
+                ) if not url_changed and error_text is None else None,
+            )
+
+    except Exception as e:
+        failed_at = failed_at or "unexpected_error"
+        return _result(
+            success=False,
+            error_text=str(e),
+            hint="An unexpected error occurred. Check the terminal for details.",
+        )
+    finally:
+        _stdout_redirect.__exit__(None, None, None)
