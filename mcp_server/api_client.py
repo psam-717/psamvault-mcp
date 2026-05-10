@@ -1,9 +1,7 @@
 import os
 import httpx
 
-from mcp_server.session import load_config, get_refresh_token, update_tokens
-
-load_config()
+from mcp_server.session import get_refresh_token, update_tokens
 
 BASE_URL = os.getenv("PSAMVAULT_API_URL", "https://psam-vault-backend.onrender.com")
 
@@ -36,14 +34,17 @@ async def _refresh_access_token(refresh_token: str) -> tuple[str, str]:
 async def _refresh_and_retry(retry_fn):
     """
     Refresh the access token using the stored refresh token, persist both
-    new tokens to the session file, then retry the original request.
+    new tokens to the OS keychain, then retry the original request.
     Raises RuntimeError if the refresh itself fails (session truly expired).
     """
     try:
         refresh_token = get_refresh_token()
         new_access, new_refresh = await _refresh_access_token(refresh_token)
         update_tokens(new_access, new_refresh)
-        return await retry_fn(new_access)
+        result = await retry_fn(new_access)
+        if result is None:
+            raise RuntimeError("Server returned 401 after token refresh.")
+        return result
     except Exception as e:
         raise RuntimeError(
             "Session expired. Run  psamvault login  in your terminal to re-authenticate."
@@ -139,7 +140,11 @@ async def proxy_request(
     storing. They travel over TLS only and are stripped before the
     outbound call to the target.
     """
-    request_body = body or {}
+    # Shallow-copy body, stripping any pre-existing reserved keys so
+    # user-supplied data can never collide with the credential fields.
+    request_body = {
+        k: v for k, v in body.items() if not k.startswith("_credential_")
+    } if body else {}
     request_body["_credential_username"] = credential_username
     request_body["_credential_password"] = credential_password
 
