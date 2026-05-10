@@ -313,8 +313,12 @@ async def browser_login(
     Flow:
       1. Open a real Chromium browser (visible to the user).
       2. Navigate to the site homepage (or login_url if provided).
-      3. Auto-discover and navigate to the actual login page by clicking the
-         sign-in link — NO credential access happens here.
+      3. Auto-discover the login page by looking for a sign-in link and
+         clicking it — NO credential access happens here.
+         Exception: if a saved session was loaded and no sign-in link is
+         found, the user is already authenticated — return success immediately
+         (step "session_reused_already_logged_in") without accessing any
+         credential or showing a consent dialog.
       4. Take a screenshot of the confirmed login page so the user can see
          exactly where their credential will be used.
       5. Show the user a consent dialog with the confirmed login URL.
