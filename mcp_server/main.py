@@ -11,6 +11,12 @@ Usage:
  
   # Must be logged in via the CLI first
   psamvault login
+  
+Token-efficiency changes (Anthropic Code Execution with MCP pattern):
+  - search_vault_tools added as the single always-loaded discovery tool
+  - All other tool descriptions trimmed in the instructions string
+  - use_credential accepts optional `fields` to filter response payload
+  - browser_login returns a slim summary instead of the full step list
 """
 
 import asyncio
@@ -46,14 +52,18 @@ server = Server(
 
         "3. To make an authenticated API call, use use_credential(). "
         "Do not ask the user to provide their API key or password — psamvault will inject it.\n\n"
+        "Pass the `fields` parameter to return only the response keys you need — "
+        "this reduces token usage significantly for large API responses.\n\n"
 
         "4. Every tool that accesses a credential will show the user a consent dialog first. "
         "Do not attempt to bypass or pre-approve this step.\n\n"
 
-        "5. If you are unsure which sites are stored, call list_vault_sites() first. "
+        "5. ALWAYS call search_vault_tools first to find the right tool for your task. "
+        "If you are unsure which sites are stored, call list_vault_sites(). "
         "If you are unsure whether a credential exists, call check_credential_exists(site_name) first.\n\n"
 
-        "Tool summary:\n"
+         "Tool summary:\n"
+        "- search_vault_tools       → discover which tool to use (call this first)\n"
         "- list_vault_sites         → list stored sites (no passwords)\n"
         "- check_credential_exists  → verify a credential exists for a site\n"
         "- browser_login            → open a browser and log into a website silently\n"
@@ -62,8 +72,71 @@ server = Server(
     ),
 )
 
+# ── Tool registry used by search_vault_tools ──────────────────────────────────
+# Each entry is (one-line description, key param hints).
+# Kept here so it stays in sync with TOOL_DEFINITIONS below.
+_TOOL_REGISTRY: dict[str, str] = {
+    "search_vault_tools": (
+        "Discover available psamvault tools. Call this FIRST to find the right tool. "
+        "Pass a keyword like 'login', 'api', 'check', or '' for all tools."
+    ),
+    "list_vault_sites": (
+        "List all site names in the vault (no passwords). "
+        "Use before use_credential to see what's available."
+    ),
+    "check_credential_exists": (
+        "Check whether a credential exists for a site. "
+        "Params: site_name. Returns exists + username_hint."
+    ),
+    "use_credential": (
+        "Make an authenticated HTTP request using a stored credential. "
+        "Params: site_name, target_url, method, inject_as, fields (optional — "
+        "pass field names to trim the response and save tokens, e.g. [\"login\", \"id\"])."
+    ),
+    "get_username_for_site": (
+        "Get the stored username only (not password) for a site. "
+        "Params: site_name. Requires user consent."
+    ),
+    "browser_login": (
+        "Open a real Chromium browser and log into a website silently. "
+        "Params: site_name (required), login_url, username_selector, "
+        "password_selector, submit_selector, timeout_ms (all optional)."
+    ),
+}
+
 
 TOOL_DEFINITIONS = [
+    # ── Discovery tool — the only tool agents need to know about upfront ──────
+    Tool(
+        name="search_vault_tools",
+        description=(
+            "Discover available psamvault tools. "
+            "Call this FIRST to find the right tool for your task. "
+            "Returns tool names and one-line descriptions. "
+            "Pass an empty string to list all tools.\n\n"
+            "Examples:\n"
+            "  search_vault_tools('')          → all tools\n"
+            "  search_vault_tools('login')     → browser_login\n"
+            "  search_vault_tools('api')       → use_credential\n"
+            "  search_vault_tools('check')     → check_credential_exists"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Keyword to filter tools by. "
+                        "Pass an empty string to return all tools."
+                    ),
+                    "default": ""
+                }
+            },
+            "required": []
+        }
+    ),
+    
+    # ── Vault read tools ──────────────────────────────────────────────────────
     Tool(
         name="list_vault_sites",
         description=(
@@ -101,7 +174,10 @@ TOOL_DEFINITIONS = [
             "Make an authenticated HTTP request using a credential stored in psamvault. "
             "The user will be shown a consent prompt and must approve before the credential is used. "
             "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
-            "Supported injection modes: bearer_token, api_key_header, basic_auth."
+            "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
+            "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
+            "Example: fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). "
+            "Works on both dict responses and lists-of-dicts."
         ),
         inputSchema={
             "type": "object",
@@ -138,7 +214,17 @@ TOOL_DEFINITIONS = [
                 "body": {
                     "type": "object",
                     "description": "Optional JSON body for POST/PUT/PATCH"
-
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional list of JSON keys to return from the response. "
+                        "Use this to reduce token usage — only the listed keys are "
+                        "returned. Works on both dict and list-of-dict responses. "
+                        "Example: [\"login\", \"id\", \"public_repos\"] "
+                        "omits the other ~37 fields in a GitHub user response."
+                    )
                 }
             },
             "required": ["site_name", "target_url"],
@@ -172,7 +258,10 @@ TOOL_DEFINITIONS = [
             "Saves the browser session after a successful login so it can be reused on subsequent calls. "
             "The credential is NEVER returned to you — psamvault fills the fields directly inside its own browser. "
             "The user will be shown a consent prompt and must approve before any credential is used. "
-            "Returns steps_completed and failed_at so the agent can retry with explicit selectors if a step fails. "
+            "Returns a concise summary: success, message, captcha_detected, captcha_screenshot, final_url, steps_count, and failed_at. "
+            "When success is true, the response includes a message field — always relay it to the user. "
+            "When captcha_detected is true, the tool pauses automation; inform the user and tell them to solve the CAPTCHA and click Sign in/Login manually in the browser. "
+            "When captcha_screenshot is not null, tell the user a screenshot of the CAPTCHA was saved to that path so they can inspect it. "
             "Only site_name is required. All other parameters are optional."
         ),
         inputSchema={
@@ -226,6 +315,21 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
     Route tool calls to the appropriate handler function and return results.
     All results are returned as TextContent — the agent reads text, not raw dicts.
     """
+    # ── search_vault_tools — handled inline, no session check needed ──────────
+    if name == "search_vault_tools":
+        query = (arguments.get("query") or "").lower().strip()
+        if query:
+            matches = {
+                k: v for k, v in _TOOL_REGISTRY.items()
+                if query in k or query in v.lower()
+            }
+            result = matches if matches else _TOOL_REGISTRY
+        else:
+            result = _TOOL_REGISTRY
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
+    
+    
     if not is_logged_in():
         result = {
             "error": (
@@ -253,6 +357,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 header_name=arguments.get("header_name"),
                 body=arguments.get("body"),
                 extra_headers=arguments.get("extra_headers"),
+                fields=arguments.get("fields"), 
             )
             
         elif name == "get_username_for_site":
@@ -274,7 +379,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = {"error": f"Unknown tool: {name}"}
     
     except Exception as e:
-        result = {"error": f"Tool execution failed: {str(e)}"}
+        print(
+            f"  psamvault: tool '{name}' raised an unexpected error: {e}",
+            file=sys.stderr,
+        )
+        result = {"error": "Tool execution failed. Check the terminal for details."}
         
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
