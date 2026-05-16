@@ -6,6 +6,17 @@ class ConsentGUIUnavailableError(RuntimeError):
     pass
 
 
+def _sanitize_for_display(value: str, max_length: int = 200) -> str:
+    """
+    Replace control characters (including newlines) with spaces and truncate.
+
+    Prevents consent dialog UI injection: an adversarial agent could pass a
+    site_name or target_url containing newlines that rearrange the dialog text
+    to trick the user into approving a request they wouldn't otherwise approve.
+    """
+    return "".join(" " if ord(ch) < 32 else ch for ch in value)[:max_length]
+
+
 def request_consent(
     site_name: str,
     target_url: str,
@@ -27,11 +38,19 @@ def request_consent(
     Returns:
         True if the user approved, False if denied.
     """
+    # Sanitize all user-controlled inputs before inserting into the dialog.
+    # Without this, an adversarial agent could pass a site_name containing
+    # newlines to rearrange the dialog text and deceive the user.
+    _site     = _sanitize_for_display(site_name)
+    _target   = _sanitize_for_display(target_url)
+    _mode     = _sanitize_for_display(inject_as)
+    _agent    = _sanitize_for_display(agent_description)
+
     message = (
-        f"{agent_description} wants to use your stored credential.\n\n"
-        f"  Site   : {site_name}\n"
-        f"  Target : {target_url}\n"
-        f"  Mode   : {inject_as}\n\n"
+        f"{_agent} wants to use your stored credential.\n\n"
+        f"  Site   : {_site}\n"
+        f"  Target : {_target}\n"
+        f"  Mode   : {_mode}\n\n"
         f"The credential will NOT be shown to the agent.\n\n"
         f"Allow access?"
     )

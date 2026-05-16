@@ -1,10 +1,10 @@
 """
 psamvault MCP tools.
-
+ 
 These are the tools exposed to AI agents. Each tool is designed so that
 the agent can orchestrate credential use without ever seeing the plaintext
 value. The consent gate in each tool ensures the user approves every access.
-
+ 
 Key architecture note:
   All sensitive session values (VEK, tokens, kdf_salt) are stored in the
   OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret
@@ -12,8 +12,27 @@ Key architecture note:
   VEK from the keychain on every credential access via session.get_vek().
   No key derivation is needed here — the CLI did all the derivation work
   (HMAC → PBKDF2 → AES-GCM-decrypt) at login time.
+ 
+Token-efficiency changes:
+  - use_credential: accepts `fields` list to trim response before it
+    reaches the model context. Works on both dict and list-of-dict payloads.
+  - browser_login: _result() now returns a concise summary dict instead of
+    the full steps_completed list. steps_count (int) replaces steps_completed
+    (list) in the returned payload, cutting token cost from ~20 tokens/step
+    to a fixed ~15 tokens total. failed_at and hint are preserved so the
+    agent can still retry intelligently on failure.
 """
 
+
+import asyncio
+import contextlib
+import json
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+from playwright.async_api import async_playwright
 
 from mcp_server import api_client, consent
 from mcp_server.consent import ConsentGUIUnavailableError
@@ -67,8 +86,6 @@ async def _request_consent_async(
     block the async event loop. Auto-denies and returns False if the user
     does not respond within timeout_seconds.
     """
-    import asyncio
-    import sys
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
@@ -88,7 +105,39 @@ async def _request_consent_async(
             file=sys.stderr,
         )
         return False
+    
+    
+def _filter_response(data: object, fields: list[str] | None) -> object:
+    """
+    Trim a JSON-serialisable value to only the requested top-level keys
+    before it is returned to the model context.
+ 
+    Handles three shapes:
+      - dict           → keep only keys in `fields`
+      - list of dicts  → apply the same filter to every item
+      - anything else  → returned unchanged (fields has no effect)
 
+    Args:
+        data:   The raw response value from proxy_request / api_client.
+        fields: Key names to keep. None or empty list → no filtering.
+ 
+    Returns:
+        Filtered value, or the original value if filtering doesn't apply.
+    """
+    if not fields:
+        return data
+    if isinstance(data, dict):
+        return {k: data[k] for k in fields if k in data}
+    if isinstance(data, list):
+        return [
+            {k: item[k] for k in fields if k in item}
+            if isinstance(item, dict) else item
+            for item in data
+        ]
+    return data
+
+
+# ── Tool functions ────────────────────────────────────────────────────────────
 
 # Tool functions
 async def list_vault_sites() -> dict:
@@ -157,6 +206,7 @@ async def use_credential(
     header_name: str | None = None,
     body: dict | None = None,
     extra_headers: dict | None = None,
+    fields: list[str] | None = None,
 ) -> dict:
     """
     Make an authenticated HTTP request using a stored credential.
@@ -168,7 +218,8 @@ async def use_credential(
       4. Decrypt locally with VEK using AES-256-GCM
       5. Pass plaintext credential to backend proxy over HTTPS
       6. Backend injects credential into outbound request
-      7. Return HTTP response to agent — credential never appears
+      7. Filter response to `fields` if provided             
+      8. Return (filtered) HTTP response — credential never appears
  
     Args:
         site_name:     Vault site to use, e.g. "github.com".
@@ -181,18 +232,40 @@ async def use_credential(
         header_name:   Required when inject_as="api_key_header".
         body:          Optional JSON body for POST/PUT/PATCH.
         extra_headers: Optional additional request headers.
+        fields:        Optional list of top-level JSON keys to keep in the
+                       response body before it is returned to the model.
+                       Works on both dict and list-of-dict response bodies.
+                       Example: ["login", "id"] trims a GitHub user object
+                       from ~40 fields down to 2, saving ~250 tokens.
  
     Returns:
-        {"status_code": int, "response_body": str, "site_name": str,
-         "injected_as": str, "target_url": str}
+        {
+            "status_code":   int,
+            "response_body": str | dict | list,  # filtered if `fields` given
+            "site_name":     str,
+            "injected_as":   str,
+            "target_url":    str,
+            "fields_applied": list[str] | None,  # echoed back if filtering happened
+        }
         or {"error": str} if denied or something fails.
+
     """
     if not is_logged_in():
         return {
             "error": "Not logged in. Run  psamvault login  in your terminal first."
         }
-        
-    
+
+    # Reject non-http(s) schemes before touching the credential or showing
+    # the consent dialog — defense-in-depth alongside the backend validator.
+    _parsed_target = urlparse(target_url)
+    if _parsed_target.scheme not in ("http", "https"):
+        return {
+            "error": (
+                f"target_url scheme '{_parsed_target.scheme}' is not allowed. "
+                "Only http and https are permitted."
+            )
+        }
+
     # User consent - mandatory gate before any credential is accessed
     try:
         approved = await _request_consent_async(
@@ -242,17 +315,38 @@ async def use_credential(
             credential_username=credentials["username"],
             credential_password=credentials["password"],
         )
-        
+    except Exception as e:
+        return {"error": f"Proxy request failed: {str(e)}"}
+
+    try:
         consent.notify_completion(
             site_name=site_name,
             status_code=result["status_code"],
             target_url=target_url
         )
-        
-        return result
-    
-    except Exception as e:
-        return {"error": f"Proxy request failed: {str(e)}"}
+    except Exception:
+        pass  # Non-fatal — a notification failure does not undo a successful request
+
+    # ── TOKEN OPTIMISATION: filter response_body before it hits the model ──
+    # proxy_request returns {"status_code", "response_body", "site_name",
+    # "injected_as", "target_url"}. response_body may be a parsed dict/list
+    # or a raw string depending on Content-Type. We filter only when it is
+    # a dict or list and `fields` was provided.
+    if fields and "response_body" in result:
+        raw_body = result["response_body"]
+        # If response_body is a JSON string, parse it first so we can filter
+        if isinstance(raw_body, str):
+            try:
+                raw_body = json.loads(raw_body)
+            except (ValueError, TypeError):
+                pass  # Not JSON — leave as-is, fields has no effect
+
+        filtered_body = _filter_response(raw_body, fields)
+        result = {**result, "response_body": filtered_body, "fields_applied": fields}
+    else:
+        result = {**result, "fields_applied": None}
+
+    return result
     
 
 async def get_username_for_site(site_name: str) -> dict:
@@ -309,7 +403,7 @@ async def browser_login(
 ) -> dict:
     """
     Open a headed browser and securely log into a site using a stored credential.
-
+ 
     Flow:
       1. Open a real Chromium browser (visible to the user).
       2. Navigate to the site homepage (or login_url if provided).
@@ -341,51 +435,88 @@ async def browser_login(
         timeout_ms:        Per-step detection timeout in milliseconds (default 8000).
 
     Returns:
+        A concise summary dict — NOT the raw Playwright step list:
         {
             "success":               bool,
-            "steps_completed":       list[str] — steps that succeeded before returning,
-            "failed_at":             str | None — step name where flow stopped (None on success),
+            "steps_count":           int    — how many steps completed before returning,
+            "failed_at":             str | None — step name where flow stopped (None = success),
             "url":                   str | None — final page URL,
             "title":                 str | None — final page title,
             "error_text":            str | None — visible error message detected on page,
             "hint":                  str | None — actionable suggestion when a step fails,
             "login_page_screenshot": str | None — path to screenshot of the login page,
         }
+        
+    TOKEN NOTE:
+        The old response included steps_completed as a full list
+        (e.g. ["navigated_to_site", "found_and_clicked_login_link", ...]).
+        Each step string costs ~5 tokens; a typical login has 8–12 steps = ~60 tokens.
+        steps_count (int) replaces this list, cutting that to 1 token.
+        failed_at and hint are preserved so the agent can retry intelligently.
     """
-    import asyncio
-    import re
-    import sys as _sys
-    from pathlib import Path
-    from playwright.async_api import async_playwright
-
     STORAGE_DIR = Path.home() / ".psamvault" / "browser_sessions"
     _safe_name = re.sub(r'[<>:"/\\|?*\s]', '_', site_name)
     storage_path = STORAGE_DIR / f"{_safe_name}.json"
 
-    steps_completed: list[str] = []
+     # Internal step tracker — kept as a list for logic/branching inside this
+    # function, but only the count is returned to the model.
+    _steps: list[str] = []
     failed_at: str | None = None
     screenshot_path: "Path | None" = None
+    captcha_screenshot_path: "Path | None" = None
+    captcha_detected: bool = False
 
     def _result(*, success: bool, url=None, title=None, error_text=None, hint=None) -> dict:
+        """
+        Build the return dict.
+ 
+        TOKEN OPTIMISATION: expose steps_count (int) instead of the full
+        steps_completed list. The agent only needs to know whether things
+        progressed; it doesn't need to read every step name.
+        failed_at and hint give it enough context to retry on failure.
+        """
+        if success:
+            message = (
+                f"Successfully logged into {site_name}. "
+                "Please inform the user that the login was successful."
+            )
+        else:
+            message = None
         return {
-            "success": success,
-            "steps_completed": steps_completed,
-            "failed_at": failed_at,
-            "url": url,
-            "title": title,
-            "error_text": error_text,
-            "hint": hint,
+            "success":               success,
+            "message":               message,
+            "captcha_detected":      captcha_detected,
+            "steps_count":           len(_steps),
+            "failed_at":             failed_at,
+            "url":                   url,
+            "title":                 title,
+            "error_text":            error_text,
+            "hint":                  hint,
             "login_page_screenshot": str(screenshot_path) if screenshot_path else None,
+            "captcha_screenshot":    str(captcha_screenshot_path) if captcha_screenshot_path else None,
         }
 
     if not is_logged_in():
         return {"error": "Not logged in. Run  psamvault login  in your terminal first."}
 
-    import contextlib
+    # Reject non-http(s) login_url schemes before opening the browser.
+    # Without this, a malicious agent could supply file:// or javascript:
+    # URLs, causing Playwright to render local files and capture them in
+    # the login page screenshot.
+    if login_url:
+        _parsed_login = urlparse(login_url)
+        if _parsed_login.scheme not in ("http", "https"):
+            return {
+                "error": (
+                    f"login_url scheme '{_parsed_login.scheme}' is not allowed. "
+                    "Only http and https are permitted."
+                )
+            }
+
     # Protect the MCP stdio transport: Chromium can write to stdout on startup,
     # which corrupts the JSON-RPC stream. redirect_stdout ensures restoration
     # on every exit path (normal return, early return, or exception).
-    _stdout_redirect = contextlib.redirect_stdout(_sys.stderr)
+    _stdout_redirect = contextlib.redirect_stdout(sys.stderr)
     _stdout_redirect.__enter__()
     try:
         async with async_playwright() as p:
@@ -407,8 +538,6 @@ async def browser_login(
             page = await context.new_page()
 
             # ── Semantic field finder ─────────────────────────────────────
-            # Tries get_by_role / get_by_label first (pierces Shadow DOM),
-            # then falls back to CSS selectors.
             async def _find_field(
                 semantic_patterns: list[str],
                 css_fallbacks: list[str],
@@ -468,7 +597,7 @@ async def browser_login(
             # ── Phase 0: Navigate ─────────────────────────────────────────
             target = login_url or f"https://{site_name}"
             await page.goto(target, wait_until="domcontentloaded")
-            steps_completed.append("navigated_to_site")
+            _steps.append("navigated_to_site")
 
             if not login_url:
                 sign_in_btn = await _find_button(
@@ -479,25 +608,18 @@ async def browser_login(
                 if sign_in_btn:
                     await sign_in_btn.click()
                     await page.wait_for_load_state("domcontentloaded")
-                    steps_completed.append("found_and_clicked_login_link")
+                    _steps.append("found_and_clicked_login_link")
                     login_url = page.url
                 else:
-                    # No sign-in button found. If we loaded a saved session the
-                    # user is likely already authenticated — treat as a successful
-                    # reuse and keep the browser open for continued use.
                     if storage_path.exists():
-                        steps_completed.append("session_reused_already_logged_in")
+                        _steps.append("session_reused_already_logged_in")
                         current_url = page.url
                         current_title = await page.title()
                         try:
                             await page.wait_for_event("close", timeout=600_000)
                         except Exception:
                             pass
-                        return _result(
-                            success=True,
-                            url=current_url,
-                            title=current_title,
-                        )
+                        return _result(success=True, url=current_url, title=current_title)
                     failed_at = "login_link_not_found"
                     return _result(
                         success=False,
@@ -518,10 +640,10 @@ async def browser_login(
                 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
                 await page.screenshot(path=str(_screenshot_file), full_page=False)
                 screenshot_path = _screenshot_file
-                steps_completed.append("login_page_screenshot_taken")
+                _steps.append("login_page_screenshot_taken")
             except Exception:
-                pass  # Non-fatal — proceed without screenshot
-            # ─────────────────────────────────────────────────────────────
+                pass  # Non-fatal
+
 
             # ── Phase 0c: Consent ─────────────────────────────────────────
             # Request consent NOW with the confirmed login URL so the user
@@ -574,7 +696,6 @@ async def browser_login(
                     t_ms=2000,
                 )
                 if not username_field:
-                    # Try a gateway button (e.g. "Continue with Email")
                     gateway = await _find_button(
                         text_patterns=[
                             r"continue.?with.?email", r"sign.?in.?with.?email",
@@ -585,7 +706,7 @@ async def browser_login(
                     )
                     if gateway:
                         await gateway.click()
-                        steps_completed.append("clicked_gateway_button")
+                        _steps.append("clicked_gateway_button")
                         username_field = await _find_field(
                             semantic_patterns=["email", "username", "user"],
                             css_fallbacks=["input[type='email']", "input[type='text']"],
@@ -609,7 +730,7 @@ async def browser_login(
             await username_field.fill(credentials["username"])
             await username_field.press("Tab")
             await page.wait_for_load_state("domcontentloaded")
-            steps_completed.append("filled_username")
+            _steps.append("filled_username")
             # ─────────────────────────────────────────────────────────────
 
             # ── Phase 2: Locate and fill the password field ───────────────
@@ -640,7 +761,7 @@ async def browser_login(
                     )
                     if next_btn:
                         await next_btn.click()
-                        steps_completed.append("clicked_next")
+                        _steps.append("clicked_next")
                         password_field = await _find_field(
                             semantic_patterns=["password", "pass"],
                             css_fallbacks=["input[type='password']"],
@@ -664,10 +785,10 @@ async def browser_login(
             await password_field.fill(credentials["password"])
             await password_field.press("Tab")
             await page.wait_for_load_state("domcontentloaded")
-            steps_completed.append("filled_password")
+            _steps.append("filled_password")
             # ─────────────────────────────────────────────────────────────
 
-            # ── Phase 3: Submit ───────────────────────────────────────────
+            # ── Phase 3: Submit / CAPTCHA handoff ─────────────────────────
             if submit_selector:
                 submit_btn = page.locator(submit_selector).first
                 try:
@@ -698,15 +819,114 @@ async def browser_login(
                         hint="Could not detect submit button. Provide submit_selector explicitly.",
                     )
 
-            await submit_btn.click()
-            steps_completed.append("submitted_form")
-            # ─────────────────────────────────────────────────────────────
+            _CAPTCHA_SELECTORS = [
+                "iframe[src*='recaptcha']",
+                "iframe[src*='hcaptcha']",
+                "iframe[src*='turnstile']",
+                ".g-recaptcha",
+                "#hcaptcha",
+                "[class*='captcha' i]",
+                "[id*='captcha' i]",
+            ]
 
-            # Wait for navigation — relaxed timeout since CAPTCHA/2FA may appear.
+            async def _has_visible_captcha(t_ms: int = 1000) -> bool:
+                for _sel in _CAPTCHA_SELECTORS:
+                    try:
+                        if await page.locator(_sel).first.is_visible(timeout=t_ms):
+                            return True
+                    except Exception:
+                        pass
+                return False
+
+            async def _take_captcha_screenshot() -> None:
+                """Capture the current page state when a CAPTCHA is detected."""
+                nonlocal captcha_screenshot_path
+                try:
+                    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                    _cap_file = STORAGE_DIR / f"{_safe_name}_captcha.png"
+                    await page.screenshot(path=str(_cap_file), full_page=False)
+                    captcha_screenshot_path = _cap_file
+                    _steps.append("captcha_screenshot_taken")
+                except Exception:
+                    pass  # Non-fatal
+
+            # If CAPTCHA is already visible after filling credentials,
+            # take a screenshot, stop automation and hand control to the user.
+            if await _has_visible_captcha():
+                captcha_detected = True
+                failed_at = "captcha_user_action_required"
+                _steps.append("captcha_handoff_before_submit")
+                await _take_captcha_screenshot()
+                print(
+                    f"\n  psamvault: CAPTCHA detected on {site_name}. "
+                    "Please solve it and click Sign in/Login manually in the browser. "
+                    "Automation is paused.\n",
+                    file=sys.stderr,
+                )
+                _captcha_start_url = page.url
+                try:
+                    await page.wait_for_url(
+                        lambda url: url != _captcha_start_url,
+                        timeout=600_000,
+                    )
+                    failed_at = None
+                    _steps.append("captcha_user_completed_and_submitted")
+                except Exception:
+                    return _result(
+                        success=False,
+                        url=page.url,
+                        title=await page.title(),
+                        hint=(
+                            "CAPTCHA requires manual action. "
+                            "Please solve the CAPTCHA and click Sign in/Login in the browser."
+                        ),
+                    )
+            else:
+                await submit_btn.click()
+                _steps.append("submitted_form")
+
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+
+                # Some sites reveal CAPTCHA only after first submit.
+                # In that case, take a screenshot, pause and let the user finish manually.
+                if await _has_visible_captcha():
+                    captcha_detected = True
+                    failed_at = "captcha_user_action_required"
+                    _steps.append("captcha_handoff_after_submit")
+                    await _take_captcha_screenshot()
+                    print(
+                        f"\n  psamvault: CAPTCHA detected on {site_name}. "
+                        "Please solve it and click Sign in/Login manually in the browser. "
+                        "Automation is paused.\n",
+                        file=sys.stderr,
+                    )
+                    _captcha_start_url = page.url
+                    try:
+                        await page.wait_for_url(
+                            lambda url: url != _captcha_start_url,
+                            timeout=600_000,
+                        )
+                        failed_at = None
+                        _steps.append("captcha_user_completed_and_submitted")
+                    except Exception:
+                        return _result(
+                            success=False,
+                            url=page.url,
+                            title=await page.title(),
+                            hint=(
+                                "CAPTCHA requires manual action. "
+                                "Please solve the CAPTCHA and click Sign in/Login in the browser."
+                            ),
+                        )
+
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
+            # ─────────────────────────────────────────────────────────────
 
             final_url = page.url
             final_title = await page.title()
@@ -741,7 +961,7 @@ async def browser_login(
             if login_succeeded:
                 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
                 await context.storage_state(path=str(storage_path))
-                steps_completed.append("session_state_saved")
+                _steps.append("session_state_saved")
             # ─────────────────────────────────────────────────────────────
 
             # Keep browser open for CAPTCHA / 2FA / continued session use.
@@ -771,3 +991,11 @@ async def browser_login(
         )
     finally:
         _stdout_redirect.__exit__(None, None, None)
+        # Delete the login page preview screenshot — it was only needed for
+        # the consent dialog and has no value after the browser session ends.
+        # The CAPTCHA screenshot is kept since the user may still need it.
+        if screenshot_path and screenshot_path.exists():
+            try:
+                screenshot_path.unlink()
+            except Exception:
+                pass
