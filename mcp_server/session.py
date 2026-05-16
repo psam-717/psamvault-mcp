@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import keyring
 import keyring.errors
@@ -25,17 +26,29 @@ def load_config() -> None:
     Load PSAMVAULT_API_URL from the CLI config file into os.environ so
     api_client.py picks it up correctly. config.env holds only the
     non-sensitive API URL — all secrets live in the OS keychain.
+
+    Only HTTPS URLs are accepted for PSAMVAULT_API_URL. A non-HTTPS or
+    malformed value is silently ignored so a compromised config file
+    cannot redirect credential-bearing requests to a plain-HTTP server.
     """
     if not CONFIG_FILE.exists():
         return
-    
+
     for line in CONFIG_FILE.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if key and value and key not in os.environ:
+        if not key or not value:
+            continue
+        # Validate PSAMVAULT_API_URL: must be HTTPS to prevent redirect of
+        # credential-bearing proxy calls to an attacker-controlled server.
+        if key == "PSAMVAULT_API_URL":
+            _parsed = urlparse(value)
+            if _parsed.scheme != "https" or not _parsed.netloc:
+                continue  # Reject non-HTTPS or malformed API base URLs
+        if key not in os.environ:
             os.environ[key] = value
 
 
@@ -90,10 +103,16 @@ def is_logged_in() -> bool:
     """
     Return True if a psamvault session is active.
 
-    Checks only for the presence marker file — no keychain call needed.
-    The CLI writes this file on login and removes it on logout.
+    Checks for both the presence marker file AND that the access token
+    exists in the OS keychain. A mere file creation by another process
+    cannot fake an active session — the keychain entry must also exist.
     """
-    return SESSION_FILE.exists()
+    if not SESSION_FILE.exists():
+        return False
+    try:
+        return keyring.get_password(_SERVICE, "session.access_token") is not None
+    except Exception:
+        return False
 
 
 def get_access_token() -> str:
