@@ -48,7 +48,10 @@ psamvault decrypts credential locally
          ↓
 psamvault fills username + password fields directly in the browser
          ↓
-Agent receives: {"success": true, "steps_completed": [...], "url": "..."}
+If a CAPTCHA appears, psamvault takes a screenshot, pauses automation,
+and tells you to solve the CAPTCHA and click Sign in manually
+         ↓
+Agent receives: {"success": true, "steps_count": 8, "url": "..."}
          ↓
 Browser stays open — you take over from there
 ```
@@ -59,7 +62,7 @@ Browser stays open — you take over from there
 - [psamvault](https://pypi.org/project/psamvault/) installed and logged in
 
 ```bash
-pip install psamvault
+pipx install psamvault
 psamvault configure
 psamvault login
 ```
@@ -71,9 +74,78 @@ pipx install psamvault-mcp
 playwright install chromium
 ```
 
-### MCP client setup
+### Goose setup (recommended)
 
-Register the server in your MCP client's configuration.
+[Goose](https://goose-docs.ai) is an open-source AI agent with native MCP support. There are three ways to add psamvault-mcp as a Goose extension:
+
+---
+
+#### Option A — One-click deeplink
+
+Click or paste this URL into your browser while Goose Desktop is running:
+
+```
+goose://extension?cmd=psamvault-mcp&timeout=300&id=psamvault&name=psamVault&description=Use%20stored%20credentials%20without%20exposing%20them%20to%20the%20agent
+```
+
+Goose will prompt you to confirm, then the extension is added instantly.
+
+---
+
+#### Option B — Goose Desktop UI
+
+1. Open Goose Desktop.
+2. Click the **sidebar button** (top-left) → **Extensions**.
+3. Click **Add custom extension**.
+4. Fill in the form:
+
+   | Field | Value |
+   |---|---|
+   | **Type** | `Standard IO` |
+   | **ID** | `psamvault` |
+   | **Name** | `psamVault` |
+   | **Description** | `Use stored credentials without exposing them to the agent` |
+   | **Command** | `psamvault-mcp` |
+   | **Timeout** | `300` |
+
+5. Click **Add**.
+
+The extension appears in your Extensions list — toggle it on to activate it.
+
+---
+
+#### Option C — Config file (advanced)
+
+Edit `~/.config/goose/config.yaml` and add the following under `extensions:`:
+
+```yaml
+extensions:
+  psamvault:
+    name: psamVault
+    cmd: psamvault-mcp
+    args: []
+    enabled: true
+    type: stdio
+    timeout: 300
+```
+
+Save the file and restart Goose (or reload the session).
+
+---
+
+#### Verifying the extension works
+
+Once added, start a Goose session and try:
+
+```
+What credentials do I have stored in my vault?
+```
+
+Goose will call `list_vault_sites` via psamvault-mcp. If you see your stored sites, everything is working.
+
+---
+
+### Other MCP clients
 
 **Claude Desktop** — config file location:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -111,6 +183,7 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 
 | Tool | Description |
 |---|---|
+| `search_vault_tools` | Discover which tool to use — call this first; accepts a keyword or empty string for all tools |
 | `list_vault_sites` | List stored site names (no passwords) |
 | `check_credential_exists` | Check if a credential exists for a site |
 | `use_credential` | Make an authenticated HTTP request |
