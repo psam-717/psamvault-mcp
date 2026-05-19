@@ -20,6 +20,7 @@ Token-efficiency changes (Anthropic Code Execution with MCP pattern):
 """
 
 import asyncio
+import importlib.metadata
 import json
 import sys
 
@@ -28,9 +29,10 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from mcp_server.session import is_logged_in, load_config
-from mcp_server import tools
 
 load_config()
+
+from mcp_server import tools
 
 # Initialize MCP server
 server = Server(
@@ -72,10 +74,20 @@ server = Server(
     ),
 )
 
+# ── Version ────────────────────────────────────────────────────────────────────
+try:
+    _VERSION = importlib.metadata.version("psamvault-mcp")
+except importlib.metadata.PackageNotFoundError:
+    _VERSION = "unknown"
+
 # ── Tool registry used by search_vault_tools ──────────────────────────────────
 # Each entry is (one-line description, key param hints).
 # Kept here so it stays in sync with TOOL_DEFINITIONS below.
 _TOOL_REGISTRY: dict[str, str] = {
+    "get_version": (
+        "Return the installed psamvault-mcp version. "
+        "Use this to verify the version you have."
+    ),
     "search_vault_tools": (
         "Discover available psamvault tools. Call this FIRST to find the right tool. "
         "Pass a keyword like 'login', 'api', 'check', or '' for all tools."
@@ -106,6 +118,17 @@ _TOOL_REGISTRY: dict[str, str] = {
 
 
 TOOL_DEFINITIONS = [
+    # ── Version tool — no session needed ─────────────────────────────────────
+    Tool(
+        name="get_version",
+        description="Return the installed psamvault-mcp version. No session or login required.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
+
     # ── Discovery tool — the only tool agents need to know about upfront ──────
     Tool(
         name="search_vault_tools",
@@ -315,7 +338,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
     Route tool calls to the appropriate handler function and return results.
     All results are returned as TextContent — the agent reads text, not raw dicts.
     """
-    # ── search_vault_tools — handled inline, no session check needed ──────────
+    # ── Tools handled inline, no session check needed ─────────────────────────
+    if name == "get_version":
+        return [TextContent(type="text", text=json.dumps({"version": _VERSION}))]
+
     if name == "search_vault_tools":
         query = (arguments.get("query") or "").lower().strip()
         if query:
@@ -327,9 +353,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         else:
             result = _TOOL_REGISTRY
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    
-    
-    
+
     if not is_logged_in():
         result = {
             "error": (
