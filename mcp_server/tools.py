@@ -65,7 +65,7 @@ async def _decrypt_site_credential(site_name: str) -> dict:
     access_token = get_access_token()
     entry = await api_client.get_vault_entry(access_token, site_name)
 
-    vek = get_vek()
+    vek = get_vek() 
 
     return decrypt_credentials(
         vek=vek,
@@ -324,8 +324,11 @@ async def use_credential(
             status_code=result["status_code"],
             target_url=target_url
         )
-    except Exception:
-        pass  # Non-fatal — a notification failure does not undo a successful request
+    except Exception as e:
+        print(
+            f"  psamvault: notification failed (non-fatal): {e}",
+            file=sys.stderr,
+        )  # Non-fatal — a notification failure does not undo a successful request
 
     # ── TOKEN OPTIMISATION: filter response_body before it hits the model ──
     # proxy_request returns {"status_code", "response_body", "site_name",
@@ -991,11 +994,3 @@ async def browser_login(
         )
     finally:
         _stdout_redirect.__exit__(None, None, None)
-        # Delete the login page preview screenshot — it was only needed for
-        # the consent dialog and has no value after the browser session ends.
-        # The CAPTCHA screenshot is kept since the user may still need it.
-        if screenshot_path and screenshot_path.exists():
-            try:
-                screenshot_path.unlink()
-            except Exception:
-                pass
