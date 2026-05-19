@@ -78,6 +78,8 @@ def _migrate_legacy_session() -> None:
     from a pre-keychain version of psamvault, move them to the keychain and
     replace the file with an empty presence marker.
     """
+    if not SESSION_FILE.exists():
+        return
     raw = SESSION_FILE.read_text().strip()
     if not raw or raw == "{}":
         return
