@@ -21,6 +21,10 @@ _SESSION_KEYS = [
 SESSION_FILE = Path.home() / ".psamvault" / "session.json"
 CONFIG_FILE = Path.home() / ".psamvault" / "config.env"
 
+# Run legacy migration on import so plaintext session.json is moved
+# into the OS keychain before any credential is accessed.
+_migrate_legacy_session()
+
 def load_config() -> None:
     """
     Load PSAMVAULT_API_URL from the CLI config file into os.environ so
@@ -35,7 +39,7 @@ def load_config() -> None:
         return
 
     for line in CONFIG_FILE.read_text().splitlines():
-        line = line.strip()
+        line = line.strip() 
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
