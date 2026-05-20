@@ -23,7 +23,6 @@ CONFIG_FILE = Path.home() / ".psamvault" / "config.env"
 
 # Run legacy migration on import so plaintext session.json is moved
 # into the OS keychain before any credential is accessed.
-_migrate_legacy_session()
 
 def load_config() -> None:
     """
@@ -155,3 +154,6 @@ def update_tokens(access_token: str, refresh_token: str) -> None:
     """
     keyring.set_password(_SERVICE, "session.access_token", access_token)
     keyring.set_password(_SERVICE, "session.refresh_token", refresh_token)
+
+
+_migrate_legacy_session()
