@@ -65,7 +65,7 @@ async def _decrypt_site_credential(site_name: str) -> dict:
     access_token = get_access_token()
     entry = await api_client.get_vault_entry(access_token, site_name)
 
-    vek = get_vek()
+    vek = get_vek() 
 
     return decrypt_credentials(
         vek=vek,
@@ -139,7 +139,6 @@ def _filter_response(data: object, fields: list[str] | None) -> object:
 
 # ── Tool functions ────────────────────────────────────────────────────────────
 
-# Tool functions
 async def list_vault_sites() -> dict:
     """
     List all sites stored in the vault.
@@ -324,8 +323,11 @@ async def use_credential(
             status_code=result["status_code"],
             target_url=target_url
         )
-    except Exception:
-        pass  # Non-fatal — a notification failure does not undo a successful request
+    except Exception as e:
+        print(
+            f"  psamvault: notification failed (non-fatal): {e}",
+            file=sys.stderr,
+        )  # Non-fatal — a notification failure does not undo a successful request
 
     # ── TOKEN OPTIMISATION: filter response_body before it hits the model ──
     # proxy_request returns {"status_code", "response_body", "site_name",
@@ -838,9 +840,26 @@ async def browser_login(
                         pass
                 return False
 
-            async def _take_captcha_screenshot() -> None:
-                """Capture the current page state when a CAPTCHA is detected."""
-                nonlocal captcha_screenshot_path
+            async def _handle_captcha_handoff(stage: str) -> dict:
+                """
+                Immediately stop automation when a CAPTCHA is detected.
+
+                Takes a screenshot, prints a message to stderr, then returns
+                a result instructing the agent to tell the user to solve the
+                CAPTCHA and use the CLI to retrieve the password manually.
+
+                Args:
+                    stage: Label for the step log — 'before_submit' or 'after_submit'.
+
+                Returns:
+                    A result dict the caller should return immediately.
+                """
+                nonlocal captcha_detected, failed_at, captcha_screenshot_path
+
+                captcha_detected = True
+                failed_at = "captcha_user_action_required"
+                _steps.append(f"captcha_handoff_{stage}")
+
                 try:
                     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
                     _cap_file = STORAGE_DIR / f"{_safe_name}_captcha.png"
@@ -848,39 +867,32 @@ async def browser_login(
                     captcha_screenshot_path = _cap_file
                     _steps.append("captcha_screenshot_taken")
                 except Exception:
-                    pass  # Non-fatal
+                    pass
 
-            # If CAPTCHA is already visible after filling credentials,
-            # take a screenshot, stop automation and hand control to the user.
-            if await _has_visible_captcha():
-                captcha_detected = True
-                failed_at = "captcha_user_action_required"
-                _steps.append("captcha_handoff_before_submit")
-                await _take_captcha_screenshot()
                 print(
                     f"\n  psamvault: CAPTCHA detected on {site_name}. "
-                    "Please solve it and click Sign in/Login manually in the browser. "
-                    "Automation is paused.\n",
+                    "Automation stopped. Use the CLI to retrieve the password:\n"
+                    f"    psamvault get {site_name}\n",
                     file=sys.stderr,
                 )
-                _captcha_start_url = page.url
-                try:
-                    await page.wait_for_url(
-                        lambda url: url != _captcha_start_url,
-                        timeout=600_000,
-                    )
-                    failed_at = None
-                    _steps.append("captcha_user_completed_and_submitted")
-                except Exception:
-                    return _result(
-                        success=False,
-                        url=page.url,
-                        title=await page.title(),
-                        hint=(
-                            "CAPTCHA requires manual action. "
-                            "Please solve the CAPTCHA and click Sign in/Login in the browser."
-                        ),
-                    )
+
+                return _result(
+                    success=False,
+                    url=page.url,
+                    title=await page.title(),
+                    hint=(
+                        "CAPTCHA detected — automation cannot proceed. "
+                        "Tell the user to either solve the CAPTCHA and log in manually, "
+                        "or use the CLI command 'psamvault get <site>' to retrieve "
+                        "the credential and sign in themselves."
+                    ),
+                )
+
+            # CAPTCHA may appear in two places:
+            #   1. Before submit — already visible after filling credentials.
+            #   2. After submit  — some sites reveal it only after the first click.
+            if await _has_visible_captcha():
+                return await _handle_captcha_handoff("before_submit")
             else:
                 await submit_btn.click()
                 _steps.append("submitted_form")
@@ -890,37 +902,8 @@ async def browser_login(
                 except Exception:
                     pass
 
-                # Some sites reveal CAPTCHA only after first submit.
-                # In that case, take a screenshot, pause and let the user finish manually.
                 if await _has_visible_captcha():
-                    captcha_detected = True
-                    failed_at = "captcha_user_action_required"
-                    _steps.append("captcha_handoff_after_submit")
-                    await _take_captcha_screenshot()
-                    print(
-                        f"\n  psamvault: CAPTCHA detected on {site_name}. "
-                        "Please solve it and click Sign in/Login manually in the browser. "
-                        "Automation is paused.\n",
-                        file=sys.stderr,
-                    )
-                    _captcha_start_url = page.url
-                    try:
-                        await page.wait_for_url(
-                            lambda url: url != _captcha_start_url,
-                            timeout=600_000,
-                        )
-                        failed_at = None
-                        _steps.append("captcha_user_completed_and_submitted")
-                    except Exception:
-                        return _result(
-                            success=False,
-                            url=page.url,
-                            title=await page.title(),
-                            hint=(
-                                "CAPTCHA requires manual action. "
-                                "Please solve the CAPTCHA and click Sign in/Login in the browser."
-                            ),
-                        )
+                    return await _handle_captcha_handoff("after_submit")
 
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
@@ -991,11 +974,3 @@ async def browser_login(
         )
     finally:
         _stdout_redirect.__exit__(None, None, None)
-        # Delete the login page preview screenshot — it was only needed for
-        # the consent dialog and has no value after the browser session ends.
-        # The CAPTCHA screenshot is kept since the user may still need it.
-        if screenshot_path and screenshot_path.exists():
-            try:
-                screenshot_path.unlink()
-            except Exception:
-                pass

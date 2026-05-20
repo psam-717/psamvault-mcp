@@ -12,9 +12,9 @@ def _auth_headers(access_token: str) -> dict:
 def _handle_error(response: httpx.Response) -> None:
     if not response.is_success:
         try:
-            detail = response.json().get("detail", response.text)
+            detail = response.json().get("detail", response.text[:500] if response.text else "")
         except (ValueError, httpx.RequestError):
-            detail = response.text
+            detail = response.text[:500] if response.text else ""
         raise RuntimeError(f"psamvault API error {response.status_code}: {detail}")
 
 

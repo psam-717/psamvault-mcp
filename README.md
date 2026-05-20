@@ -183,6 +183,7 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 
 | Tool | Description |
 |---|---|
+| `get_version` | Return the installed psamvault-mcp version. No session or login required |
 | `search_vault_tools` | Discover which tool to use — call this first; accepts a keyword or empty string for all tools |
 | `list_vault_sites` | List stored site names (no passwords) |
 | `check_credential_exists` | Check if a credential exists for a site |

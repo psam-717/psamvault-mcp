@@ -21,6 +21,9 @@ _SESSION_KEYS = [
 SESSION_FILE = Path.home() / ".psamvault" / "session.json"
 CONFIG_FILE = Path.home() / ".psamvault" / "config.env"
 
+# Run legacy migration on import so plaintext session.json is moved
+# into the OS keychain before any credential is accessed.
+
 def load_config() -> None:
     """
     Load PSAMVAULT_API_URL from the CLI config file into os.environ so
@@ -35,7 +38,7 @@ def load_config() -> None:
         return
 
     for line in CONFIG_FILE.read_text().splitlines():
-        line = line.strip()
+        line = line.strip() 
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
@@ -74,6 +77,8 @@ def _migrate_legacy_session() -> None:
     from a pre-keychain version of psamvault, move them to the keychain and
     replace the file with an empty presence marker.
     """
+    if not SESSION_FILE.exists():
+        return
     raw = SESSION_FILE.read_text().strip()
     if not raw or raw == "{}":
         return
@@ -149,3 +154,6 @@ def update_tokens(access_token: str, refresh_token: str) -> None:
     """
     keyring.set_password(_SERVICE, "session.access_token", access_token)
     keyring.set_password(_SERVICE, "session.refresh_token", refresh_token)
+
+
+_migrate_legacy_session()
