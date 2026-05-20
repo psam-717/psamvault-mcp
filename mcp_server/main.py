@@ -81,7 +81,7 @@ except importlib.metadata.PackageNotFoundError:
     _VERSION = "unknown"
 
 # ── Tool registry used by search_vault_tools ──────────────────────────────────
-# Each entry is (one-line description, key param hints).
+# Each entry is a one-line description string.
 # Kept here so it stays in sync with TOOL_DEFINITIONS below.
 _TOOL_REGISTRY: dict[str, str] = {
     "get_version": (

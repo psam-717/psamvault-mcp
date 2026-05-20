@@ -139,7 +139,6 @@ def _filter_response(data: object, fields: list[str] | None) -> object:
 
 # ── Tool functions ────────────────────────────────────────────────────────────
 
-# Tool functions
 async def list_vault_sites() -> dict:
     """
     List all sites stored in the vault.
