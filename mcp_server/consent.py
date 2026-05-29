@@ -1,4 +1,6 @@
-import sys
+from mcp_server.log import get_logger
+
+logger = get_logger()
 
 
 class ConsentGUIUnavailableError(RuntimeError):
@@ -71,13 +73,11 @@ def request_consent(
         root.destroy()
     except Exception as e:
         # Fallback: tkinter unavailable (headless server, missing python3-tk, etc.)
-        print("\n" + "=" * 60, file=sys.stderr)
-        print("  psamvault — CREDENTIAL ACCESS REQUEST", file=sys.stderr)
-        print("=" * 60, file=sys.stderr)
-        print(f"  {message.replace(chr(10), chr(10) + '  ')}", file=sys.stderr)
-        print(f"  (GUI dialog unavailable: {e})", file=sys.stderr)
-        print("=" * 60, file=sys.stderr)
-        print("  Cannot show consent dialog — no GUI available.", file=sys.stderr)
+        logger.warning("GUI dialog unavailable: %s", e)
+        logger.warning(
+            "Consent request:\n  Site: %s\n  Target: %s\n  Mode: %s",
+            _site, _target, _mode,
+        )
         raise ConsentGUIUnavailableError(
             f"No GUI is available to display the credential consent dialog "
             f"(tkinter is missing or this is a headless environment). "
@@ -85,9 +85,9 @@ def request_consent(
         ) from e
 
     if approved:
-        print(f"  psamvault: approved — credential for '{site_name}' will be used.", file=sys.stderr)
+        logger.info("approved — credential for '%s' will be used", site_name)
     else:
-        print(f"  psamvault: denied — credential for '{site_name}' was blocked.", file=sys.stderr)
+        logger.info("denied — credential for '%s' was blocked", site_name)
 
     return approved
 
@@ -97,8 +97,4 @@ def notify_completion(site_name: str, status_code: int, target_url: str) -> None
     Print a notification after a proxy request completes so the user
     can see what happened without reading agent output.
     """
-    print(
-        f"  psamvault: credential for '{site_name}' used → "
-        f"{target_url} responded {status_code}",
-        file=sys.stderr,
-    )
+    logger.info("credential for '%s' used — %s responded %s", site_name, target_url, status_code)
