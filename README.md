@@ -51,9 +51,20 @@ psamvault fills username + password fields directly in the browser
 If a CAPTCHA appears, psamvault takes a screenshot, pauses automation,
 and tells you to solve the CAPTCHA and click Sign in manually
          ↓
-Agent receives: {"success": true, "steps_count": 8, "url": "..."}
+Agent receives:
+         {
+           "success": true,
+           "message": "Logged in to github.com successfully. The browser is open.",
+           "steps_count": 8,
+           "url": "https://github.com/dashboard",
+           "captcha_detected": false,
+           "captcha_screenshot": null,
+           "failed_at": null,
+           "hint": null
+         }
          ↓
-Browser stays open — you take over from there
+Browser stays open — you take over from there.
+The browser session is saved and reused on subsequent calls to the same site.
 ```
 
 ## Prerequisites
@@ -172,6 +183,7 @@ automatically by `psamvault configure`.
 | Variable | Default | Description |
 |---|---|---|
 | `PSAMVAULT_API_URL` | `https://psam-vault-backend.onrender.com` | psamvault backend endpoint |
+| `PSAMVAULT_LOG_LEVEL` | `INFO` | Log verbosity. Accepts any standard Python level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. Logs go to stderr. |
 
 To point at a self-hosted backend, set the variable in `~/.psamvault/config.env`:
 
@@ -209,9 +221,24 @@ Once connected, you can ask your agent things like:
 - *"Log me into kaggle.com"*
 - *"Open github.com and log me in"*
 
+## Testing
+
+```bash
+# From the repo root
+pytest
+```
+
+Tests live in `tests/` and cover crypto primitives, session management, consent
+logic, the API client (with httpx mocking), and MCP tool behaviour. The test suite
+requires no real network access or OS keychain — all external dependencies are mocked.
+
 ## Security
 
 - Credentials are decrypted locally on your machine — never sent to the agent
 - Every credential use requires explicit approval via a consent dialog
 - The agent only receives HTTP responses, never credential values
 - All communication with the psamvault backend uses HTTPS
+
+## License
+
+MIT — see [LICENSE](LICENSE).
