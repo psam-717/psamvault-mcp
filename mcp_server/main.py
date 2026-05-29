@@ -22,17 +22,21 @@ Token-efficiency changes (Anthropic Code Execution with MCP pattern):
 import asyncio
 import importlib.metadata
 import json
-import sys
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+from mcp_server.log import get_logger
 from mcp_server.session import is_logged_in, load_config
 
 load_config()
 
 from mcp_server import tools
+
+from mcp_server.version_check import check_for_update
+
+logger = get_logger()
 
 # Initialize MCP server
 server = Server(
@@ -403,38 +407,44 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = {"error": f"Unknown tool: {name}"}
     
     except Exception as e:
-        print(
-            f"  psamvault: tool '{name}' raised an unexpected error: {e}",
-            file=sys.stderr,
-        )
+        logger.error("tool '%s' raised an unexpected error: %s", name, e)
         result = {"error": "Tool execution failed. Check the terminal for details."}
         
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-async def _run_server() -> None: 
+async def _run_server() -> None:
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+        try:
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+        finally:
+            await tools.close_all_browsers()
 
 
 def main() -> None:
     """Start the psamvault MCP server over stdio."""
-    print(
-        "psamvault MCP server starting...",
-        file=sys.stderr
-    )
+    logger.info("MCP server starting")
 
     if not is_logged_in():
-        print(
-            "Warning: not logged in to psamvault. "
-            "Run psamvault login before using vault tools",
-            file=sys.stderr
-        )
+        logger.warning("not logged in — run 'psamvault login' before using vault tools")
 
-    asyncio.run(_run_server())
+    check_for_update()
+
+    try:
+        asyncio.run(_run_server())
+    finally:
+        # Fallback: if the event loop crashed or was cancelled so hard that
+        # _run_server's finally didn't run, force-close any tracked browsers
+        # here (sync call — creates a throwaway loop for the async cleanup).
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(tools.close_all_browsers())
+            loop.close()
+        except Exception:
+            pass
     
 
 if __name__ == "__main__":

@@ -37,11 +37,32 @@ from playwright.async_api import async_playwright
 from mcp_server import api_client, consent
 from mcp_server.consent import ConsentGUIUnavailableError
 from mcp_server.crypto import decrypt_credentials
+from mcp_server.log import get_logger
 from mcp_server.session import (
     get_access_token,
     get_vek,
     is_logged_in
 )
+
+logger = get_logger()
+
+# ── Active browser tracking for graceful shutdown ──────────────────────────
+_ACTIVE_BROWSERS: set = set()
+
+
+async def close_all_browsers() -> None:
+    """Force-close all tracked Chromium instances.
+
+    Called from main.py when the MCP server shuts down so that orphaned
+    browser processes are cleaned up if the client disconnects while a
+    browser_login tool call is still active.
+    """
+    for b in list(_ACTIVE_BROWSERS):
+        try:
+            await b.close()
+        except Exception:
+            pass
+    _ACTIVE_BROWSERS.clear()
 
 
 # helper - fetch and decrypt a vault entry using the session VEK
@@ -100,10 +121,7 @@ async def _request_consent_async(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        print(
-            f"  psamvault: consent timed out after {timeout_seconds}s — auto-denied.",
-            file=sys.stderr,
-        )
+        logger.warning("consent timed out after %ss — auto-denied", timeout_seconds)
         return False
     
     
@@ -324,10 +342,7 @@ async def use_credential(
             target_url=target_url
         )
     except Exception as e:
-        print(
-            f"  psamvault: notification failed (non-fatal): {e}",
-            file=sys.stderr,
-        )  # Non-fatal — a notification failure does not undo a successful request
+        logger.warning("notification failed (non-fatal): %s", e)
 
     # ── TOKEN OPTIMISATION: filter response_body before it hits the model ──
     # proxy_request returns {"status_code", "response_body", "site_name",
@@ -440,6 +455,8 @@ async def browser_login(
         A concise summary dict — NOT the raw Playwright step list:
         {
             "success":               bool,
+            "message":               str | None — human-readable success message (None on failure),
+            "captcha_detected":      bool — True if automation was paused for a CAPTCHA,
             "steps_count":           int    — how many steps completed before returning,
             "failed_at":             str | None — step name where flow stopped (None = success),
             "url":                   str | None — final page URL,
@@ -447,6 +464,7 @@ async def browser_login(
             "error_text":            str | None — visible error message detected on page,
             "hint":                  str | None — actionable suggestion when a step fails,
             "login_page_screenshot": str | None — path to screenshot of the login page,
+            "captcha_screenshot":    str | None — path to screenshot of the CAPTCHA (if detected),
         }
         
     TOKEN NOTE:
@@ -467,6 +485,7 @@ async def browser_login(
     screenshot_path: "Path | None" = None
     captcha_screenshot_path: "Path | None" = None
     captcha_detected: bool = False
+    _login_url_discovered: bool = False
 
     def _result(*, success: bool, url=None, title=None, error_text=None, hint=None) -> dict:
         """
@@ -536,6 +555,7 @@ async def browser_login(
                     "--no-default-browser-check",
                 ],
             )
+            _ACTIVE_BROWSERS.add(browser)
             context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
@@ -612,6 +632,7 @@ async def browser_login(
                     await page.wait_for_load_state("domcontentloaded")
                     _steps.append("found_and_clicked_login_link")
                     login_url = page.url
+                    _login_url_discovered = True
                 else:
                     if storage_path.exists():
                         _steps.append("session_reused_already_logged_in")
@@ -619,7 +640,7 @@ async def browser_login(
                         current_title = await page.title()
                         try:
                             await page.wait_for_event("close", timeout=600_000)
-                        except Exception:
+                        except BaseException:
                             pass
                         return _result(success=True, url=current_url, title=current_title)
                     failed_at = "login_link_not_found"
@@ -661,6 +682,23 @@ async def browser_login(
 
             if not approved:
                 return {"error": f"Access denied by user. Credential for '{site_name}' was not used."}
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Persist auto-discovered login URL ─────────────────────────
+            # If the login URL was not provided and we found it via semantic
+            # discovery, save it back to the vault so future calls skip the
+            # sign-in link search and go directly to the login page.
+            if _login_url_discovered:
+                try:
+                    access_token = get_access_token()
+                    await api_client.update_vault_entry_url(
+                        access_token=access_token,
+                        site_name=site_name,
+                        login_url=login_url,
+                    )
+                    _steps.append("login_url_persisted")
+                except Exception:
+                    pass  # Non-fatal — the login still works next time via session reuse
             # ─────────────────────────────────────────────────────────────
 
             # ── Phase 0d: Decrypt credential ──────────────────────────────
@@ -869,11 +907,8 @@ async def browser_login(
                 except Exception:
                     pass
 
-                print(
-                    f"\n  psamvault: CAPTCHA detected on {site_name}. "
-                    "Automation stopped. Use the CLI to retrieve the password:\n"
-                    f"    psamvault get {site_name}\n",
-                    file=sys.stderr,
+                logger.info(
+                    "CAPTCHA detected on %s — automation stopped", site_name,
                 )
 
                 return _result(
@@ -950,7 +985,7 @@ async def browser_login(
             # Keep browser open for CAPTCHA / 2FA / continued session use.
             try:
                 await page.wait_for_event("close", timeout=600_000)
-            except Exception:
+            except BaseException:
                 pass
 
             return _result(

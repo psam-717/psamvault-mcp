@@ -16,6 +16,7 @@ httpx==0.28.1
 httpx-sse==0.4.3
 id==1.6.1
 idna==3.11
+iniconfig==2.3.0
 jaraco.classes==3.4.0
 jaraco.context==6.1.2
 jaraco.functools==4.4.0
@@ -29,6 +30,7 @@ more-itertools==11.0.2
 nh3==0.3.5
 packaging==26.2
 playwright==1.58.0
+pluggy==1.6.0
 pycparser==3.0
 pydantic==2.13.2
 pydantic-settings==2.13.1
@@ -37,6 +39,10 @@ pyee==13.0.1
 Pygments==2.20.0
 PyJWT==2.12.1
 pyproject_hooks==1.2.0
+pytest==9.0.3
+pytest-asyncio==1.4.0
+pytest-httpx==0.36.2
+pytest-mock==3.15.1
 python-dotenv==1.2.2
 python-multipart==0.0.26
 pywin32==311

@@ -10,12 +10,15 @@ import keyring.errors
 # server can access their vault
 
 _SERVICE = "psamvault"
+_PEPPER_KEY = "config.pepper"
 
 _SESSION_KEYS = [
     "session.access_token",
     "session.refresh_token",
     "session.kdf_salt",
     "session.vek",
+    "session.encrypted_vek",
+    "session.vek_iv",
 ]
 
 SESSION_FILE = Path.home() / ".psamvault" / "session.json"
@@ -26,33 +29,57 @@ CONFIG_FILE = Path.home() / ".psamvault" / "config.env"
 
 def load_config() -> None:
     """
-    Load PSAMVAULT_API_URL from the CLI config file into os.environ so
-    api_client.py picks it up correctly. config.env holds only the
-    non-sensitive API URL — all secrets live in the OS keychain.
+    Load configuration into os.environ so api_client.py and crypto.py
+    pick them up via os.getenv().
+
+    PSAMVAULT_API_URL is read from config.env (non-sensitive).
+    PSAMVAULT_PEPPER is read from the OS keychain (sensitive).
+
+    Migrates automatically from the old all-in-config.env format on first
+    run after upgrade: if config.env contains PSAMVAULT_PEPPER, it is moved
+    to the keychain and removed from the file.
 
     Only HTTPS URLs are accepted for PSAMVAULT_API_URL. A non-HTTPS or
     malformed value is silently ignored so a compromised config file
     cannot redirect credential-bearing requests to a plain-HTTP server.
     """
-    if not CONFIG_FILE.exists():
-        return
+    if CONFIG_FILE.exists():
+        lines = CONFIG_FILE.read_text().splitlines()
+        filtered = list(lines)
 
-    for line in CONFIG_FILE.read_text().splitlines():
-        line = line.strip() 
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip()
-        if not key or not value:
-            continue
-        # Validate PSAMVAULT_API_URL: must be HTTPS to prevent redirect of
-        # credential-bearing proxy calls to an attacker-controlled server.
-        if key == "PSAMVAULT_API_URL":
-            _parsed = urlparse(value)
-            if _parsed.scheme != "https" or not _parsed.netloc:
-                continue  # Reject non-HTTPS or malformed API base URLs
-        if key not in os.environ:
-            os.environ[key] = value
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if not key or not value:
+                continue
+            # Migration: pepper in config.env → move to keychain
+            if key == "PSAMVAULT_PEPPER":
+                if value and not keyring.get_password(_SERVICE, _PEPPER_KEY):
+                    keyring.set_password(_SERVICE, _PEPPER_KEY, value)
+                filtered[i] = None  # Mark for removal
+                continue
+            # Validate PSAMVAULT_API_URL: must be HTTPS to prevent redirect of
+            # credential-bearing proxy calls to an attacker-controlled server.
+            if key == "PSAMVAULT_API_URL":
+                _parsed = urlparse(value)
+                if _parsed.scheme != "https" or not _parsed.netloc:
+                    filtered[i] = None  # Reject non-HTTPS or malformed API base URLs
+                    continue
+            if key not in os.environ:
+                os.environ[key] = value
+
+        # Rewrite config.env without pepper line (migration cleanup)
+        cleaned = [l for l in filtered if l is not None]
+        if len(cleaned) != len(lines):
+            CONFIG_FILE.write_text("\n".join(cleaned) + "\n")
+
+    # Load pepper from keychain into os.environ
+    pepper = keyring.get_password(_SERVICE, _PEPPER_KEY)
+    if pepper and "PSAMVAULT_PEPPER" not in os.environ:
+        os.environ["PSAMVAULT_PEPPER"] = pepper
 
 
 def _get_keychain(key: str) -> str:
@@ -95,6 +122,8 @@ def _migrate_legacy_session() -> None:
         "refresh_token": "session.refresh_token",
         "kdf_salt":      "session.kdf_salt",
         "vek":           "session.vek",
+        "encrypted_vek": "session.encrypted_vek",
+        "vek_iv":        "session.vek_iv",
     }
     for field, keychain_key in field_map.items():
         if field in old_data:
@@ -154,6 +183,27 @@ def update_tokens(access_token: str, refresh_token: str) -> None:
     """
     keyring.set_password(_SERVICE, "session.access_token", access_token)
     keyring.set_password(_SERVICE, "session.refresh_token", refresh_token)
+
+
+def update_access_token(access_token: str) -> None:
+    """
+    Overwrite just the access_token in the keychain.
+    Called automatically after a successful token refresh.
+    """
+    keyring.set_password(_SERVICE, "session.access_token", access_token)
+
+
+def clear_session() -> None:
+    """
+    Delete all session data from the keychain and remove the presence marker.
+    """
+    for key in _SESSION_KEYS:
+        try:
+            keyring.delete_password(_SERVICE, key)
+        except keyring.errors.PasswordDeleteError:
+            pass
+    if SESSION_FILE.exists():
+        SESSION_FILE.unlink()
 
 
 _migrate_legacy_session()
