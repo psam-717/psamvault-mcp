@@ -455,6 +455,8 @@ async def browser_login(
         A concise summary dict — NOT the raw Playwright step list:
         {
             "success":               bool,
+            "message":               str | None — human-readable success message (None on failure),
+            "captcha_detected":      bool — True if automation was paused for a CAPTCHA,
             "steps_count":           int    — how many steps completed before returning,
             "failed_at":             str | None — step name where flow stopped (None = success),
             "url":                   str | None — final page URL,
@@ -462,6 +464,7 @@ async def browser_login(
             "error_text":            str | None — visible error message detected on page,
             "hint":                  str | None — actionable suggestion when a step fails,
             "login_page_screenshot": str | None — path to screenshot of the login page,
+            "captcha_screenshot":    str | None — path to screenshot of the CAPTCHA (if detected),
         }
         
     TOKEN NOTE:
