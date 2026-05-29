@@ -120,6 +120,34 @@ async def check_site_exists(access_token: str, site_name: str) -> dict:
     return result
 
 
+async def update_vault_entry_url(
+    access_token: str,
+    site_name: str,
+    login_url: str,
+) -> dict:
+    """
+    PUT /vault/{site_name} — update only the login_url field.
+    Used by browser_login to persist auto-discovered login page URLs.
+    """
+    async def _call(token: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{BASE_URL}/vault/{site_name}",
+                headers=_auth_headers(token),
+                json={"login_url": login_url},
+                timeout=30.0,
+            )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = await _call(access_token)
+    if result is None:
+        return await _refresh_and_retry(_call)
+    return result
+
+
 async def proxy_request(
     access_token: str,
     site_name: str,
