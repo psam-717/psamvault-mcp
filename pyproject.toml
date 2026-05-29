@@ -45,3 +45,7 @@ Issues = "https://github.com/psam-717/psamvault-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
