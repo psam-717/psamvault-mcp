@@ -5,27 +5,7 @@ use your stored credentials without ever seeing their plaintext values.
 
 ## How it works
 
-psamvault exposes two complementary flows depending on what the agent needs.
-
-### API request flow (`use_credential`)
-
-When an AI agent needs to call an API on your behalf, psamvault decrypts the
-credential locally and forwards the authenticated request through its backend proxy.
-
-**The agent never sees the password.** It only sees the HTTP response.
-
-```
-Agent: "Call the GitHub API using my stored credential"
-         ↓
-psamvault shows a consent dialog: "Allow agent to use github.com credential?"
-         ↓ (you approve)
-psamvault decrypts credential locally using your Vault Encryption Key
-         ↓
-psamvault makes: GET https://api.github.com/user
-                 Authorization: Bearer <your token>
-         ↓
-Agent receives: {"login": "yourusername", "id": 12345, ...}
-```
+psamvault provides two complementary flows depending on what the agent needs.
 
 ### Browser login flow (`browser_login`)
 
@@ -39,8 +19,6 @@ inside that browser process.
 Agent: "Log me into kaggle.com"
          ↓
 psamvault opens Chromium → navigates to kaggle.com → finds the login page
-         ↓
-psamvault takes a screenshot of the confirmed login page
          ↓
 psamvault shows a consent dialog with the confirmed login URL
          ↓ (you approve)
@@ -78,18 +56,45 @@ psamvault configure
 psamvault login
 ```
 
+- Playwright Chromium browser
+
+```bash
+playwright install chromium
+```
+
 ## Installation
 
 ```bash
 pipx install psamvault-mcp
-playwright install chromium
 ```
 
-### Goose setup (recommended)
+## Transport modes
 
-[Goose](https://goose-docs.ai) is an open-source AI agent with native MCP support. There are three ways to add psamvault-mcp as a Goose extension:
+psamvault-mcp supports two transport modes. Use the one that matches your agent.
 
----
+### stdio (default — for Goose, Claude Desktop, Cline)
+
+```bash
+psamvault-mcp
+```
+
+Starts the MCP server over stdin/stdout. Most desktop MCP clients use this mode.
+
+### HTTP/SSE (for Hermes, custom clients, or network-accessible setups)
+
+```bash
+psamvault-mcp --http --port 8433
+```
+
+Starts an HTTP server with Server-Sent Events (SSE) transport.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--http` | off | Enable HTTP/SSE transport |
+| `--port` | `8433` | HTTP server port |
+| `--host` | `127.0.0.1` | HTTP server bind address |
+
+### Goose setup
 
 #### Option A — One-click deeplink
 
@@ -100,8 +105,6 @@ goose://extension?cmd=psamvault-mcp&timeout=300&id=psamvault&name=psamVault&desc
 ```
 
 Goose will prompt you to confirm, then the extension is added instantly.
-
----
 
 #### Option B — Goose Desktop UI
 
@@ -123,8 +126,6 @@ Goose will prompt you to confirm, then the extension is added instantly.
 
 The extension appears in your Extensions list — toggle it on to activate it.
 
----
-
 #### Option C — Config file (advanced)
 
 Edit `~/.config/goose/config.yaml` and add the following under `extensions:`:
@@ -142,8 +143,6 @@ extensions:
 
 Save the file and restart Goose (or reload the session).
 
----
-
 #### Verifying the extension works
 
 Once added, start a Goose session and try:
@@ -154,11 +153,29 @@ What credentials do I have stored in my vault?
 
 Goose will call `list_vault_sites` via psamvault-mcp. If you see your stored sites, everything is working.
 
----
+### Hermes setup
 
-### Other MCP clients
+Connect to psamvault-mcp via its HTTP/SSE transport. Add this block to
+`~/.hermes/config.yaml` under `mcp_servers`:
 
-**Claude Desktop** — config file location:
+```yaml
+mcp_servers:
+  psamvault:
+    url: "http://127.0.0.1:8433/sse"
+    enabled: true
+```
+
+Then start the server in a terminal:
+
+```bash
+psamvault-mcp --http --port 8433
+```
+
+Restart or reload Hermes — the tools will be discovered automatically.
+
+### Claude Desktop setup
+
+Config file location:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
@@ -172,8 +189,23 @@ Goose will call `list_vault_sites` via psamvault-mcp. If you see your stored sit
 }
 ```
 
-Restart your MCP client after saving.
+Restart Claude Desktop after saving.
 
+### Other MCP clients
+
+Any MCP client supporting stdio transport can use psamvault-mcp:
+
+```json
+{
+  "mcpServers": {
+    "psamvault": {
+      "command": "psamvault-mcp"
+    }
+  }
+}
+```
+
+For HTTP/SSE support, point the client at `http://127.0.0.1:8433/sse`.
 
 ## Configuration
 
@@ -199,27 +231,28 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 | `search_vault_tools` | Discover which tool to use — call this first; accepts a keyword or empty string for all tools |
 | `list_vault_sites` | List stored site names (no passwords) |
 | `check_credential_exists` | Check if a credential exists for a site |
-| `use_credential` | Make an authenticated HTTP request |
 | `get_username_for_site` | Get username only (not password) |
 | `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
 
-## Injection modes
+## Architecture
 
-| Mode | Header format | Use case |
-|---|---|---|
-| `bearer_token` | `Authorization: Bearer <password>` | GitHub, OpenAI, most APIs |
-| `api_key_header` | `<custom-header>: <password>` | APIs with X-API-Key headers |
-| `basic_auth` | `Authorization: Basic base64(user:pass)` | HTTP basic auth |
+The MCP server manages a single Playwright Chromium instance in-process.
+No subprocess daemon is used — the browser lives in the same process as the
+MCP server. If the browser crashes, it is automatically restarted on the
+next `browser_login` call.
+
+This eliminates the fragile 3-process chain (MCP → CLI daemon → browser)
+that caused connection errors with certain MCP clients (e.g. Goose's
+`ECONNREFUSED` on internal proxy ports).
 
 ## Example agent prompts
 
 Once connected, you can ask your agent things like:
 
 - *"What credentials do I have stored in my vault?"*
-- *"Check my GitHub notifications using my stored github.com credential"*
-- *"List my AWS S3 buckets using my stored aws credential"*
 - *"Log me into kaggle.com"*
 - *"Open github.com and log me in"*
+- *"Check if I have a credential stored for z.ai"*
 
 ## Testing
 
@@ -238,6 +271,7 @@ requires no real network access or OS keychain — all external dependencies are
 - Every credential use requires explicit approval via a consent dialog
 - The agent only receives HTTP responses, never credential values
 - All communication with the psamvault backend uses HTTPS
+- The browser is managed in-process — no subprocess daemon or internal HTTP proxy
 
 ## License
 
