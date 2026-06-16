@@ -1,11 +1,16 @@
-"""Shared test fixtures and configuration for psamvault-mcp tests."""
+"""Conftest shared fixtures — fixes import path for pytest on systems 
+where another `tests` package shadows the local one."""
 
 import os
+import sys
 
-# Keyring backend must be set before any keyring import
-os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
-os.environ.setdefault("PSAMVAULT_PEPPER", "a" * 64)
-os.environ.setdefault("PSAMVAULT_API_URL", "https://psamvault-test.example.com")
+# Ensure project root is first on sys.path so the local tests/ package
+# is found before any installed `tests` packages (e.g. hermes-agent).
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root in sys.path:
+    sys.path.remove(_project_root)
+sys.path.insert(0, _project_root)
+
 
 import json
 from pathlib import Path
@@ -16,10 +21,6 @@ import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # ── In-memory keyring mock ────────────────────────────────────────────────────
-# The null keyring backend doesn't reliably persist across all Python runtimes
-# and pytest configurations. We monkeypatch the keyring module at import time so
-# all modules (session.py, test files) use the in-memory store automatically.
-
 _KEYRING_STORE: dict[str, str] = {}
 
 
@@ -170,20 +171,8 @@ def mock_session(session_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def mock_consent_approved(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make consent.request_consent return True without showing a dialog."""
-    import mcp_server.consent
-    monkeypatch.setattr(mcp_server.consent, "request_consent", lambda *a, **kw: True)
-
-
-@pytest.fixture
-def mock_tool_deps(mock_session, mock_consent_approved, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set up all dependencies needed by tools.py tests.
-
-    Combines mock_session + mock_consent_approved, and patches the
-    references that tools.py imports from session and consent modules
-    so they point to the mocked versions.
-    """
+def mock_tool_deps(mock_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set up all dependencies needed by tools.py tests."""
     import mcp_server.tools
 
     monkeypatch.setattr(mcp_server.tools, "is_logged_in", lambda: True)
@@ -194,17 +183,9 @@ def mock_tool_deps(mock_session, mock_consent_approved, monkeypatch: pytest.Monk
     async def _mock_decrypt(site):
         return dict(TEST_CREDS)
 
-    async def _mock_consent(*a, **kw):
-        return True
-
     monkeypatch.setattr(
         mcp_server.tools, "_decrypt_site_credential",
         _mock_decrypt,
-    )
-
-    monkeypatch.setattr(
-        mcp_server.tools, "_request_consent_async",
-        _mock_consent,
     )
 
     yield
