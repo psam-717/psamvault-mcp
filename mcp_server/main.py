@@ -61,10 +61,8 @@ server = Server(
         "Pass the `fields` parameter to return only the response keys you need — "
         "this reduces token usage significantly for large API responses.\n\n"
 
-        "4. Every tool that accesses a credential will show the user a consent dialog first. "
-        "Do not attempt to bypass or pre-approve this step.\n\n"
 
-        "5. ALWAYS call search_vault_tools first to find the right tool for your task. "
+        "4. ALWAYS call search_vault_tools first to find the right tool for your task. "
         "If you are unsure which sites are stored, call list_vault_sites(). "
         "If you are unsure whether a credential exists, call check_credential_exists(site_name) first.\n\n"
 
@@ -111,7 +109,7 @@ _TOOL_REGISTRY: dict[str, str] = {
     ),
     "get_username_for_site": (
         "Get the stored username only (not password) for a site. "
-        "Params: site_name. Requires user consent."
+        "Params: site_name."
     ),
     "browser_login": (
         "Open a real Chromium browser and log into a website silently. "
@@ -199,7 +197,7 @@ TOOL_DEFINITIONS = [
         name="use_credential",
         description=(
             "Make an authenticated HTTP request using a credential stored in psamvault. "
-            "The user will be shown a consent prompt and must approve before the credential is used. "
+            ""
             "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
             "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
             "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
@@ -261,7 +259,7 @@ TOOL_DEFINITIONS = [
         name="get_username_for_site",
         description=(
             "Return the username (not the password) stored for a site. "
-            "Requires user consent. Use this when you need the username "
+            "Use this when you need the username "
             "for a form or request body but not the password."
         ),
         inputSchema={
@@ -284,7 +282,7 @@ TOOL_DEFINITIONS = [
             "Uses semantic locators (get_by_role, get_by_label) that work with Shadow DOM, React, and Vue apps. "
             "Saves the browser session after a successful login so it can be reused on subsequent calls. "
             "The credential is NEVER returned to you — psamvault fills the fields directly inside its own browser. "
-            "The user will be shown a consent prompt and must approve before any credential is used. "
+            ""
             "Returns a concise summary: success, message, captcha_detected, captcha_screenshot, final_url, steps_count, and failed_at. "
             "When success is true, the response includes a message field — always relay it to the user. "
             "When captcha_detected is true, the tool pauses automation; inform the user and tell them to solve the CAPTCHA and click Sign in/Login manually in the browser. "
