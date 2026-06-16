@@ -1,9 +1,18 @@
 import os
+from urllib.parse import urlparse
+
 import httpx
 
 from mcp_server.session import get_refresh_token, update_tokens
 
-BASE_URL = os.getenv("PSAMVAULT_API_URL", "https://psam-vault-backend.onrender.com")
+_BASE_URL_RAW = os.getenv("PSAMVAULT_API_URL", "https://psam-vault-backend.onrender.com")
+_parsed = urlparse(_BASE_URL_RAW)
+if _parsed.scheme != "https" or not _parsed.netloc:
+    raise RuntimeError(
+        f"PSAMVAULT_API_URL must use HTTPS. Got scheme '{_parsed.scheme}' "
+        f"for '{_BASE_URL_RAW}'."
+    )
+BASE_URL = _BASE_URL_RAW
 
 def _auth_headers(access_token: str) -> dict:
     return {"Authorization": f"Bearer {access_token}"}
@@ -148,58 +157,3 @@ async def update_vault_entry_url(
     return result
 
 
-async def proxy_request(
-    access_token: str,
-    site_name: str,
-    target_url: str,
-    method: str,
-    inject_as: str,
-    header_name: str | None,
-    body: dict | None,
-    extra_headers: dict | None,
-    credential_username: str,
-    credential_password: str,
-) -> dict:
-    """
-    POST /vault/proxy — make an authenticated request via the backend.
-
-    The credential username and password are passed in the request body
-    under underscore-prefixed keys so the backend can inject them without
-    storing. They travel over TLS only and are stripped before the
-    outbound call to the target.
-    """
-    # Shallow-copy body, stripping any pre-existing reserved keys so
-    # user-supplied data can never collide with the credential fields.
-    request_body = {
-        k: v for k, v in body.items() if not k.startswith("_credential_")
-    } if body else {}
-    request_body["_credential_username"] = credential_username
-    request_body["_credential_password"] = credential_password
-
-    payload = {
-        "site_name": site_name,
-        "target_url": target_url,
-        "method": method,
-        "inject_as": inject_as,
-        "header_name": header_name,
-        "body": request_body,
-        "extra_headers": extra_headers,
-    }
-
-    async def _call(token: str):
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{BASE_URL}/vault/proxy",
-                headers=_auth_headers(token),
-                json=payload,
-                timeout=60.0,
-            )
-        if response.status_code == 401:
-            return None
-        _handle_error(response)
-        return response.json()
-
-    result = await _call(access_token)
-    if result is None:
-        return await _refresh_and_retry(_call)
-    return result
