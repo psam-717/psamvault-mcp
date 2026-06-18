@@ -1,0 +1,17 @@
+preset:
+  name: psamvault
+  description: "psamvault MCP credential vault — host-side MCP bridge for NemoClaw sandbox agents"
+network_policies:
+  psamvault_mcp:
+    name: psamvault_mcp
+    endpoints:
+      - host: host.openshell.internal
+        port: 3101
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/node }
+      - { path: /usr/local/bin/mcporter }
