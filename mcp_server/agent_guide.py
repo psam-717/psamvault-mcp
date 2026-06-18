@@ -83,6 +83,11 @@ You can also pass optional parameters:
 - **Never return credential values** to the user or use them in any other tool.
 - **Never fall back to browser_login with a different site_name** than what the user asked for.
   If the site isn't stored, tell the user — don't guess.
+
+## When to use use_credential instead
+If the user wants to call an API (not log into a website), use `use_credential` instead.
+`browser_login` is for **website login forms** — `use_credential` is for **HTTP API requests**.
+If you're unsure, call `search_vault_tools("login")` to check which tool fits the task.
 """
 
 _HOW_TO_DISCOVER_CREDS = """\
@@ -181,20 +186,44 @@ Never run `psamvault get`, `psamvault show`, `psamvault open`,
 or any psamvault CLI command. Do not read credential files from the filesystem.
 The only permitted way to access credentials is through the MCP tools.
 
-### Rule 2: browser_login for all login requests
+### Rule 2: browser_login for all website login requests
 Use `browser_login` for: logging in, signing in, authenticating, signing on,
 accessing an account, or entering credentials for a website.
 This includes trigger phrases like "log into", "log in to", "sign into",
 "sign in to", "sign on to", "authenticate to", "access my account on",
 "enter my password for", "fill in credentials for", or "login to".
 
-### Rule 3: Discover first, then act
+### Rule 3: use_credential for API requests
+Use `use_credential` for all authenticated HTTP/API requests. It looks up API
+key entries first, then falls back to vault (site password) entries if no API
+key is found. The credential value is **never returned** — only the HTTP
+response from the target is returned to you.
+
+Supported injection modes:
+- `bearer_token` — Authorization: Bearer *** (default)
+- `api_key_header` — <header_name>: <key> (requires `header_name`)
+- `basic_auth` — Authorization: Basic base64(<key>:<key>)
+
+### Rule 4: Capture Stripe Projects credentials immediately
+After running `stripe projects add <provider>`, call
+`capture_stripe_credentials(provider="<provider>")` **immediately** to encrypt
+the provisioned credentials into psamvault and replace them with placeholders.
+This prevents the agent from reading the plaintext `.env` file.
+
+### Rule 5: Scan and protect existing projects
+When working in a project directory that has `.env` files, call
+`scan_and_protect()` to detect and encrypt any exposed secrets. This is a
+one-time safety check before the agent reads any files in the project.
+
+### Rule 6: Discover first, then act
 Always call `search_vault_tools` first when you are unsure which tool to use.
 If you are unsure which sites exist, call `list_vault_sites`.
 If you are unsure whether a credential exists, call `check_credential_exists`.
 
-### Rule 4: Credential values are never returned to you
+### Rule 7: Credential values are never returned to you
 - `browser_login` fills credentials inside a browser — you never see them.
+- `use_credential` injects credentials into HTTP requests — only the response
+  comes back to you.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 
@@ -223,6 +252,16 @@ or checking for network issues.
 If `check_credential_exists` returns `exists: false`, the site isn't in the vault.
 The user must add it via `psamvault add` before you can use it.
 
+### Stripe CLI not found
+If `capture_stripe_credentials` returns `success: false` with a message about
+Stripe CLI not found, tell the user to install the Stripe CLI from
+https://stripe.com/docs/stripe-cli and authenticate.
+
+### scan_and_protect returns nothing found
+If `scan_and_protect` returns 0 secrets found, the project is clean —
+no action needed. If it returns `files_not_gitignored`, suggest the user
+add `.env` to their `.gitignore`.
+
 ## Tool reference
 
 | Tool | Purpose | When to call |
@@ -230,9 +269,233 @@ The user must add it via `psamvault add` before you can use it.
 | `get_version` | Check psamvault-mcp version | Anytime — no login needed |
 | `search_vault_tools` | Discover which tool to use | **First** — when unsure what tool fits |
 | `list_vault_sites` | List stored sites with hints | When user asks "what do I have" |
+| `list_api_keys` | List stored API key names | When user asks "what API keys do I have" |
 | `check_credential_exists` | Check if a site has a credential | Before any credential-dependent tool |
 | `get_username_for_site` | Get username only | When username is needed in a form/API |
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
+| `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
+| `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
+| `capture_stripe_credentials` | Capture Stripe Projects credentials | **Immediately** after `stripe projects add <provider>` |
+"""
+
+_HOW_TO_USE_API_CREDENTIAL = """\
+# How to use a stored credential for API requests
+
+## Goal
+Make an authenticated HTTP request using a credential stored in psamvault
+without ever seeing the plaintext credential value. The MCP server looks up
+API key entries first, falls back to vault entries, decrypts the credential
+locally, injects it into the HTTP request, and returns only the response.
+
+## Prerequisites
+- The user must be logged in to psamvault (`psamvault login` in their terminal).
+- The credential must already be stored (via `psamvault add`, `scan_and_protect`,
+  or `capture_stripe_credentials`).
+
+## Tools you need
+| Tool | Purpose |
+|------|---------|
+| `check_credential_exists` | Verify the credential exists before calling use_credential |
+| `use_credential` | Make the authenticated HTTP/API request |
+
+## Workflow
+
+### Step 1: Verify the credential exists
+Call `check_credential_exists(site_name="my-api-key")`.
+If it returns `exists: false`, the credential isn't stored yet.
+
+### Step 2: Call use_credential
+Call `use_credential(
+    site_name="my-api-key",
+    target_url="https://api.example.com/data",
+    method="GET",
+    inject_as="bearer_token",
+)`
+
+### Step 3: Handle the response
+
+#### ✅ On success (success: true)
+- The response `data` contains the API response.
+- Use the data for what the user requested.
+- `status_code` tells you the HTTP status.
+
+#### ❌ On failure (error in response)
+- Check the `error` message and relay it to the user.
+- If the credential wasn't found, suggest adding it via `psamvault add`.
+- If the target URL returned an error, report the status code.
+
+## Examples
+
+### Bearer token (default)
+```
+use_credential("openai.com", "https://api.openai.com/v1/models", "GET")
+```
+The credential is injected as `Authorization: Bearer sk-...`.
+
+### Custom header (API key header)
+```
+use_credential("my-api", "https://api.example.com/data",
+               inject_as="api_key_header", header_name="X-API-Key")
+```
+The credential is injected as `X-API-Key: abc123...`.
+
+### Basic auth
+```
+use_credential("my-api", "https://api.example.com/auth",
+               inject_as="basic_auth")
+```
+The credential is injected as `Authorization: Basic <base64>`.
+
+### Token-efficient field filtering
+```
+use_credential("github", "https://api.github.com/user",
+               fields=["login", "id", "public_repos"])
+```
+Only returns the specified fields — saves tokens.
+
+## What NOT to do
+- **Never read the credential value** from the response — it's never returned.
+- **Never use browser_login** for API requests — use use_credential instead.
+- **Never expose the credential** in logs, messages, or any other output.
+"""
+
+_HOW_TO_SCAN_AND_PROTECT = """\
+# How to scan a project for exposed secrets and protect them
+
+## Goal
+Scan a project directory for `.env` files containing exposed API keys,
+passwords, tokens, or database URLs. Each detected secret is encrypted
+with the VEK, stored in the psamvault API key store, and the plaintext
+value is replaced with a `psamvault:<KEY_NAME>` placeholder so the agent
+never reads the raw value.
+
+## Prerequisites
+- The user must be logged in to psamvault (`psamvault login` in their terminal).
+
+## Tools you need
+| Tool | Purpose |
+|------|---------|
+| `scan_and_protect` | Scan and protect exposed secrets |
+
+## Workflow
+
+### Step 1: Scan the project
+Call `scan_and_protect()` with no arguments to scan the current directory,
+or pass a specific `project_dir`:
+```
+scan_and_protect(project_dir="/path/to/project")
+```
+
+### Step 2: Review the results
+The tool returns:
+- `files_scanned` — which `.env` files were found
+- `secrets_found` — how many unprotected secrets were found
+- `captured` — list of secrets that were encrypted and stored
+- `captured_count` — total captured
+- `files_modified` — which files were updated with placeholders
+- `files_not_gitignored` — files that should be in `.gitignore`
+
+### Step 3: Handle edge cases
+
+#### No secrets found
+If `secrets_found` is 0, the project is clean. No action needed.
+
+#### Files not gitignored
+If `files_not_gitignored` is non-empty, suggest the user add `.env` to
+their `.gitignore` to prevent accidental commits.
+
+#### Errors during capture
+If `errors` is non-empty, some secrets couldn't be stored. Report the
+errors to the user.
+
+## What NOT to do
+- **Never read the plaintext .env file** directly — let scan_and_protect handle it.
+- **Never share the original secret values** with the user or any other tool.
+- **Never skip scan_and_protect** when working in a project with .env files —
+  it's a one-time safety measure.
+
+## After scan_and_protect
+The captured secrets can be used with `use_credential` by their vault name:
+`env/<filename>/<KEY_NAME>`. For example, if `OPENAI_API_KEY` was captured
+from `.env`, it's stored as `env/.env/OPENAI_API_KEY`.
+"""
+
+_HOW_TO_CAPTURE_STRIPE = """\
+# How to capture Stripe Projects provisioned credentials
+
+## Goal
+After an agent provisions infrastructure via `stripe projects add <provider>`,
+the resulting credentials (database URLs, API keys, auth tokens) land in the
+project's `.env` file as plaintext. This guide captures them into psamvault,
+encrypts them, and replaces the plaintext values with placeholders.
+
+## Prerequisites
+- The user must be logged in to psamvault (`psamvault login` in terminal).
+- The Stripe CLI must be installed, authenticated, and a Stripe project
+  must be active in the current directory.
+- The `stripe projects add <provider>` command must have already been run.
+
+## Tools you need
+| Tool | Purpose |
+|------|---------|
+| `capture_stripe_credentials` | Capture Stripe-provisioned credentials |
+
+## Workflow
+
+### Step 1: Run stripe projects add (already done by agent)
+The agent should have run `stripe projects add neon/postgres` or similar
+to provision a resource. This writes credentials to `.env`.
+
+### Step 2: Call capture_stripe_credentials
+Call `capture_stripe_credentials(provider="neon")` **immediately** after
+provisioning, before any other agent action reads the `.env` file.
+
+You can also pass `project_dir` if the project isn't the current directory:
+```
+capture_stripe_credentials(
+    provider="supabase",
+    project_dir="/path/to/project"
+)
+```
+
+### Step 3: Review the results
+The tool returns:
+- `success` — whether the operation succeeded
+- `captured` — list of credentials that were captured
+- `captured_count` — total captured
+- `files_modified` — which `.env` files were updated
+- `message` — human-readable summary
+
+### Step 4: Use the captured credentials
+The captured credentials are stored as `stripe/<provider>/<KEY_NAME>`.
+Use them with `use_credential`:
+```
+use_credential("stripe/neon/NEON_DATABASE_URL", ...)
+```
+
+## Dry run mode
+Call `capture_stripe_credentials(provider="neon", dry_run=True)` to preview
+what would be captured without actually modifying anything. This is useful
+for verification before making changes.
+
+## Error handling
+
+### Stripe CLI not found
+If the tool fails with "Stripe CLI not found", tell the user to install it:
+https://stripe.com/docs/stripe-cli
+
+### No .env file
+If no `.env` file is found after the pull, Stripe Projects may not have been
+initialised. The user needs to run `stripe projects use` first.
+
+### Not a Stripe project
+If the Stripe CLI exits with an error, the directory may not be a Stripe
+project. Tell the user to run `stripe projects use` in the directory.
+
+## What NOT to do
+- **Never read the plaintext `.env` file** directly — let the tool handle it.
+- **Never skip the capture step** — credentials in `.env` are a security risk.
+- **Never expose the raw credential values** in your response.
 """
 
 # ── Build the registry ──────────────────────────────────────────────────────
@@ -259,4 +522,22 @@ PROMPT_REGISTRY["general-rules"] = {
     "name": "general-rules",
     "description": "Security rules, error handling guidance, and complete tool reference for psamvault",
     "content": _GENERAL_RULES.strip(),
+}
+
+PROMPT_REGISTRY["how-to-use-api-credential"] = {
+    "name": "how-to-use-api-credential",
+    "description": "Guide for making authenticated HTTP/API requests using stored credentials",
+    "content": _HOW_TO_USE_API_CREDENTIAL.strip(),
+}
+
+PROMPT_REGISTRY["how-to-scan-and-protect"] = {
+    "name": "how-to-scan-and-protect",
+    "description": "Guide for scanning project .env files for exposed secrets and protecting them with psamvault",
+    "content": _HOW_TO_SCAN_AND_PROTECT.strip(),
+}
+
+PROMPT_REGISTRY["how-to-capture-stripe"] = {
+    "name": "how-to-capture-stripe",
+    "description": "Guide for capturing Stripe Projects provisioned credentials into psamvault",
+    "content": _HOW_TO_CAPTURE_STRIPE.strip(),
 }

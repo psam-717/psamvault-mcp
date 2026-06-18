@@ -106,6 +106,89 @@ async def get_vault_entry(access_token: str, site_name: str) -> dict:
     return result
 
 
+async def list_api_key_entries(access_token: str) -> list[dict]:
+    """
+    GET /apikeys — return all API key entries as lightweight list items.
+    Returns names and service hints only — no encrypted blob values.
+    """
+    async def _call(token: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE_URL}/apikeys",
+                headers=_auth_headers(token),
+                timeout=30.0,
+            )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json().get("entries", [])
+
+    result = await _call(access_token)
+    if result is None:
+        return await _refresh_and_retry(_call)
+    return result
+
+
+async def get_api_key_entry(access_token: str, name: str) -> dict:
+    """
+    GET /apikeys/{name} — return the encrypted blob and iv for an API key.
+    The MCP server decrypts this locally before using it.
+    """
+    async def _call(token: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE_URL}/apikeys/{name}",
+                headers=_auth_headers(token),
+                timeout=30.0,
+            )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = await _call(access_token)
+    if result is None:
+        return await _refresh_and_retry(_call)
+    return result
+
+
+async def add_api_key_entry(
+    access_token: str,
+    name: str,
+    service_hint: str,
+    encrypted_blob: str,
+    iv: str,
+) -> dict:
+    """
+    POST /apikeys — store a new encrypted API key entry.
+
+    The encrypted_blob and iv must be pre-encrypted locally using the VEK.
+    The server never sees the plaintext key value.
+    """
+    async def _call(token: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{BASE_URL}/apikeys",
+                headers=_auth_headers(token),
+                json={
+                    "name": name,
+                    "service_hint": service_hint,
+                    "encrypted_blob": encrypted_blob,
+                    "iv": iv,
+                },
+                timeout=30.0,
+            )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = await _call(access_token)
+    if result is None:
+        return await _refresh_and_retry(_call)
+    return result
+
+
 async def check_site_exists(access_token: str, site_name: str) -> dict:
     """
     GET /vault/proxy/check/{site_name} — verify a credential is stored.

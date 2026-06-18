@@ -69,10 +69,14 @@ server = Server(
          "Tool summary:\n"
         "- search_vault_tools       → discover which tool to use (call this first)\n"
         "- list_vault_sites         → list stored sites (no passwords)\n"
+        "- list_api_keys            → list stored API keys (no key values)\n"
         "- check_credential_exists  → verify a credential exists for a site\n"
         "- browser_login            → open a browser and log into a website silently\n"
         "- use_credential           → make an authenticated HTTP/API request\n"
         "- get_username_for_site    → get just the username (not password) for a site\n"
+        "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
+        "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
+        "- run_with_credential       → run a CLI command with credential injected (env/stdin)\n"
     ),
 )
 
@@ -98,6 +102,10 @@ _TOOL_REGISTRY: dict[str, str] = {
         "List all site names in the vault (no passwords). "
         "Use before use_credential to see what's available."
     ),
+    "list_api_keys": (
+        "List all stored API key names (never key values). "
+        "Use before use_credential to discover API keys."
+    ),
     "check_credential_exists": (
         "Check whether a credential exists for a site. "
         "Params: site_name. Returns exists + username_hint."
@@ -115,6 +123,20 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Open a real Chromium browser and log into a website silently. "
         "Params: site_name (required), login_url, username_selector, "
         "password_selector, submit_selector, timeout_ms (all optional)."
+    ),
+    "capture_stripe_credentials": (
+        "Capture credentials provisioned by Stripe Projects into psamvault. "
+        "After 'stripe projects add <provider>', call this to securely store "
+        "the provisioned credentials. Params: provider (required), project_dir (optional), "
+        "dry_run (optional)."
+    ),
+    "run_with_credential": (
+        "Run an arbitrary shell command with a credential injected as an env var "
+        "or stdin. Use for twine upload, git push, docker login, npm publish, "
+        "pip install, or any CLI tool that needs an API key or password. "
+        "The credential is never returned to you — output is redacted automatically. "
+        "Params: site_name (required), command (required), inject_as='env', "
+        "env_var_name, extra_env, workdir, timeout=120."
     ),
 }
 
@@ -176,6 +198,27 @@ TOOL_DEFINITIONS = [
         }
     ),
     Tool(
+        name="list_api_keys",
+        description=(
+            "List all stored API key names with service hints. "
+            "Never returns the actual key values. "
+            "Use this to discover what API keys are stored before calling use_credential. "
+            "Optionally pass project_name to filter keys for a specific project."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_name": {
+                    "type": "string",
+                    "description": "Optional project name to filter by. "
+                                   "Keys stored via scan_and_protect(project_name=...) "
+                                   "use the format 'project/.env/KEY'."
+                }
+            },
+            "required": []
+        }
+    ),
+    Tool(
         name="check_credential_exists",
         description=(
             "Check whether a credential is stored for a given site. "
@@ -197,7 +240,8 @@ TOOL_DEFINITIONS = [
         name="use_credential",
         description=(
             "Make an authenticated HTTP request using a credential stored in psamvault. "
-            ""
+            "The lookup checks API key entries first, then vault (site password) entries — "
+            "so you can use both API keys and site passwords. "
             "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
             "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
             "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
@@ -250,6 +294,10 @@ TOOL_DEFINITIONS = [
                         "Example: [\"login\", \"id\", \"public_repos\"] "
                         "omits the other ~37 fields in a GitHub user response."
                     )
+                },
+                "extra_headers": {
+                    "type": "object",
+                    "description": "Optional additional headers to include in the request."
                 }
             },
             "required": ["site_name", "target_url"],
@@ -320,10 +368,152 @@ TOOL_DEFINITIONS = [
             },
             "required": ["site_name"]
         }
-    )
+    ),
+    Tool(
+        name="scan_and_protect",
+        description=(
+            "Scan a project directory for exposed secrets in .env files and protect them. "
+            "Finds .env files, detects API keys and passwords using pattern matching, "
+            "encrypts them into the psamvault vault, and replaces the plaintext values "
+            "with 'psamvault:<KEY_NAME>' placeholders. "
+            "The captured secrets can then be used with use_credential."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_dir": {
+                    "type": "string",
+                    "description": "Path to the project directory. Defaults to current working directory."
+                },
+                "patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional custom key name patterns to scan for (e.g. ['MY_CUSTOM_KEY'])."
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Optional project name for grouping. Keys stored as 'project_name/.env/KEY_NAME' instead of 'env/.env/KEY_NAME'. Use this for cleaner per-project organisation."
+                }
+            }
+        }
+    ),
+    Tool(
+        name="capture_stripe_credentials",
+        description=(
+            "Capture credentials provisioned by Stripe Projects into psamvault. "
+            "After running the 'stripe projects add <provider>' command, the provisioned "
+            "credentials land in the project's .env file. This tool runs "
+            "'stripe projects env --pull', parses the resulting .env for secrets, "
+            "encrypts them into the psamvault API key store, and replaces the "
+            "plaintext values with 'psamvault:<KEY_NAME>' placeholders. "
+            "The captured secrets can then be used with use_credential."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "description": "The Stripe Projects provider name, e.g. 'neon', 'supabase', 'openrouter'"
+                },
+                "project_dir": {
+                    "type": "string",
+                    "description": "Path to the project directory. Defaults to current working directory."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If True, only preview what would be captured without storing anything.",
+                    "default": False,
+                }
+            },
+            "required": ["provider"],
+        }
+    ),
+
+    # ── Command execution tool ──────────────────────────────────────────────
+    Tool(
+        name="run_with_credential",
+        description=(
+            "Run an arbitrary shell command with a credential injected as an "
+            "environment variable or stdin pipe. "
+            "The credential is decrypted locally, injected into the subprocess, "
+            "and all output is scanned for the credential value and redacted "
+            "before being returned — the credential NEVER enters the agent's context.\\n\\n"
+            "Use cases:\\n"
+            "- twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'\\n"
+            "- docker login: inject_as='stdin' (password piped to stdin)\\n"
+            "- npm publish: inject_as='env', env_var_name='NPM_TOKEN'\\n"
+            "- git push: inject_as='env', env_var_name='GITHUB_TOKEN'\\n"
+            "- pip install (private repo): inject_as='env', env_var_name='PIP_TOKEN'\\n\\n"
+            "Only site_name and command are required. "
+            "When inject_as='env', env_var_name is required."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "site_name": {
+                    "type": "string",
+                    "description": (
+                        "The credential to use. This can be an API key name "
+                        "(e.g. 'pypi', 'testpypi', 'github-api') or a vault "
+                        "site name (e.g. 'github.com', 'dockerhub'). "
+                        "Check with list_api_keys or list_vault_sites first."
+                    )
+                },
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command to run with the credential injected. "
+                        "Example: 'twine upload dist/*' or 'git push origin main'"
+                    )
+                },
+                "inject_as": {
+                    "type": "string",
+                    "enum": ["env", "stdin"],
+                    "default": "env",
+                    "description": (
+                        "'env' — set credential as an environment variable "
+                        "(requires env_var_name). "
+                        "'stdin' — pipe credential as stdin to the process. "
+                        "Default: 'env'"
+                    )
+                },
+                "env_var_name": {
+                    "type": "string",
+                    "description": (
+                        "Required when inject_as='env'. "
+                        "The environment variable name to set the credential as. "
+                        "Examples: 'TWINE_PASSWORD', 'GITHUB_TOKEN', "
+                        "'DOCKER_PASSWORD', 'NPM_TOKEN'. "
+                        "When 'TWINE_PASSWORD' is used, TWINE_USERNAME is "
+                        "automatically set to '__token__'."
+                    )
+                },
+                "extra_env": {
+                    "type": "object",
+                    "description": (
+                        "Optional additional environment variables to pass to "
+                        "the subprocess. These are non-sensitive values merged "
+                        "into the subprocess environment alongside the credential. "
+                        "Example: {'TWINE_REPOSITORY_URL': 'https://upload.pypi.org/legacy/'}"
+                    )
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": (
+                        "Optional working directory for the command. "
+                        "Defaults to the MCP server's current working directory."
+                    )
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for the command (default: 120).",
+                    "default": 120,
+                }
+            },
+            "required": ["site_name", "command"],
+        }
+    ),
 ]
-
-
 
 
 # Tool list handler
@@ -369,6 +559,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         if name == "list_vault_sites":
             result = await tools.list_vault_sites()
         
+        elif name == "list_api_keys":
+            project_name = arguments.get("project_name")
+            result = await tools.list_api_keys(project_name=project_name)
+
         elif name == "check_credential_exists":
             result = await tools.check_credential_exists(
                 site_name=arguments["site_name"]
@@ -399,6 +593,30 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 password_selector=arguments.get("password_selector"),
                 submit_selector=arguments.get("submit_selector"),
                 timeout_ms=arguments.get("timeout_ms", 8000),
+            )
+
+        elif name == "scan_and_protect":
+            result = await tools.scan_and_protect(
+                project_dir=arguments.get("project_dir"),
+                patterns=arguments.get("patterns"),
+            )
+
+        elif name == "capture_stripe_credentials":
+            result = await tools.capture_stripe_credentials(
+                provider=arguments["provider"],
+                project_dir=arguments.get("project_dir"),
+                dry_run=arguments.get("dry_run", False),
+            )
+
+        elif name == "run_with_credential":
+            result = await tools.run_with_credential(
+                site_name=arguments["site_name"],
+                command=arguments["command"],
+                inject_as=arguments.get("inject_as", "env"),
+                env_var_name=arguments.get("env_var_name"),
+                extra_env=arguments.get("extra_env"),
+                workdir=arguments.get("workdir"),
+                timeout=arguments.get("timeout", 120),
             )
 
         else:
