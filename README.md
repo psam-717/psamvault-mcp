@@ -1,11 +1,25 @@
 # psamvault-mcp
 
-MCP server for [psamvault](https://pypi.org/project/psamvault/) — lets AI agents
-use your stored credentials without ever seeing their plaintext values.
+**v0.4.0** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
+
+Lets AI agents use your stored credentials without ever seeing their plaintext values. Also integrates with [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime credential resolution in your `.env` files.
+
+## Features
+
+| Feature | What it does |
+|---------|-------------|
+| **`browser_login`** | Opens Chromium, navigates to any site, fills credentials directly in the browser — agent never sees them |
+| **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
+| **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
+| **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
+| **`check_credential_exists`** | Check if a credential exists for a site |
+| **`get_username_for_site`** | Get stored username (never the password) |
+| **`list_vault_sites`** | List all stored credential sites |
+| **`get_version`** | Get the installed server version |
+
+> **New in v0.4.0:** `use_credential`, `scan_and_protect`, `capture_stripe_credentials`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
 
 ## How it works
-
-psamvault provides two complementary flows depending on what the agent needs.
 
 ### Browser login flow (`browser_login`)
 
@@ -20,8 +34,6 @@ Agent: "Log me into kaggle.com"
          ↓
 psamvault opens Chromium → navigates to kaggle.com → finds the login page
          ↓
-psamvault shows a consent dialog with the confirmed login URL
-         ↓ (you approve)
 psamvault decrypts credential locally
          ↓
 psamvault fills username + password fields directly in the browser
@@ -32,17 +44,60 @@ and tells you to solve the CAPTCHA and click Sign in manually
 Agent receives:
          {
            "success": true,
-           "message": "Logged in to github.com successfully. The browser is open.",
+           "message": "Logged in to github.com successfully.",
            "steps_count": 8,
            "url": "https://github.com/dashboard",
-           "captcha_detected": false,
-           "captcha_screenshot": null,
-           "failed_at": null,
-           "hint": null
+           "captcha_detected": false
          }
          ↓
 Browser stays open — you take over from there.
 The browser session is saved and reused on subsequent calls to the same site.
+```
+
+### API credential flow (`use_credential`)
+
+When an AI agent needs to make an authenticated API call on your behalf:
+
+```
+Agent: "Get my top 10 starred repos"
+         ↓
+use_credential("github.com", target_url="api.github.com/users/psam-717/starred")
+         ↓
+psamvault decrypts the API key locally, makes the HTTP request,
+returns only the response — the credential is NEVER in the agent's context
+```
+
+Supports three injection modes:
+- **Bearer token** — `Authorization: Bearer <token>`
+- **API key header** — `<custom-header>: <key>`
+- **Basic auth** — `Authorization: Basic base64(user:pass)`
+
+The `fields` parameter lets you return only the response keys you need, reducing token usage.
+
+### Protecting your `.env` files (`scan_and_protect`)
+
+```
+Agent: "Protect the secrets in my project"
+         ↓
+scan_and_protect scans the project directory for .env files
+         ↓
+Detects API keys, passwords, tokens (pattern matching)
+         ↓
+Encrypts each secret into the psamvault vault
+         ↓
+Replaces plaintext with "psamvault:KEY_NAME" placeholders
+         ↓
+Your app resolves them at runtime with pv-dotenv
+```
+
+After protecting, pair with [pv-dotenv](https://pypi.org/project/pv-dotenv/) — a drop-in replacement for `python-dotenv` that resolves `psamvault:` placeholders at runtime. No code changes needed beyond the import:
+
+```python
+# Before:
+from dotenv import load_dotenv
+
+# After:
+from pv_dotenv import load_dotenv
 ```
 
 ## Prerequisites
@@ -177,7 +232,7 @@ Restart or reload Hermes — the tools will be discovered automatically.
 
 Config file location:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`
 
 ```json
 {
@@ -227,12 +282,14 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 
 | Tool | Description |
 |---|---|
-| `get_version` | Return the installed psamvault-mcp version. No session or login required |
-| `search_vault_tools` | Discover which tool to use — call this first; accepts a keyword or empty string for all tools |
-| `list_vault_sites` | List stored site names (no passwords) |
+| `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
+| `use_credential` | Make authenticated HTTP requests using stored API keys — only the HTTP response is returned |
+| `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders |
+| `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
 | `check_credential_exists` | Check if a credential exists for a site |
 | `get_username_for_site` | Get username only (not password) |
-| `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
+| `list_vault_sites` | List stored site names (no passwords) |
+| `get_version` | Return the installed psamvault-mcp version |
 
 ## Architecture
 
@@ -253,6 +310,15 @@ Once connected, you can ask your agent things like:
 - *"Log me into kaggle.com"*
 - *"Open github.com and log me in"*
 - *"Check if I have a credential stored for z.ai"*
+- *"Get my top 10 starred repos from GitHub"*
+- *"Protect the secrets in my project directory"*
+
+## Related projects
+
+| Package | What It Does |
+|---------|-------------|
+| [`pv-dotenv`](https://pypi.org/project/pv-dotenv/) | Drop-in replacement for `python-dotenv` — resolves `psamvault:` placeholders at runtime |
+| [`psamvault-cli`](https://github.com/psam-717/psamvault-cli) | CLI + vault management — store, list, and manage credentials |
 
 ## Testing
 
@@ -268,7 +334,6 @@ requires no real network access or OS keychain — all external dependencies are
 ## Security
 
 - Credentials are decrypted locally on your machine — never sent to the agent
-- Every credential use requires explicit approval via a consent dialog
 - The agent only receives HTTP responses, never credential values
 - All communication with the psamvault backend uses HTTPS
 - The browser is managed in-process — no subprocess daemon or internal HTTP proxy
