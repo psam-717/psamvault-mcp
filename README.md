@@ -10,14 +10,17 @@ Lets AI agents use your stored credentials without ever seeing their plaintext v
 |---------|-------------|
 | **`browser_login`** | Opens Chromium, navigates to any site, fills credentials directly in the browser — agent never sees them |
 | **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
-| **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
+| **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
+| **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders. Supports per-project namespacing with `project_name` |
 | **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
+| **`list_api_keys`** | Lists all stored API key names with service hints and project grouping — never returns key values |
+| **`list_vault_sites`** | List all stored credential sites (names and username hints only) |
 | **`check_credential_exists`** | Check if a credential exists for a site |
 | **`get_username_for_site`** | Get stored username (never the password) |
-| **`list_vault_sites`** | List all stored credential sites |
+| **`search_vault_tools`** | Discovery tool — call this first to find the right tool for your task |
 | **`get_version`** | Get the installed server version |
 
-> **New in v0.4.0:** `use_credential`, `scan_and_protect`, `capture_stripe_credentials`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
+> **New in v0.4.0:** `use_credential`, `run_with_credential`, `scan_and_protect`, `capture_stripe_credentials`, `list_api_keys`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
 
 ## How it works
 
@@ -68,11 +71,37 @@ returns only the response — the credential is NEVER in the agent's context
 ```
 
 Supports three injection modes:
-- **Bearer token** — `Authorization: Bearer <token>`
+- **Bearer token** — `Authorization: Bearer ***`
 - **API key header** — `<custom-header>: <key>`
 - **Basic auth** — `Authorization: Basic base64(user:pass)`
 
 The `fields` parameter lets you return only the response keys you need, reducing token usage.
+
+### CLI command flow (`run_with_credential`)
+
+When an agent needs to run a CLI tool that requires a credential (upload to PyPI, push to a private git repo, log into Docker, publish an npm package):
+
+```
+Agent: "Upload my package to PyPI"
+         ↓
+run_with_credential("pypi", "twine upload dist/*",
+                    inject_as="env", env_var_name="TWINE_PASSWORD")
+         ↓
+psamvault decrypts the credential locally, spawns the subprocess
+with the credential injected as an env var (or piped via stdin)
+         ↓
+All stdout and stderr is scanned for the credential value
+and redacted before being returned
+         ↓
+Agent receives only the redacted output — the credential NEVER
+appears in the agent's context
+```
+
+Supports two injection modes:
+- **`env`** (default) — credential set as an environment variable (e.g. `TWINE_PASSWORD`, `GITHUB_TOKEN`, `NPM_TOKEN`). When `TWINE_PASSWORD` is used, `TWINE_USERNAME=__token__` is set automatically.
+- **`stdin`** — credential piped via stdin (e.g. for `docker login`).
+
+Use cases include: `twine upload`, `git push`, `docker login`, `npm publish`, `pip install` (private repos), and any CLI tool that needs an API key or password.
 
 ### Protecting your `.env` files (`scan_and_protect`)
 
@@ -89,6 +118,11 @@ Replaces plaintext with "psamvault:KEY_NAME" placeholders
          ↓
 Your app resolves them at runtime with pv-dotenv
 ```
+
+Secrets can be stored under a project namespace by passing `project_name`:
+- Keys stored as `project_name/.env/KEY_NAME` for clean per-project organisation
+- When omitted, keys are stored as `env/.env/KEY_NAME` (backwards-compatible)
+- Use `list_api_keys(project_name="myproject")` to view only that project's keys
 
 After protecting, pair with [pv-dotenv](https://pypi.org/project/pv-dotenv/) — a drop-in replacement for `python-dotenv` that resolves `psamvault:` placeholders at runtime. No code changes needed beyond the import:
 
@@ -125,17 +159,17 @@ pipx install psamvault-mcp
 
 ## Transport modes
 
-psamvault-mcp supports two transport modes. Use the one that matches your agent.
+psamvault-mcp primarily uses **stdio transport** (the MCP standard for desktop agents). HTTP/SSE transport is also available as an option.
 
-### stdio (default — for Goose, Claude Desktop, Cline)
+### stdio (default — for Hermes, Goose, Claude Desktop, Cline)
 
 ```bash
 psamvault-mcp
 ```
 
-Starts the MCP server over stdin/stdout. Most desktop MCP clients use this mode.
+Starts the MCP server over stdin/stdout. This is the default mode and works with all major MCP desktop clients.
 
-### HTTP/SSE (for Hermes, custom clients, or network-accessible setups)
+### HTTP/SSE (for custom clients, remote setups, or network-accessible deployments)
 
 ```bash
 psamvault-mcp --http --port 8433
@@ -210,8 +244,17 @@ Goose will call `list_vault_sites` via psamvault-mcp. If you see your stored sit
 
 ### Hermes setup
 
-Connect to psamvault-mcp via its HTTP/SSE transport. Add this block to
+Connect to psamvault-mcp via **stdio transport** (default). Add this block to
 `~/.hermes/config.yaml` under `mcp_servers`:
+
+```yaml
+mcp_servers:
+  psamvault:
+    command: psamvault-mcp
+    enabled: true
+```
+
+If you need HTTP/SSE transport instead (e.g. for remote access), start the server with `--http` and point Hermes at the SSE endpoint:
 
 ```yaml
 mcp_servers:
@@ -219,8 +262,6 @@ mcp_servers:
     url: "http://127.0.0.1:8433/sse"
     enabled: true
 ```
-
-Then start the server in a terminal:
 
 ```bash
 psamvault-mcp --http --port 8433
@@ -282,13 +323,16 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 
 | Tool | Description |
 |---|---|
-| `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
-| `use_credential` | Make authenticated HTTP requests using stored API keys — only the HTTP response is returned |
-| `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders |
-| `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
+| `search_vault_tools` | Discovery tool — call this first to find the right tool for your task |
+| `list_vault_sites` | List stored site names (no passwords) |
+| `list_api_keys` | List stored API key names with service hints and project grouping (never key values). Optional `project_name` filter |
 | `check_credential_exists` | Check if a credential exists for a site |
 | `get_username_for_site` | Get username only (not password) |
-| `list_vault_sites` | List stored site names (no passwords) |
+| `use_credential` | Make authenticated HTTP requests using stored API keys or site passwords — only the HTTP response is returned |
+| `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
+| `run_with_credential` | Run a CLI command with a credential injected via env var or stdin — all output redacted of the secret |
+| `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
+| `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
 | `get_version` | Return the installed psamvault-mcp version |
 
 ## Architecture
@@ -307,10 +351,13 @@ that caused connection errors with certain MCP clients (e.g. Goose's
 Once connected, you can ask your agent things like:
 
 - *"What credentials do I have stored in my vault?"*
+- *"What API keys do I have stored?"*
 - *"Log me into kaggle.com"*
 - *"Open github.com and log me in"*
 - *"Check if I have a credential stored for z.ai"*
 - *"Get my top 10 starred repos from GitHub"*
+- *"Upload my package to PyPI"*
+- *"Push to my private repo"*
 - *"Protect the secrets in my project directory"*
 
 ## Related projects
@@ -334,9 +381,10 @@ requires no real network access or OS keychain — all external dependencies are
 ## Security
 
 - Credentials are decrypted locally on your machine — never sent to the agent
-- The agent only receives HTTP responses, never credential values
+- The agent only receives HTTP responses or redacted CLI output, never credential values
 - All communication with the psamvault backend uses HTTPS
 - The browser is managed in-process — no subprocess daemon or internal HTTP proxy
+- CLI command output is scanned for the credential value and redacted before returning to the agent
 
 ## License
 
