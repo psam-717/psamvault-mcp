@@ -2,12 +2,28 @@
 
 You have the **psamvault MCP server** available. It provides credential management tools that keep secrets out of your context window.
 
+Prompt templates are available via the MCP Prompts capability (`list_prompts` / `get_prompt`) — load these at runtime for detailed step-by-step guidance on each workflow.
+
 ## Quick Reference
 
-1. **Always start with:** `search_vault_tools("")` to discover available tools
+1. **Always start with:** call a tool from **🛠 Entry & Orientation** — `search_vault_tools("")` to discover available tools or `get_version()` to check the version
 2. **🔐 Site Authentication workflow:** `list_vault_sites()` → `check_credential_exists(site_name)` → `browser_login(site_name)`
-3. **🔑 API Key workflow:** `list_api_keys()` → `use_credential(site_name, ...)` or `run_with_credential(site_name, ...)`
+3. **🔑 API Key Operations workflow:** `list_api_keys()` → `use_credential(site_name, ...)` or `run_with_credential(site_name, ...)`
 4. **Use MCP tools, never raw credential access** — credentials never enter your context
+
+## Available Loadable Prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `how-to-login` | Step-by-step guide for logging into a website |
+| `how-to-discover-creds` | Guide for discovering what credentials are stored |
+| `how-to-get-username` | Guide for retrieving a stored username |
+| `how-to-use-api-credential` | Guide for making authenticated HTTP requests |
+| `how-to-scan-and-protect` | Guide for scanning and protecting `.env` secrets |
+| `how-to-capture-stripe` | Guide for capturing Stripe Projects credentials |
+| `general-rules` | Security rules, error handling, and full tool reference |
+
+Call `get_prompt("how-to-login")` to load the login workflow into your context when needed.
 
 ## Available Tools
 
