@@ -1,6 +1,6 @@
 # psamvault-mcp
 
-**v0.4.0** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
+**v0.4.2** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
 
 Lets AI agents use your stored credentials without ever seeing their plaintext values. Also integrates with [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime credential resolution in your `.env` files.
 
