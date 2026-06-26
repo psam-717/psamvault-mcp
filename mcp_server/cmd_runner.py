@@ -4,12 +4,41 @@ This module provides the core mechanism for ``run_with_credential``:
 spawns a subprocess with a credential injected via environment variable
 or stdin pipe, captures output, and redacts the credential value before
 returning — so the calling agent never sees the secret.
+
+The function also blocks commands that could leak credentials from the
+psamvault CLI itself (``psamvault get``, ``psamvault show``,
+``psamvault ak-get``, ``psamvault search``, and similar).
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 from typing import Optional
+
+# Commands that are blocked from run_with_credential because they
+# could leak stored credentials back to the agent via stdout.
+_BLOCKED_COMMANDS: list[re.Pattern[str]] = [
+    # psamvault CLI read operations
+    re.compile(r"\bpsamvault\s+(get|show|ak-get|ak-show|search|list|export)\b", re.I),
+    re.compile(r"\bpsamvault\s+(vault-get|credential-get|entry-get)\b", re.I),
+    # Generic key/credential read operations that could dump secrets
+    re.compile(r"\bcat\s+.*\.psamvault", re.I),
+    re.compile(r"\btype\s+.*\.psamvault", re.I),
+]
+
+
+def _is_command_blocked(command: str) -> str | None:
+    """Return an error message if the command is blocked, else None."""
+    for pattern in _BLOCKED_COMMANDS:
+        if pattern.search(command):
+            return (
+                f"Command contains a blocked operation: "
+                f"'{pattern.pattern}'. "
+                f"This command could leak credentials. "
+                f"Use the appropriate MCP tool instead."
+            )
+    return None
 
 
 async def run_command_with_credential(
@@ -53,6 +82,16 @@ async def run_command_with_credential(
         - ``stderr``: str — stderr with credential redacted
         - ``error``: str — error message if command could not run (absent on success)
     """
+    # Block dangerous commands before doing anything else
+    blocked = _is_command_blocked(command)
+    if blocked:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": blocked,
+            "error": blocked,
+        }
+
     # Build environment
     env = os.environ.copy()
     if extra_env:
