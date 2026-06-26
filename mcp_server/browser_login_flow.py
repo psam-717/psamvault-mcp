@@ -37,7 +37,7 @@ STORAGE_DIR = Path.home() / ".psamvault" / "browser_sessions"
 # ── Login page helpers ────────────────────────────────────────────────────────
 
 
-def _discover_login_url(page) -> str | None:
+async def _discover_login_url(page) -> str | None:
     """Find and click a sign-in/log-in link, return the resulting URL."""
     text_patterns = [
         r"sign[\s\-]?in", r"log[\s\-]?in", r"^login$",
@@ -50,32 +50,32 @@ def _discover_login_url(page) -> str | None:
         for role in ("link", "button"):
             try:
                 loc = page.get_by_role(role, name=re.compile(pattern, re.I))
-                if loc.first.is_visible(timeout=1000):
-                    loc.first.click()
-                    page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                if await loc.first.is_visible(timeout=1000):
+                    await loc.first.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
                     return page.url
             except Exception:
                 pass
     for sel in css_fallbacks:
         try:
             loc = page.locator(sel).first
-            if loc.is_visible(timeout=500):
-                loc.click()
-                page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            if await loc.is_visible(timeout=500):
+                await loc.click()
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
                 return page.url
         except Exception:
             pass
     return None
 
 
-def _fill_field(locator, value: str) -> None:
+async def _fill_field(locator, value: str) -> None:
     """Fill a form field. Falls back to type() if fill() doesn't register."""
-    locator.click()
-    locator.fill(value)
+    await locator.click()
+    await locator.fill(value)
     try:
-        if locator.input_value() != value:
-            locator.clear()
-            locator.type(value, delay=40)
+        if await locator.input_value() != value:
+            await locator.clear()
+            await locator.type(value, delay=40)
     except Exception:
         pass
 
@@ -93,18 +93,18 @@ def _url_origin_path(url: str) -> str:
     return f"{p.scheme}://{netloc}{p.path.rstrip('/')}"
 
 
-def _has_visible_captcha(page, t_ms: int = 1000) -> bool:
+async def _has_visible_captcha(page, t_ms: int = 1000) -> bool:
     """Check if a CAPTCHA iframe or widget is visible on the page."""
     for _sel in _CAPTCHA_SELECTORS:
         try:
-            if page.locator(_sel).first.is_visible(timeout=t_ms):
+            if await page.locator(_sel).first.is_visible(timeout=t_ms):
                 return True
         except Exception:
             pass
     return False
 
 
-def _poll_for_username(page, t_ms: int):
+async def _poll_for_username(page, t_ms: int):
     semantic_patterns = ["email", "username", "user name", "login"]
     css_fallbacks = [
         'input[type="email"]', 'input[name="email"]', 'input[id="email"]',
@@ -120,14 +120,14 @@ def _poll_for_username(page, t_ms: int):
                 page.get_by_label(re.compile(pattern, re.I)),
             ]:
                 try:
-                    if locator.first.is_visible(timeout=500):
+                    if await locator.first.is_visible(timeout=500):
                         return locator.first
                 except Exception:
                     pass
         for sel in css_fallbacks:
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=500):
+                if await loc.is_visible(timeout=500):
                     return loc
             except Exception:
                 pass
@@ -135,7 +135,7 @@ def _poll_for_username(page, t_ms: int):
     return None
 
 
-def _find_gateway_button(page):
+async def _find_gateway_button(page):
     """Find a 'Continue with email' / 'Sign in with email' button."""
     text_patterns = [
         r"continue.?with.?email", r"sign.?in.?with.?email",
@@ -145,32 +145,32 @@ def _find_gateway_button(page):
         for role in ("button", "link"):
             try:
                 loc = page.get_by_role(role, name=re.compile(pattern, re.I))
-                if loc.first.is_visible(timeout=500):
+                if await loc.first.is_visible(timeout=500):
                     return loc.first
             except Exception:
                 pass
     try:
         loc = page.locator("[data-provider='email']").first
-        if loc.is_visible(timeout=500):
+        if await loc.is_visible(timeout=500):
             return loc
     except Exception:
         pass
     return None
 
 
-def _find_username_field(page, timeout_ms: int = 8000):
+async def _find_username_field(page, timeout_ms: int = 8000):
     """Locate the username/email input, handling multi-step flows."""
-    field = _poll_for_username(page, t_ms=min(4000, timeout_ms))
+    field = await _poll_for_username(page, t_ms=min(4000, timeout_ms))
     if field:
         return field
-    gateway = _find_gateway_button(page)
+    gateway = await _find_gateway_button(page)
     if gateway:
-        gateway.click()
-        field = _poll_for_username(page, t_ms=min(6000, timeout_ms))
+        await gateway.click()
+        field = await _poll_for_username(page, t_ms=min(6000, timeout_ms))
     return field
 
 
-def _poll_for_password(page, t_ms: int):
+async def _poll_for_password(page, t_ms: int):
     semantic_patterns = ["password", "pass"]
     css_fallbacks = [
         'input[type="password"]', 'input[name="password"]', 'input[id="password"]',
@@ -184,14 +184,14 @@ def _poll_for_password(page, t_ms: int):
                 page.get_by_label(re.compile(pattern, re.I)),
             ]:
                 try:
-                    if locator.first.is_visible(timeout=500):
+                    if await locator.first.is_visible(timeout=500):
                         return locator.first
                 except Exception:
                     pass
         for sel in css_fallbacks:
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=500):
+                if await loc.is_visible(timeout=500):
                     return loc
             except Exception:
                 pass
@@ -199,40 +199,40 @@ def _poll_for_password(page, t_ms: int):
     return None
 
 
-def _find_next_button(page):
+async def _find_next_button(page):
     """Find a Next/Continue button that reveals the password field."""
     text_patterns = [r"^next$", r"^continue$"]
     for pattern in text_patterns:
         for role in ("button", "link"):
             try:
                 loc = page.get_by_role(role, name=re.compile(pattern, re.I))
-                if loc.first.is_visible(timeout=500):
+                if await loc.first.is_visible(timeout=500):
                     return loc.first
             except Exception:
                 pass
     for sel in ("button[type='submit']", "input[type='submit']"):
         try:
             loc = page.locator(sel).first
-            if loc.is_visible(timeout=500):
+            if await loc.is_visible(timeout=500):
                 return loc
         except Exception:
             pass
     return None
 
 
-def _find_password_field(page, timeout_ms: int = 8000):
+async def _find_password_field(page, timeout_ms: int = 8000):
     """Locate the password input, handling multi-step flows."""
-    field = _poll_for_password(page, t_ms=min(2000, timeout_ms))
+    field = await _poll_for_password(page, t_ms=min(2000, timeout_ms))
     if field:
         return field
-    next_btn = _find_next_button(page)
+    next_btn = await _find_next_button(page)
     if next_btn:
-        next_btn.click()
-        field = _poll_for_password(page, t_ms=min(6000, timeout_ms))
+        await next_btn.click()
+        field = await _poll_for_password(page, t_ms=min(6000, timeout_ms))
     return field
 
 
-def _submit_form(page, timeout_ms: int = 8000):
+async def _submit_form(page, timeout_ms: int = 8000):
     """Find and return the form submit button."""
     text_patterns = [
         r"sign.?in", r"log.?in", r"^login$", r"^continue$", r"^submit$",
@@ -241,14 +241,17 @@ def _submit_form(page, timeout_ms: int = 8000):
         for role in ("button", "link"):
             try:
                 loc = page.get_by_role(role, name=re.compile(pattern, re.I))
-                if loc.first.is_visible(timeout=500):
+                if await loc.first.is_visible(timeout=500):
                     return loc.first
             except Exception:
                 pass
-    for sel in ('button[type="submit"]', 'input[type="submit"]'):
+    for sel in (
+        "button[type='submit']", "input[type='submit']",
+        "[type='submit']", "button:has-text('Sign')",
+    ):
         try:
             loc = page.locator(sel).first
-            if loc.is_visible(timeout=500):
+            if await loc.is_visible(timeout=500):
                 return loc
         except Exception:
             pass
@@ -376,14 +379,14 @@ async def run_login_flow(
                 # session, check whether this is truly a login page.
                 if storage_path.exists():
                     # Peek: does this page actually have login form elements?
-                    login_form_found = _find_username_field(page, timeout_ms=2000)
+                    login_form_found = await _find_username_field(page, timeout_ms=2000)
                     if login_form_found is None:
                         # No username field visible — we're already logged in
                         _steps.append("session_reused_already_logged_in")
                         return _r(success=True, url=page.url, title=await page.title())
                 login_url = page.url
             else:
-                discovered = _discover_login_url(page)
+                discovered = await _discover_login_url(page)
                 if discovered and _url_origin_path(discovered) != base_origin:
                     login_url = discovered
                 else:
@@ -391,7 +394,7 @@ async def run_login_flow(
                         # Verify: if the page has no login form fields,
                         # the saved session is actually working and
                         # we're already logged in.
-                        login_form_found = _find_username_field(page, timeout_ms=2000)
+                        login_form_found = await _find_username_field(page, timeout_ms=2000)
                         if login_form_found is None:
                             _steps.append("session_reused_already_logged_in")
                             return _r(success=True, url=page.url, title=await page.title())
@@ -428,7 +431,7 @@ async def run_login_flow(
                     hint=f"Provided username_selector '{username_selector}' was not visible.",
                 )
         else:
-            username_field = _find_username_field(page, timeout_ms)
+            username_field = await _find_username_field(page, timeout_ms)
 
         if username_field is None:
             failed_at = "username_field_not_found"
@@ -437,7 +440,7 @@ async def run_login_flow(
                 hint="Could not detect the username/email field. Provide username_selector explicitly.",
             )
 
-        _fill_field(username_field, credentials["username"])
+        await _fill_field(username_field, credentials["username"])
         _steps.append("filled_username")
 
         # ── Password field ────────────────────────────────────────────────
@@ -452,7 +455,7 @@ async def run_login_flow(
                     hint=f"Provided password_selector '{password_selector}' was not visible.",
                 )
         else:
-            password_field = _find_password_field(page, timeout_ms)
+            password_field = await _find_password_field(page, timeout_ms)
 
         if password_field is None:
             failed_at = "password_field_not_found"
@@ -461,7 +464,7 @@ async def run_login_flow(
                 hint="Could not detect the password field. Provide password_selector explicitly.",
             )
 
-        _fill_field(password_field, credentials["password"])
+        await _fill_field(password_field, credentials["password"])
         _steps.append("filled_password")
 
         # ── Submit button ──────────────────────────────────────────────────
@@ -476,7 +479,7 @@ async def run_login_flow(
                     hint=f"Provided submit_selector '{submit_selector}' was not visible.",
                 )
         else:
-            submit_btn = _submit_form(page, timeout_ms)
+            submit_btn = await _submit_form(page, timeout_ms)
 
         if submit_btn is None:
             failed_at = "submit_button_not_found"
@@ -486,7 +489,7 @@ async def run_login_flow(
             )
 
         # ── CAPTCHA detection before submit ────────────────────────────────
-        if _has_visible_captcha(page):
+        if await _has_visible_captcha(page):
             captcha_detected = True
             _steps.append("captcha_detected_before_submit")
             try:
@@ -535,7 +538,7 @@ async def run_login_flow(
             pass
 
         # ── CAPTCHA detection after submit ─────────────────────────────────
-        if not captcha_detected and _has_visible_captcha(page):
+        if not captcha_detected and await _has_visible_captcha(page):
             captcha_detected = True
             _steps.append("captcha_detected_after_submit")
             try:
