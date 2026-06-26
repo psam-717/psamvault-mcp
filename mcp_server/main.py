@@ -170,7 +170,7 @@ TOOL_DEFINITIONS = [
     # ── Version tool — no session needed ────────────────────────────
     Tool(
         name="get_version",
-        description="Return the installed psamvault-mcp version. No session or login required.",
+        description="[🛠 Entry & Orientation] Return the installed psamvault-mcp version. No session or login required.",
         inputSchema={
             "type": "object",
             "properties": {},
@@ -182,7 +182,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="search_vault_tools",
         description=(
-            "Discover available psamvault tools. "
+            "[🛠 Entry & Orientation] Discover available psamvault tools. "
             "Call this FIRST to find the right tool for your task. "
             "Returns tool names and one-line descriptions. "
             "Pass an empty string to list all tools.\n\n"
@@ -216,7 +216,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="list_vault_sites",
         description=(
-            "List all sites stored in the psamvault vault. "
+            "[🔐 Site Authentication] List all sites stored in the psamvault vault. "
             "Returns site names and username hints only — never passwords. "
             "Call this before browser_login to discover what sites are available."
         ),
@@ -229,7 +229,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="check_credential_exists",
         description=(
-            "Check whether a credential is stored for a given site. "
+            "[🔐 Site Authentication] Check whether a credential is stored for a given site. "
             "Returns the username hint if available. Never returns the password. "
             "Use this before browser_login to avoid errors."
         ),
@@ -247,7 +247,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="get_username_for_site",
         description=(
-            "Return the username (not the password) stored for a site. "
+            "[🔐 Site Authentication] Return the username (not the password) stored for a site. "
             "Use this when you need the username "
             "for a form or request body but not the password."
         ),
@@ -265,7 +265,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="browser_login",
         description=(
-            "Open a visible browser and securely log into a site using a stored psamvault credential. "
+            "[🔐 Site Authentication] Open a visible browser and securely log into a site using a stored psamvault credential. "
             "Playwright navigates from the site homepage, finds the sign-in link, and handles the "
             "full login flow — including multi-step flows (e.g., 'Continue with Email' → email → Next → password → submit). "
             "Uses semantic locators (get_by_role, get_by_label) that work with Shadow DOM, React, and Vue apps. "
@@ -319,7 +319,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="list_api_keys",
         description=(
-            "List all stored API key names with service hints. "
+            "[🔑 API Key Operations] List all stored API key names with service hints. "
             "Never returns the actual key values. "
             "Use this to discover what API keys are available. "
             "Optionally pass project_name to filter keys for a specific project "
@@ -341,7 +341,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="use_credential",
         description=(
-            "Make an authenticated HTTP request using a credential stored in psamvault. "
+            "[🔑 API Key Operations] Make an authenticated HTTP request using a credential stored in psamvault. "
             "The lookup checks API key entries first, then vault (site password) entries — "
             "so you can use both API keys and site passwords. "
             "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
@@ -408,7 +408,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="run_with_credential",
         description=(
-            "Run an arbitrary shell command with a credential injected as an "
+            "[🔑 API Key Operations] Run an arbitrary shell command with a credential injected as an "
             "environment variable or stdin pipe. "
             "The credential is decrypted locally, injected into the subprocess, "
             "and all output is scanned for the credential value and redacted "
@@ -491,7 +491,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="scan_and_protect",
         description=(
-            "Scan a project directory for exposed secrets in .env files and protect them. "
+            "[🔑 API Key Operations] Scan a project directory for exposed secrets in .env files and protect them. "
             "Finds .env files, detects API keys and passwords using pattern matching, "
             "encrypts them into the psamvault vault, and replaces the plaintext values "
             "with 'psamvault:<KEY_NAME>' placeholders. "
@@ -519,7 +519,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="capture_stripe_credentials",
         description=(
-            "Capture credentials provisioned by Stripe Projects into psamvault. "
+            "[🔑 API Key Operations] Capture credentials provisioned by Stripe Projects into psamvault. "
             "After running the 'stripe projects add <provider>' command, the provisioned "
             "credentials land in the project's .env file. This tool runs "
             "'stripe projects env --pull', parses the resulting .env for secrets, "
