@@ -23,17 +23,19 @@ browser process.
 - The user must be logged in to psamvault. If not, tell them to run:
   `psamvault login` in their terminal and then ask you again.
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `search_vault_tools` | Discover which tool to use — call this first with relevant keywords |
-| `list_vault_sites` | List all stored site names (no passwords) |
-| `check_credential_exists` | Verify a credential exists for a specific site |
-| `browser_login` | Open a real browser and log into the site. This is **always** the right tool for login |
+## Tools you need (🔐 Site Authentication group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `list_vault_sites` | List all stored site names (no passwords) | 🔐 Site Authentication |
+| `check_credential_exists` | Verify a credential exists for a specific site | 🔐 Site Authentication |
+| `browser_login` | Open a real browser and log into the site. This is **always** the right tool for login | 🔐 Site Authentication |
 
 ## Workflow
 
-### Step 1: Call search_vault_tools("login")
+### Step 0: Discover the right tool
+Call `search_vault_tools("login")` first to confirm `browser_login` is the right tool for the task.
 This confirms `browser_login` is available and ready.
 
 ### Step 2: Check what sites are stored
@@ -100,13 +102,17 @@ site names and username hints.
 ## Prerequisites
 - The user must be logged in to psamvault (`psamvault login` in their terminal).
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `list_vault_sites` | List all stored site names with username hints |
-| `check_credential_exists` | Check if a specific site has a credential |
+## Tools you need (🔐 Site Authentication group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `list_vault_sites` | List all stored site names with username hints | 🔐 Site Authentication |
+| `check_credential_exists` | Check if a specific site has a credential | 🔐 Site Authentication |
 
 ## Workflow
+
+### Step 0: Discover the right tool
+Call `search_vault_tools("discover")` first to confirm which discovery tools are available.
 
 ### Step 1: Call list_vault_sites()
 This returns all stored sites with their username hints. For example:
@@ -146,11 +152,13 @@ request body. The password is **never** returned.
 ## Prerequisites
 - The user must be logged in to psamvault (`psamvault login` in their terminal).
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `check_credential_exists` | Verify the credential exists and see the username hint |
-| `get_username_for_site` | Retrieve the username |
+## Tools you need (🔐 Site Authentication group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `check_credential_exists` | Verify the credential exists and see the username hint | 🔐 Site Authentication |
+| `get_username_for_site` | Retrieve the username | 🔐 Site Authentication |
 
 ## Workflow
 
@@ -262,18 +270,34 @@ If `scan_and_protect` returns 0 secrets found, the project is clean —
 no action needed. If it returns `files_not_gitignored`, suggest the user
 add `.env` to their `.gitignore`.
 
-## Tool reference
+## Tool reference (grouped by category)
+
+### 🛠  Entry & Orientation
+*Always start here — no credential access needed.*
 
 | Tool | Purpose | When to call |
 |------|---------|--------------|
 | `get_version` | Check psamvault-mcp version | Anytime — no login needed |
 | `search_vault_tools` | Discover which tool to use | **First** — when unsure what tool fits |
+
+### 🔐  Site Authentication
+*End-to-end: discover, check, and log into websites.*
+
+| Tool | Purpose | When to call |
+|------|---------|--------------|
 | `list_vault_sites` | List stored sites with hints | When user asks "what do I have" |
 | `list_api_keys` | List stored API key names | When user asks "what API keys do I have" |
 | `check_credential_exists` | Check if a site has a credential | Before any credential-dependent tool |
 | `get_username_for_site` | Get username only | When username is needed in a form/API |
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
+
+### 🔑  API Key Operations
+*All tools that deal with API keys: discover, use, inject, and protect.*
+
+| Tool | Purpose | When to call |
+|------|---------|--------------|
 | `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
+| `run_with_credential` | Run CLI command with credential injected | When a CLI tool needs a credential (env/stdin) |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
 | `capture_stripe_credentials` | Capture Stripe Projects credentials | **Immediately** after `stripe projects add <provider>` |
 """
@@ -292,11 +316,13 @@ locally, injects it into the HTTP request, and returns only the response.
 - The credential must already be stored (via `psamvault add`, `scan_and_protect`,
   or `capture_stripe_credentials`).
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `check_credential_exists` | Verify the credential exists before calling use_credential |
-| `use_credential` | Make the authenticated HTTP/API request |
+## Tools you need (🔑 API Key Operations group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `check_credential_exists` | Verify the credential exists before calling use_credential | 🔐 Site Authentication |
+| `use_credential` | Make the authenticated HTTP/API request | 🔑 API Key Operations |
 
 ## Workflow
 
@@ -372,10 +398,12 @@ never reads the raw value.
 ## Prerequisites
 - The user must be logged in to psamvault (`psamvault login` in their terminal).
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `scan_and_protect` | Scan and protect exposed secrets |
+## Tools you need (🔑 API Key Operations group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `scan_and_protect` | Scan and protect exposed secrets | 🔑 API Key Operations |
 
 ## Workflow
 
@@ -435,10 +463,12 @@ encrypts them, and replaces the plaintext values with placeholders.
   must be active in the current directory.
 - The `stripe projects add <provider>` command must have already been run.
 
-## Tools you need
-| Tool | Purpose |
-|------|---------|
-| `capture_stripe_credentials` | Capture Stripe-provisioned credentials |
+## Tools you need (🔑 API Key Operations group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `capture_stripe_credentials` | Capture Stripe-provisioned credentials | 🔑 API Key Operations |
 
 ## Workflow
 
