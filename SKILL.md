@@ -77,20 +77,36 @@ psamvault login
 
 ## Available Tools
 
-Once connected, these tools become available (prefixed `mcp_psamvault_*` in Hermes):
+Once connected, these tools become available (prefixed `mcp_psamvault_*` in Hermes). They are grouped by purpose so AI agents can find the right tool faster:
+
+### 🛠  Entry & Orientation
+*Always start here — no credential access needed.*
 
 | Tool | Parameters | Description | Security |
-|------|-----------|-------------|----------|
+|---|---|---|---|
 | `get_version` | None | Return installed version | No secrets involved |
-| `search_vault_tools` | `query: str` | Discover which tool to use | No secrets involved |
-| `list_vault_sites` | None | List stored credential sites | Returns names only, no passwords |
+| `search_vault_tools` | `query: str` | Discover which tool to use (call this first) | No secrets involved |
+
+### 🔐  Site Authentication
+*End-to-end: discover, check, and log into websites.*
+
+| Tool | Parameters | Description | Security |
+|---|---|---|---|
+| `list_vault_sites` | None | List stored credential sites with username hints | Returns names only, no passwords |
 | `check_credential_exists` | `site_name: str` | Check if credential exists | Returns boolean + username hint |
 | `get_username_for_site` | `site_name: str` | Get stored username | Returns username, never password |
-| `use_credential` | `site_name, target_url, method, inject_as, fields` | Make authenticated HTTP request | ❗ Credential stays server-side |
 | `browser_login` | `site_name, login_url, selectors, timeout_ms` | Log into website via browser | ❗ Fills directly in browser |
-| `scan_and_protect` | `project_dir, patterns` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
+
+### 🔑  API Key Operations
+*All tools that deal with API keys — discover, use, inject, and protect.*
+
+| Tool | Parameters | Description | Security |
+|---|---|---|---|
+| `list_api_keys` | `project_name: str (optional)` | List stored API key names with service hints | Returns names only, no key values |
+| `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Make authenticated HTTP request | ❗ Credential stays server-side |
+| `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run CLI command with credential injected | ❗ Output redacted of credential |
+| `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
 | `capture_stripe_credentials` | `provider, project_dir, dry_run` | Capture Stripe provisioned creds | ❗ Encrypts into vault |
-| `check_credential_exists` | `site_name` | Verify credential availability | Returns hint only |
 
 ## Workflows
 

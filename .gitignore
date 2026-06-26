@@ -130,4 +130,5 @@ logs/
 # Local files/folders
 # =============================================================================
 deploy.ps1
-.claude
+.claude.hermes-tmp.*
+.hermes/

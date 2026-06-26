@@ -6,19 +6,36 @@ Lets AI agents use your stored credentials without ever seeing their plaintext v
 
 ## Features
 
-| Feature | What it does |
-|---------|-------------|
-| **`browser_login`** | Opens Chromium, navigates to any site, fills credentials directly in the browser — agent never sees them |
-| **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
-| **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
-| **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders. Supports per-project namespacing with `project_name` |
-| **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
-| **`list_api_keys`** | Lists all stored API key names with service hints and project grouping — never returns key values |
+Tools are grouped into three categories. Always start in **Entry & Orientation**.
+
+### 🛠  Entry & Orientation
+*Discover what tools are available and verify the server is running.*
+
+| Tool | What it does |
+|------|-------------|
+| **`search_vault_tools`** | Discovery tool — call this first to find the right tool for your task |
+| **`get_version`** | Get the installed server version |
+
+### 🔐  Site Authentication
+*End-to-end: discover, check, and log into websites.*
+
+| Tool | What it does |
+|------|-------------|
 | **`list_vault_sites`** | List all stored credential sites (names and username hints only) |
 | **`check_credential_exists`** | Check if a credential exists for a site |
 | **`get_username_for_site`** | Get stored username (never the password) |
-| **`search_vault_tools`** | Discovery tool — call this first to find the right tool for your task |
-| **`get_version`** | Get the installed server version |
+| **`browser_login`** | Opens Chromium, navigates to any site, fills credentials directly in the browser — agent never sees them |
+
+### 🔑  API Key Operations
+*All tools that deal with API keys — discover, use, inject, and protect.*
+
+| Tool | What it does |
+|------|-------------|
+| **`list_api_keys`** | Lists all stored API key names with service hints and project grouping — never returns key values |
+| **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
+| **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
+| **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
+| **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
 
 > **New in v0.4.0:** `use_credential`, `run_with_credential`, `scan_and_protect`, `capture_stripe_credentials`, `list_api_keys`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
 
@@ -321,19 +338,36 @@ PSAMVAULT_API_URL=https://your-backend.example.com
 
 ## Available tools
 
+Tools are grouped by purpose so AI agents can find the right tool faster:
+
+### 🛠  Entry & Orientation
+*Always start here to discover what tool to use.*
+
 | Tool | Description |
 |---|---|
 | `search_vault_tools` | Discovery tool — call this first to find the right tool for your task |
-| `list_vault_sites` | List stored site names (no passwords) |
-| `list_api_keys` | List stored API key names with service hints and project grouping (never key values). Optional `project_name` filter |
-| `check_credential_exists` | Check if a credential exists for a site |
-| `get_username_for_site` | Get username only (not password) |
-| `use_credential` | Make authenticated HTTP requests using stored API keys or site passwords — only the HTTP response is returned |
+| `get_version` | Return the installed psamvault-mcp version |
+
+### 🔐  Site Authentication
+*End-to-end: discover, check, and log into websites.*
+
+| Tool | Description |
+|---|---|
+| `list_vault_sites` | List stored site names with username hints (no passwords). Call before `browser_login` |
+| `check_credential_exists` | Check if a credential exists for a site. Returns username hint |
+| `get_username_for_site` | Get the username only (not password) for a site |
 | `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
+
+### 🔑  API Key Operations
+*All tools that deal with API keys — discover, use, inject, and protect.*
+
+| Tool | Description |
+|---|---|
+| `list_api_keys` | List stored API key names with service hints and project grouping (never key values). Optional `project_name` filter |
+| `use_credential` | Make authenticated HTTP requests using stored API keys or site passwords — only the HTTP response is returned |
 | `run_with_credential` | Run a CLI command with a credential injected via env var or stdin — all output redacted of the secret |
 | `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
 | `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
-| `get_version` | Return the installed psamvault-mcp version |
 
 ## Architecture
 

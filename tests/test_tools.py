@@ -63,12 +63,14 @@ class TestListApiKeys:
         assert result["total"] == 2
         assert len(result["api_keys"]) == 2
         assert result["standalone"] == [
-            {"name": "github-api", "service_hint": "GitHub API", "created_at": "2026-06-17T05:36:25Z",
+            {"name": "github-api", "service_hint": "GitHub API", "notes": None,
+             "created_at": "2026-06-17T05:36:25Z",
              "project": None, "key_name": "github-api"}
         ]
         assert result["projects"] == {
             "twitter-bot": [
-                {"name": "twitter-bot/.env/GROK_API_KEY", "service_hint": "xAI", "created_at": "2026-06-17T06:00:00Z",
+                {"name": "twitter-bot/.env/GROK_API_KEY", "service_hint": "xAI", "notes": None,
+                 "created_at": "2026-06-17T06:00:00Z",
                  "project": "twitter-bot", "key_name": "GROK_API_KEY"}
             ]
         }

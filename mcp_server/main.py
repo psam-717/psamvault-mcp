@@ -66,17 +66,24 @@ server = Server(
         "If you are unsure which sites are stored, call list_vault_sites(). "
         "If you are unsure whether a credential exists, call check_credential_exists(site_name) first.\n\n"
 
-         "Tool summary:\n"
+         "Tool summary (tools grouped by purpose):\n"
+         "\n"
+         "🛠  Entry & Orientation — always start here:\n"
         "- search_vault_tools       → discover which tool to use (call this first)\n"
-        "- list_vault_sites         → list stored sites (no passwords)\n"
-        "- list_api_keys            → list stored API keys (no key values)\n"
+        "- get_version              → check installed version\n"
+         "\n"
+         "🔐  Site Authentication — log into websites:\n"
+        "- list_vault_sites         → list stored sites (names + username hints, no passwords)\n"
         "- check_credential_exists  → verify a credential exists for a site\n"
-        "- browser_login            → open a browser and log into a website silently\n"
-        "- use_credential           → make an authenticated HTTP/API request\n"
         "- get_username_for_site    → get just the username (not password) for a site\n"
+        "- browser_login            → open a browser and log into a website silently\n"
+         "\n"
+         "🔑  API Key Operations — use and protect API keys:\n"
+        "- list_api_keys            → list stored API keys (no key values)\n"
+        "- use_credential           → make an authenticated HTTP/API request\n"
+        "- run_with_credential      → run a CLI command with credential injected (env/stdin)\n"
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
         "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
-        "- run_with_credential       → run a CLI command with credential injected (env/stdin)\n"
     ),
 )
 
@@ -89,31 +96,26 @@ except importlib.metadata.PackageNotFoundError:
 # ── Tool registry used by search_vault_tools ──────────────────────────────────
 # Each entry is a one-line description string.
 # Kept here so it stays in sync with TOOL_DEFINITIONS below.
+_ENTRY_DESCRIPTION = (
+    "Discover available psamvault tools. Call this FIRST to find the right tool. "
+    "Pass a keyword like 'login', 'api', 'check', or '' for all tools."
+)
 _TOOL_REGISTRY: dict[str, str] = {
+    # ── Entry & Orientation ────────────────────────────────────────────
+    "search_vault_tools": _ENTRY_DESCRIPTION,
     "get_version": (
         "Return the installed psamvault-mcp version. "
         "Use this to verify the version you have."
     ),
-    "search_vault_tools": (
-        "Discover available psamvault tools. Call this FIRST to find the right tool. "
-        "Pass a keyword like 'login', 'api', 'check', or '' for all tools."
-    ),
+
+    # ── Site Authentication ────────────────────────────────────────────
     "list_vault_sites": (
-        "List all site names in the vault (no passwords). "
-        "Use before use_credential to see what's available."
-    ),
-    "list_api_keys": (
-        "List all stored API key names (never key values). "
-        "Use before use_credential to discover API keys."
+        "List all site names in the vault (names + username hints, no passwords). "
+        "Call before browser_login to discover what sites are available."
     ),
     "check_credential_exists": (
         "Check whether a credential exists for a site. "
         "Params: site_name. Returns exists + username_hint."
-    ),
-    "use_credential": (
-        "Make an authenticated HTTP request using a stored credential. "
-        "Params: site_name, target_url, method, inject_as, fields (optional — "
-        "pass field names to trim the response and save tokens, e.g. [\"login\", \"id\"])."
     ),
     "get_username_for_site": (
         "Get the stored username only (not password) for a site. "
@@ -124,11 +126,17 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Params: site_name (required), login_url, username_selector, "
         "password_selector, submit_selector, timeout_ms (all optional)."
     ),
-    "capture_stripe_credentials": (
-        "Capture credentials provisioned by Stripe Projects into psamvault. "
-        "After 'stripe projects add <provider>', call this to securely store "
-        "the provisioned credentials. Params: provider (required), project_dir (optional), "
-        "dry_run (optional)."
+
+    # ── API Key Operations ─────────────────────────────────────────────
+    "list_api_keys": (
+        "List all stored API key names (never key values). "
+        "Optionally filter by project_name. "
+        "Use before use_credential to discover API keys."
+    ),
+    "use_credential": (
+        "Make an authenticated HTTP request using a stored credential. "
+        "Params: site_name, target_url, method, inject_as, fields (optional — "
+        "pass field names to trim the response and save tokens, e.g. [\"login\", \"id\"])."
     ),
     "run_with_credential": (
         "Run an arbitrary shell command with a credential injected as an env var "
@@ -138,11 +146,28 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Params: site_name (required), command (required), inject_as='env', "
         "env_var_name, extra_env, workdir, timeout=120."
     ),
+    "scan_and_protect": (
+        "Scan a project directory for exposed secrets in .env files and protect them. "
+        "Encrypts secrets into the vault and replaces plaintext with "
+        "'psamvault:KEY_NAME' placeholders. "
+        "Params: project_dir (optional), patterns (optional), project_name (optional)."
+    ),
+    "capture_stripe_credentials": (
+        "Capture credentials provisioned by Stripe Projects into psamvault. "
+        "After 'stripe projects add <provider>', call this to securely store "
+        "the provisioned credentials. Params: provider (required), project_dir (optional), "
+        "dry_run (optional)."
+    ),
 }
 
 
 TOOL_DEFINITIONS = [
-    # ── Version tool — no session needed ─────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🛠  ENTRY & ORIENTATION
+    # Tools the agent calls when it has no context about what to do.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ── Version tool — no session needed ────────────────────────────
     Tool(
         name="get_version",
         description="Return the installed psamvault-mcp version. No session or login required.",
@@ -153,7 +178,7 @@ TOOL_DEFINITIONS = [
         }
     ),
 
-    # ── Discovery tool — the only tool agents need to know about upfront ──────
+    # ── Discovery tool — the only tool agents need to know about upfront ──
     Tool(
         name="search_vault_tools",
         description=(
@@ -182,14 +207,18 @@ TOOL_DEFINITIONS = [
             "required": []
         }
     ),
-    
-    # ── Vault read tools ──────────────────────────────────────────────────────
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🔐  SITE AUTHENTICATION
+    # End-to-end: discover, check, and log into websites.
+    # ═══════════════════════════════════════════════════════════════════════
+
     Tool(
         name="list_vault_sites",
         description=(
             "List all sites stored in the psamvault vault. "
             "Returns site names and username hints only — never passwords. "
-            "Use this to discover what credentials are available before calling use_credential."
+            "Call this before browser_login to discover what sites are available."
         ),
         inputSchema={
             "type": "object",
@@ -198,32 +227,11 @@ TOOL_DEFINITIONS = [
         }
     ),
     Tool(
-        name="list_api_keys",
-        description=(
-            "List all stored API key names with service hints. "
-            "Never returns the actual key values. "
-            "Use this to discover what API keys are stored before calling use_credential. "
-            "Optionally pass project_name to filter keys for a specific project."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_name": {
-                    "type": "string",
-                    "description": "Optional project name to filter by. "
-                                   "Keys stored via scan_and_protect(project_name=...) "
-                                   "use the format 'project/.env/KEY'."
-                }
-            },
-            "required": []
-        }
-    ),
-    Tool(
         name="check_credential_exists",
         description=(
             "Check whether a credential is stored for a given site. "
             "Returns the username hint if available. Never returns the password. "
-            "Use this before use_credential to avoid errors."
+            "Use this before browser_login to avoid errors."
         ),
         inputSchema={
             "type": "object",
@@ -234,73 +242,6 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["site_name"]
-        }
-    ),
-    Tool(
-        name="use_credential",
-        description=(
-            "Make an authenticated HTTP request using a credential stored in psamvault. "
-            "The lookup checks API key entries first, then vault (site password) entries — "
-            "so you can use both API keys and site passwords. "
-            "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
-            "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
-            "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
-            "Example: fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). "
-            "Works on both dict responses and lists-of-dicts."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "site_name": {
-                    "type": "string",
-                    "description": "The vault site whose credential to use, e.g.'github.com' "
-                },
-                "target_url": {
-                    "type": "string",
-                    "description": "The  URL to send the authenticated request to"
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-                    "default": "GET",
-                    "description": "HTTP method"
-                },
-                "inject_as": {
-                    "type": "string",
-                    "enum": ["bearer_token", "api_key_header", "basic_auth"],
-                    "default": "bearer_token",
-                    "description": (
-                        "How to inject the credential: "
-                        "bearer_token = Authorization: Bearer <password>, "
-                        "api_key_header = <header_name>: <password>, "
-                        "basic_auth = Authorization: Basic base64(user:pass)"
-                    )
-                },
-                "header_name": {
-                    "type": "string",
-                    "description": "Required when inject_as='api_key_header'. The header name."
-                },
-                "body": {
-                    "type": "object",
-                    "description": "Optional JSON body for POST/PUT/PATCH"
-                },
-                "fields": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Optional list of JSON keys to return from the response. "
-                        "Use this to reduce token usage — only the listed keys are "
-                        "returned. Works on both dict and list-of-dict responses. "
-                        "Example: [\"login\", \"id\", \"public_repos\"] "
-                        "omits the other ~37 fields in a GitHub user response."
-                    )
-                },
-                "extra_headers": {
-                    "type": "object",
-                    "description": "Optional additional headers to include in the request."
-                }
-            },
-            "required": ["site_name", "target_url"],
         }
     ),
     Tool(
@@ -369,67 +310,101 @@ TOOL_DEFINITIONS = [
             "required": ["site_name"]
         }
     ),
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🔑  API KEY OPERATIONS
+    # All tools that deal with API keys — discover, use, inject, and protect.
+    # ═══════════════════════════════════════════════════════════════════════
+
     Tool(
-        name="scan_and_protect",
+        name="list_api_keys",
         description=(
-            "Scan a project directory for exposed secrets in .env files and protect them. "
-            "Finds .env files, detects API keys and passwords using pattern matching, "
-            "encrypts them into the psamvault vault, and replaces the plaintext values "
-            "with 'psamvault:<KEY_NAME>' placeholders. "
-            "The captured secrets can then be used with use_credential."
+            "List all stored API key names with service hints. "
+            "Never returns the actual key values. "
+            "Use this to discover what API keys are available. "
+            "Optionally pass project_name to filter keys for a specific project "
+            "(stored via scan_and_protect as 'project/.env/KEY')."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_dir": {
-                    "type": "string",
-                    "description": "Path to the project directory. Defaults to current working directory."
-                },
-                "patterns": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional custom key name patterns to scan for (e.g. ['MY_CUSTOM_KEY'])."
-                },
                 "project_name": {
                     "type": "string",
-                    "description": "Optional project name for grouping. Keys stored as 'project_name/.env/KEY_NAME' instead of 'env/.env/KEY_NAME'. Use this for cleaner per-project organisation."
+                    "description": "Optional project name to filter by. "
+                                   "Keys stored via scan_and_protect(project_name=...) "
+                                   "use the format 'project/.env/KEY'."
                 }
-            }
+            },
+            "required": []
         }
     ),
     Tool(
-        name="capture_stripe_credentials",
+        name="use_credential",
         description=(
-            "Capture credentials provisioned by Stripe Projects into psamvault. "
-            "After running the 'stripe projects add <provider>' command, the provisioned "
-            "credentials land in the project's .env file. This tool runs "
-            "'stripe projects env --pull', parses the resulting .env for secrets, "
-            "encrypts them into the psamvault API key store, and replaces the "
-            "plaintext values with 'psamvault:<KEY_NAME>' placeholders. "
-            "The captured secrets can then be used with use_credential."
+            "Make an authenticated HTTP request using a credential stored in psamvault. "
+            "The lookup checks API key entries first, then vault (site password) entries — "
+            "so you can use both API keys and site passwords. "
+            "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
+            "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
+            "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
+            "Example: fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). "
+            "Works on both dict responses and lists-of-dicts."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "provider": {
+                "site_name": {
                     "type": "string",
-                    "description": "The Stripe Projects provider name, e.g. 'neon', 'supabase', 'openrouter'"
+                    "description": "The vault site whose credential to use, e.g.'github.com' "
                 },
-                "project_dir": {
+                "target_url": {
                     "type": "string",
-                    "description": "Path to the project directory. Defaults to current working directory."
+                    "description": "The  URL to send the authenticated request to"
                 },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "If True, only preview what would be captured without storing anything.",
-                    "default": False,
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                    "default": "GET",
+                    "description": "HTTP method"
+                },
+                "inject_as": {
+                    "type": "string",
+                    "enum": ["bearer_token", "api_key_header", "basic_auth"],
+                    "default": "bearer_token",
+                    "description": (
+                        "How to inject the credential: "
+                        "bearer_token = Authorization: Bearer *** "
+                        "api_key_header = <header_name>: <password>, "
+                        "basic_auth = Authorization: Basic base64...ss)"
+                    )
+                },
+                "header_name": {
+                    "type": "string",
+                    "description": "Required when inject_as='api_key_header'. The header name."
+                },
+                "body": {
+                    "type": "object",
+                    "description": "Optional JSON body for POST/PUT/PATCH"
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional list of JSON keys to return from the response. "
+                        "Use this to reduce token usage — only the listed keys are "
+                        "returned. Works on both dict and list-of-dict responses. "
+                        "Example: [\"login\", \"id\", \"public_repos\"] "
+                        "omits the other ~37 fields in a GitHub user response."
+                    )
+                },
+                "extra_headers": {
+                    "type": "object",
+                    "description": "Optional additional headers to include in the request."
                 }
             },
-            "required": ["provider"],
+            "required": ["site_name", "target_url"],
         }
     ),
-
-    # ── Command execution tool ──────────────────────────────────────────────
     Tool(
         name="run_with_credential",
         description=(
@@ -437,13 +412,13 @@ TOOL_DEFINITIONS = [
             "environment variable or stdin pipe. "
             "The credential is decrypted locally, injected into the subprocess, "
             "and all output is scanned for the credential value and redacted "
-            "before being returned — the credential NEVER enters the agent's context.\\n\\n"
-            "Use cases:\\n"
-            "- twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'\\n"
-            "- docker login: inject_as='stdin' (password piped to stdin)\\n"
-            "- npm publish: inject_as='env', env_var_name='NPM_TOKEN'\\n"
-            "- git push: inject_as='env', env_var_name='GITHUB_TOKEN'\\n"
-            "- pip install (private repo): inject_as='env', env_var_name='PIP_TOKEN'\\n\\n"
+            "before being returned — the credential NEVER enters the agent's context.\n\n"
+            "Use cases:\n"
+            "- twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'\n"
+            "- docker login: inject_as='stdin' (password piped to stdin)\n"
+            "- npm publish: inject_as='env', env_var_name='NPM_TOKEN'\n"
+            "- git push: inject_as='env', env_var_name='GITHUB_TOKEN'\n"
+            "- pip install (private repo): inject_as='env', env_var_name='PIP_TOKEN'\n\n"
             "Only site_name and command are required. "
             "When inject_as='env', env_var_name is required."
         ),
@@ -511,6 +486,65 @@ TOOL_DEFINITIONS = [
                 }
             },
             "required": ["site_name", "command"],
+        }
+    ),
+    Tool(
+        name="scan_and_protect",
+        description=(
+            "Scan a project directory for exposed secrets in .env files and protect them. "
+            "Finds .env files, detects API keys and passwords using pattern matching, "
+            "encrypts them into the psamvault vault, and replaces the plaintext values "
+            "with 'psamvault:<KEY_NAME>' placeholders. "
+            "The captured secrets can then be used with use_credential."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_dir": {
+                    "type": "string",
+                    "description": "Path to the project directory. Defaults to current working directory."
+                },
+                "patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional custom key name patterns to scan for (e.g. ['MY_CUSTOM_KEY'])."
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Optional project name for grouping. Keys stored as 'project_name/.env/KEY_NAME' instead of 'env/.env/KEY_NAME'. Use this for cleaner per-project organisation."
+                }
+            }
+        }
+    ),
+    Tool(
+        name="capture_stripe_credentials",
+        description=(
+            "Capture credentials provisioned by Stripe Projects into psamvault. "
+            "After running the 'stripe projects add <provider>' command, the provisioned "
+            "credentials land in the project's .env file. This tool runs "
+            "'stripe projects env --pull', parses the resulting .env for secrets, "
+            "encrypts them into the psamvault API key store, and replaces the "
+            "plaintext values with 'psamvault:<KEY_NAME>' placeholders. "
+            "The captured secrets can then be used with use_credential."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "description": "The Stripe Projects provider name, e.g. 'neon', 'supabase', 'openrouter'"
+                },
+                "project_dir": {
+                    "type": "string",
+                    "description": "Path to the project directory. Defaults to current working directory."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If True, only preview what would be captured without storing anything.",
+                    "default": False,
+                }
+            },
+            "required": ["provider"],
         }
     ),
 ]

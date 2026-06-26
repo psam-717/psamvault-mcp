@@ -5,6 +5,20 @@ These are the tools exposed to AI agents. Each tool is designed so that
 the agent can orchestrate credential use without ever seeing the plaintext
 value.
 
+Tools are organised into 3 groups:
+
+  🛠  Entry & Orientation (get_version, search_vault_tools)
+      — always start here to discover what to use.
+
+  🔐  Site Authentication (list_vault_sites, check_credential_exists,
+                            get_username_for_site, browser_login)
+      — end-to-end: discover, check, and log into websites.
+
+  🔑  API Key Operations (list_api_keys, use_credential,
+                           run_with_credential, scan_and_protect,
+                           capture_stripe_credentials)
+      — all tools that deal with API keys: discover, use, inject, and protect.
+
 Key architecture note:
   All sensitive session values (VEK, tokens, kdf_salt) are stored in the
   OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret
@@ -23,6 +37,7 @@ browser_login architecture:
 
 import asyncio
 import base64
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -38,6 +53,79 @@ from mcp_server.session import (
     get_vek,
     is_logged_in,
 )
+
+# Private / loopback IP blocks blocked as SSRF protection
+_PRIVATE_IP_BLOCKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+# Response headers that must never reach the agent context
+_SENSITIVE_RESPONSE_HEADERS = frozenset({
+    "set-cookie",
+    "authorization",
+    "www-authenticate",
+    "proxy-authenticate",
+    "set-cookie2",
+})
+
+
+def _reject_internal_target(url: str) -> str | None:
+    """Return an error message if *url* targets a loopback or private IP.
+
+    Returns ``None`` when the target is considered safe (public hostname
+    or public IP literal).  This prevents SSRF — an attacker who tricks
+    the agent into calling ``use_credential`` with a crafted ``target_url``
+    cannot make the server send authenticated requests to internal services.
+
+    Hostname literals (``localhost``, ``*.local``, ``*.internal``) are
+    blocked immediately.  IP literals are checked against well-known
+    private and link-local ranges.
+    """
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").strip()
+
+    if not hostname:
+        return "target_url has no hostname"
+
+    lower = hostname.lower()
+
+    # --- Block known internal-only hostnames ---
+    if lower in ("localhost", "localhost.localdomain",
+                 "127.0.0.1", "::1", "0.0.0.0",
+                 "[::1]"):
+        return (
+            f"target_url host '{hostname}' is a loopback address — "
+            "SSRF protection blocked the request"
+        )
+
+    if lower.endswith(".local") or lower.endswith(".internal"):
+        return (
+            f"target_url host '{hostname}' is an internal-only domain "
+            "(.local / .internal) — SSRF protection blocked the request"
+        )
+
+    # --- If the hostname is a literal IP, check against private blocks ---
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        addr = None
+
+    if addr is not None:
+        for block in _PRIVATE_IP_BLOCKS:
+            if addr in block:
+                return (
+                    f"target_url host '{hostname}' is a private IP address "
+                    f"(within {block}) — SSRF protection blocked the request"
+                )
+        # Public IP literal — allowed.
+
+    return None
 
 logger = get_logger()
 
@@ -188,6 +276,7 @@ async def list_api_keys(project_name: str | None = None) -> dict:
             items.append({
                 "name": name,
                 "service_hint": e.get("service_hint"),
+                "notes": e.get("notes"),
                 "created_at": e.get("created_at"),
                 "project": parts[0] if is_project_key else None,
                 "key_name": parts[1] if is_project_key else name,
@@ -257,6 +346,19 @@ async def browser_login(
         if _parsed_login.scheme not in ("http", "https"):
             return {
                 "error": f"login_url scheme '{_parsed_login.scheme}' is not allowed. Only http and https are permitted.",
+            }
+
+        # Verify login_url host belongs to the same domain as site_name
+        # (prevent credential phishing via prompt injection)
+        _login_host = (_parsed_login.hostname or "").lower()
+        _site_host = site_name.lower()
+        if _login_host != _site_host and not _login_host.endswith("." + _site_host):
+            return {
+                "error": (
+                    f"login_url host '{_parsed_login.hostname}' does not match "
+                    f"site_name '{site_name}'. The login URL must belong "
+                    "to the same domain."
+                ),
             }
 
     # Decrypt the credential upfront
@@ -410,6 +512,11 @@ async def use_credential(
         else:
             return {"error": f"Unknown inject_as mode: '{inject_as}'. Use 'bearer_token', 'api_key_header', or 'basic_auth'."}
 
+        # SSRF guard — reject requests to loopback, private, or link-local IPs
+        ssrf_error = _reject_internal_target(target_url)
+        if ssrf_error:
+            return {"error": ssrf_error}
+
         # Make the authenticated HTTP request
         async with httpx.AsyncClient() as client:
             response = await client.request(
@@ -439,7 +546,11 @@ async def use_credential(
         return {
             "success": True,
             "status_code": response.status_code,
-            "headers": dict(response.headers),
+            "headers": {
+                k: v
+                for k, v in response.headers.items()
+                if k.lower() not in _SENSITIVE_RESPONSE_HEADERS
+            },
             "data": response_data,
         }
 
@@ -728,6 +839,24 @@ async def run_with_credential(
                 iv=encrypted_entry["iv"],
             )
             credential_value = decrypted["password"]
+
+        # SSRF guard — scan command for URLs targeting internal addresses.
+        # An attacker who tricks the agent into running a command like
+        #   curl http://169.254.169.254/$KEY
+        # would exfiltrate the credential to an internal endpoint.
+        # We extract all http(s) URLs from the command string and reject
+        # any that point to loopback, private, or link-local addresses.
+        _url_re = re.compile(r"https?://[^\s\"'<>|;&$`!(){}]+")
+        for _match in _url_re.finditer(command):
+            _url = _match.group(0)
+            _ssrf_err = _reject_internal_target(_url)
+            if _ssrf_err:
+                return {
+                    "error": (
+                        f"Command contains a URL targeting an internal address: "
+                        f"'{_url[:80]}'. {_ssrf_err}"
+                    ),
+                }
 
         # Run command with credential injected
         from mcp_server.cmd_runner import run_command_with_credential as _run_cmd
