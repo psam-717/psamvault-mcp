@@ -1,8 +1,14 @@
 # psamvault-mcp
 
-**v0.4.2** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
+**v0.4.3** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
 
 Lets AI agents use your stored credentials without ever seeing their plaintext values. Also integrates with [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime credential resolution in your `.env` files.
+
+> **Agents installing or repairing this MCP:** read
+> [docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md)
+> before debugging. Common failures are PATH shadowing, corrupt pipx installs,
+> missing absolute paths in client config, expired vault sessions, and
+> mid-session MCP not reloading until restart.
 
 ## Features
 
@@ -170,21 +176,77 @@ playwright install chromium
 
 ## Installation
 
+**Prefer pipx** (isolated venv). Avoid `pip install` into system Python — on
+Windows this often leaves a broken shim on PATH that shadows the good install.
+
 ```bash
 pipx install psamvault-mcp
+psamvault-mcp --version   # safe smoke test (prints and exits)
+psamvault-mcp --help      # same — usage text, then exit
 ```
+
+### After install — resolve the real binary
+
+If `where psamvault-mcp` / `which -a psamvault-mcp` shows **more than one**
+path, configure your MCP client with the **absolute path** under your user
+local bin (pipx), not the system `Python3xx\Scripts` copy:
+
+| OS | Typical pipx path |
+|----|-------------------|
+| Windows | `%USERPROFILE%\.local\bin\psamvault-mcp.exe` |
+| Linux / macOS | `~/.local/bin/psamvault-mcp` |
+
+### Hardened client config (recommended)
+
+Always pass an absolute `command` and clear `PYTHONPATH` so other tools
+(e.g. Hermes) cannot contaminate imports:
+
+```json
+{
+  "mcpServers": {
+    "psamvault": {
+      "command": "C:\\Users\\YOU\\.local\\bin\\psamvault-mcp.exe",
+      "args": [],
+      "env": { "PYTHONPATH": "" }
+    }
+  }
+}
+```
+
+**Grok Build** (`~/.grok/config.toml`):
+
+```toml
+[mcp_servers.psamvault]
+command = "C:\\Users\\YOU\\.local\\bin\\psamvault-mcp.exe"
+args = []
+enabled = true
+tool_timeout_sec = 300
+
+[mcp_servers.psamvault.env]
+PYTHONPATH = ""
+```
+
+Then **restart the agent session** (or refresh MCP). Config edits do not always
+reload tools mid-chat. Verify with `get_version`, then `list_vault_sites`.
+
+Full agent playbook (corrupt pipx, PATH shadowing, session timeout, reload):
+[docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md).
 
 ## Transport modes
 
 psamvault-mcp primarily uses **stdio transport** (the MCP standard for desktop agents). HTTP/SSE transport is also available as an option.
 
-### stdio (default — for Hermes, Goose, Claude Desktop, Cline)
+### stdio (default — for Hermes, Goose, Claude Desktop, Cline, Grok Build)
 
 ```bash
 psamvault-mcp
 ```
 
 Starts the MCP server over stdin/stdout. This is the default mode and works with all major MCP desktop clients.
+
+> **Note for agents:** a bare `psamvault-mcp` invocation **waits on stdin** for
+> the MCP protocol. That is not a hang — use `--version` / `--help` for smoke
+> tests, and let the host spawn the process for real use.
 
 ### HTTP/SSE (for custom clients, remote setups, or network-accessible deployments)
 
@@ -304,21 +366,49 @@ Config file location:
 
 Restart Claude Desktop after saving.
 
+### Grok Build setup
+
+1. Install with pipx (see [Installation](#installation)).
+2. Add the server to `~/.grok/config.toml` using the **absolute** pipx path
+   (example above), or to `~/.mcp.json` if you already use that file.
+3. Restart Grok or open `/mcps` and refresh so tools load into the session.
+4. Confirm: `grok mcp doctor psamvault` → handshake OK, tools discovered.
+5. Ensure the vault CLI session is active: `psamvault login`.
+
 ### Other MCP clients
 
-Any MCP client supporting stdio transport can use psamvault-mcp:
+Any MCP client supporting stdio transport can use psamvault-mcp.
+**Prefer the absolute pipx path** over a bare command name:
 
 ```json
 {
   "mcpServers": {
     "psamvault": {
-      "command": "psamvault-mcp"
+      "command": "/home/YOU/.local/bin/psamvault-mcp",
+      "env": { "PYTHONPATH": "" }
     }
   }
 }
 ```
 
 For HTTP/SSE support, point the client at `http://127.0.0.1:8433/sse`.
+
+## Troubleshooting
+
+| Symptom | Guide |
+|---------|--------|
+| MCP will not start / agent cannot connect | [docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md) |
+| `pydantic` / `pydantic_core` import errors with Hermes | [docs/troubleshooting/PYTHONPATH-CONFLICT.md](docs/troubleshooting/PYTHONPATH-CONFLICT.md) |
+| Index of all troubleshooting docs | [docs/troubleshooting/README.md](docs/troubleshooting/README.md) |
+
+Quick recovery for a broken Windows pipx install:
+
+```powershell
+pipx uninstall psamvault-mcp
+Remove-Item -Recurse -Force "$env:USERPROFILE\pipx\venvs\psamvault-mcp" -ErrorAction SilentlyContinue
+pipx install psamvault-mcp
+# Point MCP config at: $env:USERPROFILE\.local\bin\psamvault-mcp.exe
+```
 
 ## Configuration
 
