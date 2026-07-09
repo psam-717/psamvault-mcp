@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "psamvault-mcp"
-version = "0.4.3"
+version = "0.4.4"
 description = "MCP server for psamvault — lets AI agents use stored credentials without seeing them."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,6 +47,23 @@ Issues = "https://github.com/psam-717/psamvault-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mcp_server"]
+
+[tool.hatch.build.targets.sdist]
+# Keep the sdist lean — never ship local venvs or agent temp dirs
+exclude = [
+  "/.git",
+  "/mcp_venv",
+  "/.venv",
+  "/venv",
+  "/cli_venv",
+  "/.hermes-tmp.*",
+  "/.claude",
+  "/dist",
+  "/build",
+  "/.pytest_cache",
+  "/__pycache__",
+  "*.pyc",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
