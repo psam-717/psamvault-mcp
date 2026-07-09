@@ -24,6 +24,7 @@ wheels/
 # Virtual environment
 # =============================================================================
 cli_venv/
+mcp_venv/
 .venv/
 venv/
 env/
