@@ -2,6 +2,17 @@
 
 You have access to the **psamvault MCP server** which provides tools for managing credentials securely. These tools let you use stored credentials without ever seeing their plaintext values.
 
+## Installing / repairing the MCP connection
+
+If tools are missing or the host cannot start the server, follow
+**[docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md)**.
+
+Summary: install with **pipx**, configure the host with the **absolute pipx
+path**, set **`PYTHONPATH=""`**, **reload the session**, ensure **`psamvault login`**,
+smoke-test with **`psamvault-mcp --version`** or **`psamvault-mcp --help`**
+(never leave a bare stdio process running as a “test”). Also see
+[docs/troubleshooting/PYTHONPATH-CONFLICT.md](docs/troubleshooting/PYTHONPATH-CONFLICT.md).
+
 ## Available Tools
 
 | Tool | Purpose |
