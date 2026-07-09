@@ -132,3 +132,7 @@ logs/
 deploy.ps1
 .claude.hermes-tmp.*
 .hermes/
+
+# Hermes session temp dirs
+.hermes-tmp.*/
+
