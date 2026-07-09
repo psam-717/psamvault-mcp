@@ -64,8 +64,22 @@ psamvault-mcp
 
 ```bash
 pipx install psamvault-mcp
+psamvault-mcp --version   # smoke test — prints and exits (do not leave bare process running)
+psamvault-mcp --help      # same — usage, then exit
 playwright install chromium
 ```
+
+**Hardening (agents must follow this):**
+
+1. Prefer **pipx**, never system-wide `pip install psamvault-mcp` when avoidable.
+2. Configure the MCP host with the **absolute path** to the pipx binary
+   (`~/.local/bin/psamvault-mcp` or `%USERPROFILE%\.local\bin\psamvault-mcp.exe`).
+3. Set `env.PYTHONPATH=""` on the MCP server entry so other Python tools cannot
+   contaminate imports (see `docs/troubleshooting/PYTHONPATH-CONFLICT.md`).
+4. After editing config, **restart / refresh MCP** in the host. Tools often load only at session start.
+5. If install is corrupt (`missing internal pipx metadata`), wipe
+   `~/pipx/venvs/psamvault-mcp` and reinstall — see
+   `docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md`.
 
 The user must also have the psamvault CLI installed and logged in:
 
@@ -233,8 +247,11 @@ Tell users they can say things like:
 3. **Calling wrong injection mode** — `api_key_header` needs a `header_name` parameter; `basic_auth` uses username:password; `bearer_token` uses the password as the token
 4. **Not using `fields` on large API responses** — a full GitHub user response is ~40 fields. Use `fields=["login","id","public_repos"]` to return only what's needed.
 5. **Mixing up site name vs API key name** — `use_credential` checks API key entries first, then vault password entries. If you need an API key but stored it as a site password, it still works as fallback.
-6. **Server not running** — MCP tools return connection errors if the server is not started. Start with `psamvault-mcp --http --port 8433` in a terminal.
-7. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
+6. **Server not connected / wrong binary** — Prefer absolute pipx path in host config. A broken system `Scripts\psamvault-mcp.exe` on PATH often fails with `ModuleNotFoundError: pydantic`. Do not treat a bare stdio `psamvault-mcp` process as a hang — use `--version` / `--help` to smoke-test.
+7. **Config fixed but tools still missing** — Reload/restart the agent session. Host doctor may show healthy while the current chat still has no tools.
+8. **Vault session expired** — MCP can start while `psamvault whoami` fails. Ask the user to run `psamvault login` (interactive). Do not fetch secrets via CLI to test.
+9. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
+10. **PYTHONPATH contamination** — Global `PYTHONPATH` from Hermes/other tools breaks pipx imports. Set `PYTHONPATH=""` on the MCP server env. See `docs/troubleshooting/`.
 
 ## Related Projects
 
@@ -247,10 +264,12 @@ Tell users they can say things like:
 
 ## Verification Checklist
 
-- [ ] MCP server is running (`psamvault-mcp --http --port 8433`)
-- [ ] Hermes config.yaml has `mcp_servers.psamvault` entry
-- [ ] `search_vault_tools("")` returns the list of tools
+- [ ] `psamvault-mcp --version` and `psamvault-mcp --help` work (pipx binary)
+- [ ] Host config uses **absolute** path to that binary + `PYTHONPATH=""`
+- [ ] Host reloaded after config change; doctor/handshake OK (~11 tools)
 - [ ] `get_version()` returns a version string
+- [ ] User logged in (`psamvault login` / `psamvault whoami`)
+- [ ] `search_vault_tools("")` returns the list of tools
 - [ ] `list_vault_sites()` returns stored sites (or empty list)
 - [ ] `check_credential_exists("github.com")` returns expected result
 - [ ] `use_credential` makes authenticated HTTP calls successfully

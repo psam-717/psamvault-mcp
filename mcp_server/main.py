@@ -674,8 +674,52 @@ async def _run_server() -> None:
             await tools.close_all_browsers()
 
 
+def _package_version() -> str:
+    try:
+        return importlib.metadata.version("psamvault-mcp")
+    except importlib.metadata.PackageNotFoundError:
+        # Source tree / editable checkout without installed metadata
+        from mcp_server import __version__
+
+        return __version__
+
+
+def _print_cli_help() -> None:
+    """Print help for humans/agents. Bare invocation starts stdio MCP (not a hang)."""
+    print(
+        f"psamvault-mcp {_package_version()}\n"
+        "\n"
+        "MCP server for psamvault — stdio transport by default.\n"
+        "\n"
+        "Usage:\n"
+        "  psamvault-mcp              Start MCP server on stdin/stdout (host-managed)\n"
+        "  psamvault-mcp --version    Print version and exit\n"
+        "  psamvault-mcp --help       Show this help and exit\n"
+        "\n"
+        "Install:  pipx install psamvault-mcp\n"
+        "Login:    psamvault login\n"
+        "\n"
+        "Agent install/repair playbook:\n"
+        "  https://github.com/psam-717/psamvault-mcp/blob/main/docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md\n"
+        "\n"
+        "Note: running without flags waits for MCP JSON-RPC on stdin. That is expected.\n"
+        "      Use --version for a non-blocking smoke test. Prefer absolute pipx paths\n"
+        "      in MCP client config and set PYTHONPATH=\"\" to avoid import contamination.\n"
+    )
+
+
 def main() -> None:
-    """Start the psamvault MCP server over stdio."""
+    """Start the psamvault MCP server over stdio, or handle --version / --help."""
+    import sys
+
+    # Early CLI flags so agents can smoke-test without hanging on stdio MCP.
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        _print_cli_help()
+        return
+    if any(a in ("-V", "--version") for a in sys.argv[1:]):
+        print(_package_version())
+        return
+
     logger.info("MCP server starting")
 
     if not is_logged_in():
@@ -695,7 +739,7 @@ def main() -> None:
             loop.close()
         except Exception:
             pass
-    
+
 
 if __name__ == "__main__":
     main()

@@ -4,6 +4,9 @@
 **Package:** psamvault-mcp v0.4.0
 **Affected users:** Anyone running Hermes Agent (or any Python-based tool) with `PYTHONPATH` set globally
 
+> **Also read:** [MCP-INSTALL-AND-CONNECT.md](./MCP-INSTALL-AND-CONNECT.md) for PATH
+> shadowing, corrupt pipx installs, absolute-path config, and session reload.
+
 ---
 
 ## Problem
