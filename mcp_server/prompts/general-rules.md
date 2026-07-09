@@ -57,9 +57,24 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 
 ## Error handling
 
-### "Not logged in"
-The session file or keychain entry is missing. Tell the user:
+### "Not logged in" / session timed out
+The session file or keychain entry is missing or expired. Tell the user:
 "Please run `psamvault login` in your terminal, then ask me again."
+Do not try to refresh the session by reading vault files or running
+`psamvault get`. Optionally they can try `psamvault list` / `psamvault whoami`
+first; if those fail, login is required.
+
+### MCP tools missing or server will not start
+Do not invent shell workarounds that print secrets. Follow the install playbook:
+`docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md`.
+
+Typical causes and fixes:
+- **Missing binary in config** → `pipx install psamvault-mcp`; point config at the absolute path under `~/.local/bin/`
+- **Broken system Python shim on PATH** (`ModuleNotFoundError: pydantic`) → use absolute pipx path; do not prefer `Python3xx\Scripts\psamvault-mcp.exe`
+- **Corrupt pipx metadata** → delete `~/pipx/venvs/psamvault-mcp` and reinstall
+- **PYTHONPATH contamination** → set `env.PYTHONPATH=""` on the MCP server entry (see `docs/troubleshooting/PYTHONPATH-CONFLICT.md`)
+- **Config fixed but tools still absent** → restart/reload the agent session so MCP is rediscovered
+- **Smoke-test hang** → `psamvault-mcp` without flags waits on stdio; use `--version` or `--help` instead
 
 ### "Consent GUI unavailable"
 The user is on a headless system without a graphical display.
