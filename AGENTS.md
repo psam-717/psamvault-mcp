@@ -4,6 +4,25 @@ You have the **psamvault MCP server** available. It provides credential manageme
 
 Prompt templates are available via the MCP Prompts capability (`list_prompts` / `get_prompt`) — load these at runtime for detailed step-by-step guidance on each workflow.
 
+## If the MCP server is NOT connected yet
+
+Do **not** improvise with `pip install` into system Python or bare `psamvault get`. Follow this playbook:
+
+**Full guide:** [docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md)
+
+### Short install playbook
+
+1. **Install with pipx only:** `pipx install psamvault-mcp`
+2. If pipx reports **missing metadata** or uninstall fails, delete the broken venv under `~/pipx/venvs/psamvault-mcp` (Windows: `%USERPROFILE%\pipx\venvs\psamvault-mcp`) and reinstall.
+3. **Resolve the absolute path** to the pipx binary (`~/.local/bin/psamvault-mcp` or `%USERPROFILE%\.local\bin\psamvault-mcp.exe`). If PATH has multiple copies, **ignore** system `Python3xx\Scripts\` shims — they often lack deps (`ModuleNotFoundError: pydantic`).
+4. Write host config with that **absolute path** and `env: { PYTHONPATH: "" }` (avoids Hermes/global PYTHONPATH contamination).
+5. **Reload the host** (restart session / refresh MCP). Mid-session config edits often do not expose tools until reload.
+6. Smoke-test the binary with `psamvault-mcp --version` or `psamvault-mcp --help` (safe — print and exit). Do **not** leave a bare `psamvault-mcp` process running in a shell — it waits on stdio for MCP.
+7. Ask the user to run `psamvault login` if vault tools report session timeout / not logged in.
+8. Verify: `get_version` → `list_vault_sites`.
+
+Also see [docs/troubleshooting/PYTHONPATH-CONFLICT.md](docs/troubleshooting/PYTHONPATH-CONFLICT.md) for import errors involving `pydantic_core`.
+
 ## Quick Reference
 
 1. **Always start with:** call a tool from **🛠 Entry & Orientation** — `search_vault_tools("")` to discover available tools or `get_version()` to check the version
@@ -78,7 +97,10 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 - ❌ Never print credential values
 - ❌ Never read `~/.psamvault/` files directly
 - ❌ Never run psamvault CLI commands (`psamvault get`, `psamvault show`, etc.)
+- ❌ Never install psamvault-mcp with system `pip` “just to make PATH work” when pipx is available
 - ✅ Always use MCP tools for anything credential-related
+- ✅ Prefer absolute pipx path + `PYTHONPATH=""` in MCP host config
+- ✅ If tools are missing after config change, reload/restart the host session before claiming install failed
 
 ## Example Workflows
 
