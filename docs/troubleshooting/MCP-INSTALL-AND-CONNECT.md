@@ -52,6 +52,24 @@ pipx install psamvault-mcp
 playwright install chromium
 ```
 
+**Upgrading an existing install (0.4.4 → 0.4.5+): never install the wheel with `--no-deps`.**
+
+0.4.5 adds a runtime dependency, `ruamel-yaml>=0.19.1`. If the new wheel is installed into an existing uv-managed pipx venv without deps (e.g. `uv pip install --no-deps ...whl` because that venv has no pip), the dep is skipped and the server crashes at import — `ModuleNotFoundError: No module named 'ruamel'` — so the host discovers **zero** psamvault tools. Symptoms: `psamvault-mcp --version` tracebacks; MCP tools absent from new agent sessions.
+
+Fix — reinstall the wheel **with** deps against the venv's own Python (path varies by OS/pipx home):
+
+```bash
+# Windows (pipx home under %LOCALAPPDATA% on this setup)
+uv pip install --python "$LOCALAPPDATA/pipx/pipx/venvs/psamvault-mcp/Scripts/python.exe" \
+  --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+
+# Linux/macOS
+uv pip install --python ~/.local/pipx/venvs/psamvault-mcp/bin/python \
+  --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+```
+
+Or, where pip is available, a plain `pipx reinstall psamvault-mcp` / fresh `pipx install psamvault-mcp` also restores the dep. Verify afterwards: `psamvault-mcp --version` prints `0.4.5` and exits cleanly (no traceback), then restart the agent host session.
+
 ### 2. Resolve the real binary path
 
 ```bash
