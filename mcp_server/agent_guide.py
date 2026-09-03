@@ -563,28 +563,31 @@ the agent host's config WITHOUT the key ever entering chat or your context.
 |------|---------|-------|
 | `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
 | `list_api_keys` | Find the exact vault key name to export | 🔑 API Key Operations |
-| `export_key_to_mcp_config` | Write the key into the agent MCP config | 🔑 API Key Operations |
+| `verify_api_key` | Pre-check any stored key (pass/fail + status) | 🔑 API Key Operations |
+| `export_key_to_mcp_config` | Write the key into the agent MCP config (auto-verifies) | 🔑 API Key Operations |
 
 ## Workflow
 
 ### Step 1: Find the key name
 Call `list_api_keys()` to confirm the key exists (e.g. `hermes_atlas_render`).
 
-### Step 2: Verify the key works before exporting — never export an unverified key
-A wrong, expired, or revoked key written into `config.yaml` poisons every
-future session that tries to connect. Prove the key *before* the export call:
+### Step 2: Verification is built in — never export an unverified key
+`export_key_to_mcp_config` **auto-verifies HTTP exports** before writing: it
+probes the provider's bundled recipe (or your `verify_url` override) with the
+decrypted key and hard-blocks on failure (`verification: failed` in the
+result; config untouched). The result records `verification: verified`.
 
-- **HTTP/bearer keys**: call `use_credential` against the provider's read-only
-  "whoami" endpoint and expect success. For Render:
-  `use_credential(site_name="hermes_atlas_render", target_url="https://api.render.com/v1/owners", inject_as="bearer_token")`
-  → HTTP 200 means the key is valid.
-- **Stdio/env keys**: confirm the key is current with whatever cheap check the
-  provider offers (e.g. a `whoami`/list command via `run_with_credential`).
+Still manual in v1:
+- **Unknown HTTP providers** with no bundled recipe: pass
+  `verify_url=<read-only whoami endpoint>` or the export is refused.
+- **Stdio/env exports**: no command probes in v1 — run a manual check
+  (e.g. `run_with_credential`) then pass `skip_verify=true` (loud;
+  result records `verification: skipped`).
+- **Pre-check before export**: call `verify_api_key(key_name=...)` to get
+  pass/fail + status for any stored key without touching a config file.
 
-If verification fails, **stop — do not export**. The key may be expired,
-revoked, or the wrong name. (When built-in verification is added to
-`export_key_to_mcp_config`, this step becomes automatic for known providers;
-until then, the manual check is required.)
+If a probe fails, **stop — do not export**. The key may be expired, revoked,
+or the wrong name.
 
 ### Step 3: Call export_key_to_mcp_config
 

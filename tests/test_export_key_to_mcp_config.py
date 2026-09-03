@@ -12,6 +12,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pytest_httpx import HTTPXMock
 
 from conftest import TEST_VEK
 
@@ -27,6 +28,9 @@ mcp_servers:
 """
 
 
+RENDER_VERIFY_URL = "https://api.render.com/v1/owners"
+
+
 def _encrypt_api_key(service: str, key: str) -> tuple[str, str]:
     """Encrypt an API-key-shaped payload (service/api_key/notes) with TEST_VEK."""
     iv = _os.urandom(12)
@@ -40,10 +44,11 @@ def _encrypt_api_key(service: str, key: str) -> tuple[str, str]:
 
 @pytest.mark.asyncio
 async def test_http_bearer_add_writes_config_and_never_returns_key(
-    tmp_path, mock_tool_deps, monkeypatch
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
 ):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(SAMPLE_CONFIG, encoding="utf-8")
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
     blob, iv = _encrypt_api_key("render", "rnd_super_secret_789")
 
     async def fake_get_api_key_entry(access_token: str, key_name: str):
@@ -83,10 +88,11 @@ async def _fake_lookup(monkeypatch, key: str, service: str = "render"):
 
 @pytest.mark.asyncio
 async def test_custom_header_mode_writes_header_without_bearer_prefix(
-    tmp_path, mock_tool_deps, monkeypatch
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
 ):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(SAMPLE_CONFIG, encoding="utf-8")
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
     await _fake_lookup(monkeypatch, "rnd_custom_header_key_111")
 
     result = await tools.export_key_to_mcp_config(
@@ -118,6 +124,7 @@ async def test_env_mode_writes_stdio_server_env_var(tmp_path, mock_tool_deps, mo
         inject_as="env",
         env_var_name="OPENAI_API_KEY",
         config_path=str(cfg),
+        skip_verify=True,
     )
 
     assert result.get("success") is True
@@ -129,10 +136,11 @@ async def test_env_mode_writes_stdio_server_env_var(tmp_path, mock_tool_deps, mo
 
 @pytest.mark.asyncio
 async def test_dry_run_returns_summary_and_writes_nothing(
-    tmp_path, mock_tool_deps, monkeypatch
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
 ):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(SAMPLE_CONFIG, encoding="utf-8")
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
     await _fake_lookup(monkeypatch, "rnd_dry_run_key_333")
     before = cfg.read_text(encoding="utf-8")
 
@@ -152,9 +160,15 @@ async def test_dry_run_returns_summary_and_writes_nothing(
 
 
 @pytest.mark.asyncio
-async def test_existing_entry_errors_unless_replace(tmp_path, mock_tool_deps, monkeypatch):
+async def test_existing_entry_errors_unless_replace(
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
+):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(SAMPLE_CONFIG, encoding="utf-8")
+    # Three exports below -> three verification probes, all succeed.
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
     await _fake_lookup(monkeypatch, "rnd_first_key_444")
     first = await tools.export_key_to_mcp_config(
         key_name="k",
@@ -287,12 +301,13 @@ async def test_env_inject_requires_env_var_name(tmp_path, mock_tool_deps, monkey
 
 @pytest.mark.asyncio
 async def test_default_config_path_honors_hermes_home_env(
-    tmp_path, mock_tool_deps, monkeypatch
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
 ):
     fake_home = tmp_path / "hermes_home"
     fake_home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_home))
     await _fake_lookup(monkeypatch, "rnd_default_path_key_000")
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
     # No config_path passed — the tool resolves HERMES_HOME/config.yaml.
     # (Create the file there first so the adapter has something to edit.)
     target = fake_home / "config.yaml"

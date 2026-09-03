@@ -77,7 +77,8 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | `run_with_credential` | Run a CLI command with credential injected via env var or stdin |
 | `scan_and_protect` | Encrypt project `.env` secrets into psamvault |
 | `capture_stripe_credentials` | Capture credentials from Stripe Projects |
-| `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — key never returned |
+| `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — auto-verifies, key never returned |
+| `verify_api_key` | Verify a stored vault key is valid (pass/fail + status) |
 
 ## Key Patterns
 
