@@ -9,12 +9,19 @@ reuse it without rework):
     {url, method, expect, auth_kind}
 
 Only providers whose recipes have been verified against the live service
-belong here (render verified Sep 3 2026: GET /v1/owners -> 200).
+belong here (render verified Sep 3 2026: GET /v1/owners -> 200; openrouter
+verified Sep 3 2026: GET /api/v1/auth/key -> 200).
 """
 
 from __future__ import annotations
 
 VERIFY_RECIPES: dict[str, dict] = {
+    "openrouter": {
+        "url": "https://openrouter.ai/api/v1/auth/key",
+        "method": "GET",
+        "expect": 200,
+        "auth_kind": "bearer",
+    },
     "render": {
         "url": "https://api.render.com/v1/owners",
         "method": "GET",
