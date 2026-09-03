@@ -16,7 +16,8 @@ Tools are organised into 3 groups:
 
   🔑  API Key Operations (list_api_keys, use_credential,
                            run_with_credential, scan_and_protect,
-                           capture_stripe_credentials)
+                           capture_stripe_credentials, export_key_to_mcp_config,
+                           verify_api_key)
       — all tools that deal with API keys: discover, use, inject, and protect.
 
 Key architecture note:
