@@ -121,6 +121,8 @@ Once connected, these tools become available (prefixed `mcp_psamvault_*` in Herm
 | `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run CLI command with credential injected | ❗ Output redacted of credential |
 | `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
 | `capture_stripe_credentials` | `provider, project_dir, dry_run` | Capture Stripe provisioned creds | ❗ Encrypts into vault |
+| `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a vault API key into a host MCP config (e.g. Hermes `config.yaml`) — auto-verifies HTTP keys | ❗ Key value never returned |
+| `verify_api_key` | `key_name, verify_url (optional)` | Verify a vault API key by probing the provider's read-only endpoint | No secrets involved — key value never returned |
 
 ## Workflows
 
@@ -266,7 +268,7 @@ Tell users they can say things like:
 
 - [ ] `psamvault-mcp --version` and `psamvault-mcp --help` work (pipx binary)
 - [ ] Host config uses **absolute** path to that binary + `PYTHONPATH=""`
-- [ ] Host reloaded after config change; doctor/handshake OK (~11 tools)
+- [ ] Host reloaded after config change; doctor/handshake OK (13 tools in v0.4.6+)
 - [ ] `get_version()` returns a version string
 - [ ] User logged in (`psamvault login` / `psamvault whoami`)
 - [ ] `search_vault_tools("")` returns the list of tools

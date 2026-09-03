@@ -42,7 +42,11 @@ Tools are grouped into three categories. Always start in **Entry & Orientation**
 | **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
 | **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
 | **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
+| **`export_key_to_mcp_config`** | Exports a vault API key directly into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before writing |
+| **`verify_api_key`** | Verifies a stored API key is valid against its provider's API — returns status, provider, and verification result |
 
+> **New in v0.4.6:** `export_key_to_mcp_config`, `verify_api_key`, and the auto-verifying export gate (verified-before-write for HTTP keys).
+>
 > **New in v0.4.0:** `use_credential`, `run_with_credential`, `scan_and_protect`, `capture_stripe_credentials`, `list_api_keys`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
 
 ## How it works
@@ -458,6 +462,8 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | `run_with_credential` | Run a CLI command with a credential injected via env var or stdin — all output redacted of the secret |
 | `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
 | `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
+| `export_key_to_mcp_config` | Export a vault API key into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before write, with `skip_verify` / `verify_url` overrides |
+| `verify_api_key` | Verify a stored API key is valid against its provider's API. Returns `success`, `verification`, `provider`, `status`, `detail` |
 
 ## Architecture
 
