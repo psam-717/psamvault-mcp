@@ -166,6 +166,12 @@ _TOOL_REGISTRY: dict[str, str] = {
         "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path, "
         "verify_url (probe override), skip_verify (loud no-verify)."
     ),
+    "verify_api_key": (
+        "Verify a vault API key is valid by probing the provider's read-only "
+        "endpoint (whoami) with the decrypted key. Params: key_name (required), "
+        "verify_url (optional override for providers without a bundled recipe). "
+        "Returns success/verification/status — the key value is never returned."
+    ),
 }
 
 
@@ -665,6 +671,36 @@ TOOL_DEFINITIONS = [
             "required": ["key_name", "server_name"],
         }
     ),
+    Tool(
+        name="verify_api_key",
+        description=(
+            "[🔑 API Key Operations] Verify a vault API key is valid by probing the "
+            "provider's read-only endpoint (whoami) with the decrypted key. "
+            "Provider is resolved from the vault entry's service hint; pass "
+            "verify_url to override for providers without a bundled recipe. "
+            "Returns success/verification/status/error_class — the key value is "
+            "NEVER returned. Use BEFORE export_key_to_mcp_config or whenever you "
+            "need to prove a stored key still works."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "key_name": {
+                    "type": "string",
+                    "description": "Name of the vault API key to verify (see list_api_keys)."
+                },
+                "verify_url": {
+                    "type": "string",
+                    "description": (
+                        "Optional read-only provider endpoint to probe with the key "
+                        "(whoami). Overrides the bundled recipe; required for providers "
+                        "without a recipe."
+                    )
+                },
+            },
+            "required": ["key_name"],
+        }
+    ),
 ]
 
 
@@ -787,6 +823,12 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 dry_run=arguments.get("dry_run", False),
                 verify_url=arguments.get("verify_url"),
                 skip_verify=arguments.get("skip_verify", False),
+            )
+
+        elif name == "verify_api_key":
+            result = await tools.verify_api_key(
+                key_name=arguments["key_name"],
+                verify_url=arguments.get("verify_url"),
             )
 
         else:
