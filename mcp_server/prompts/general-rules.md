@@ -65,6 +65,12 @@ the entry into `config.yaml` directly. Never ask the user to paste the key,
 never hand-edit the config, and never run the agent host's own `mcp add`
 CLI — psamvault owns the write (with backup + dry_run).
 
+**Never export an unverified key.** Before exporting, prove the key works via
+`use_credential` (bearer/API keys) or `run_with_credential` (stdio/env keys)
+against a cheap read-only provider check; a failed check means stop. When
+built-in verification lands on `export_key_to_mcp_config`, it becomes
+automatic for known providers.
+
 ## Error handling
 
 ### "Not logged in" / session timed out
