@@ -165,7 +165,7 @@ Editing config **does not** always inject tools into an already-running agent se
 
 Then verify:
 
-1. Host reports the server **healthy** / tools discovered (~11 tools)
+1. Host reports the server **healthy** / tools discovered (13 tools in v0.4.6+)
 2. Call `get_version`
 3. Call `list_vault_sites` (needs `psamvault login`)
 
@@ -296,7 +296,7 @@ User wants psamvault MCP connected
 
 ```bash
 grok mcp doctor psamvault
-# Expect: command found, handshake OK, ~11 tools discovered
+# Expect: command found, handshake OK, 13 tools discovered (v0.4.6+)
 ```
 
 **Any host after connect:**
