@@ -984,7 +984,12 @@ async def export_key_to_mcp_config(
 
     verification: str | None = None
     if spec.url and not skip_verify:
-        provider = str(encrypted_entry.get("service") or server_name or "")
+        provider = str(
+            decrypted.get("service")
+            or encrypted_entry.get("service_hint")
+            or server_name
+            or ""
+        )
         recipe = verify_recipes.get_verify_recipe(provider)
         if recipe is None and not verify_url:
             return await _gate_fail(
@@ -1095,7 +1100,11 @@ async def verify_api_key(
     except Exception as exc:
         return {"error": f"Failed to load API key '{key_name}': {exc}"}
 
-    provider = str(encrypted_entry.get("service") or "")
+    provider = str(
+        decrypted.get("service")
+        or encrypted_entry.get("service_hint")
+        or ""
+    )
     recipe = verify_recipes.get_verify_recipe(provider)
     if recipe is None and not verify_url:
         return {
