@@ -85,6 +85,7 @@ server = Server(
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
         "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
         "- export_key_to_mcp_config → export a vault key into an agent MCP config (never returns the key)\n"
+        "- verify_api_key           → prove a stored vault key is valid (pass/fail + status)\n"
     ),
 )
 
