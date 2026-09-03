@@ -163,7 +163,8 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Export a vault API key directly into an agent host's MCP server config "
         "(Hermes config.yaml mcp_servers entry). The key value is never returned. "
         "Params: key_name (required), server_name (required), url or command, "
-        "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path."
+        "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path, "
+        "verify_url (probe override), skip_verify (loud no-verify)."
     ),
 }
 
@@ -562,7 +563,9 @@ TOOL_DEFINITIONS = [
             "The key is decrypted locally and written into the config file as an HTTP server "
             "(url + Authorization/custom header) or stdio server (command + env var). "
             "The key value is NEVER returned to you — only a summary with config path and "
-            "backup path. Use when the agent needs an MCP server whose auth is a vault key "
+            "backup path. HTTP exports auto-verify the key against the provider before writing "
+            "(verification: verified|skipped|failed in the result); failed verification blocks "
+            "the export. Use when the agent needs an MCP server whose auth is a vault key "
             "(e.g. Render's hosted MCP) and the config must be provisioned without the key "
             "ever entering chat."
         ),
@@ -639,6 +642,23 @@ TOOL_DEFINITIONS = [
                     "default": False,
                     "description": (
                         "Preview the change and write nothing. Returns the action that would occur."
+                    )
+                },
+                "verify_url": {
+                    "type": "string",
+                    "description": (
+                        "Optional read-only provider endpoint to probe with the key (whoami). "
+                        "Overrides the bundled recipe for providers that have one; required for "
+                        "HTTP providers without a recipe unless skip_verify=true."
+                    )
+                },
+                "skip_verify": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "LOUD escape hatch: export without verification. Only for providers with "
+                        "no probe (or stdio/env exports where you ran a manual check). The result "
+                        "records verification: skipped."
                     )
                 },
             },
@@ -765,6 +785,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 config_path=arguments.get("config_path"),
                 replace=arguments.get("replace", False),
                 dry_run=arguments.get("dry_run", False),
+                verify_url=arguments.get("verify_url"),
+                skip_verify=arguments.get("skip_verify", False),
             )
 
         else:
