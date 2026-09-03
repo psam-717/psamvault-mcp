@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from mcp_server import api_client
+from mcp_server import api_client, config_targets
 from mcp_server.crypto import decrypt_credentials, decrypt_api_key
 from mcp_server.log import get_logger
 from mcp_server.session import (
@@ -875,3 +875,121 @@ async def run_with_credential(
     except Exception as e:
         logger.error("run_with_credential failed: %s", e)
         return {"error": f"run_with_credential failed: {e}"}
+
+
+# ── export_key_to_mcp_config tool ─────────────────────────────────────────────
+
+async def export_key_to_mcp_config(
+    key_name: str,
+    server_name: str,
+    agent: str = "hermes",
+    url: str | None = None,
+    inject_as: str = "bearer_token",
+    header_name: str | None = None,
+    command: str | None = None,
+    args: list[str] | None = None,
+    env_var_name: str | None = None,
+    config_path: str | None = None,
+    replace: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """Export a vault API key into an agent host's MCP server config.
+
+    The key is decrypted locally and written directly into the target
+    config file (e.g. Hermes ``config.yaml`` → ``mcp_servers.<server_name>``)
+    as an HTTP server (``url`` + auth header) or stdio server (``command`` +
+    env var). The key value is NEVER returned to the caller.
+
+    inject_as:
+      - ``bearer_token`` (default): HTTP server with
+        ``headers.Authorization: Bearer <key>``
+      - ``api_key_header``: HTTP server with ``headers.<header_name>: <key>``
+      - ``env``: stdio server with ``env.<env_var_name>: <key>``
+    """
+    if not is_logged_in():
+        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+
+    if agent != "hermes":
+        return {"error": f"Unsupported agent '{agent}'. Supported agents: hermes"}
+
+    try:
+        access_token = get_access_token()
+        vek = get_vek()
+        encrypted_entry = await api_client.get_api_key_entry(access_token, key_name)
+        decrypted = decrypt_api_key(
+            vek=vek,
+            encrypted_blob=encrypted_entry["encrypted_blob"],
+            iv=encrypted_entry["iv"],
+        )
+        credential_value = decrypted["api_key"]
+    except Exception as exc:
+        return {"error": f"Failed to load API key '{key_name}': {exc}"}
+
+    # Build the transport entry around the (never-returned) credential.
+    headers: dict[str, str] | None = None
+    env: dict[str, str] | None = None
+    if inject_as == "bearer_token":
+        headers = {"Authorization": f"Bearer {credential_value}"}
+    elif inject_as == "api_key_header":
+        if not header_name:
+            return {"error": "header_name is required when inject_as='api_key_header'."}
+        headers = {header_name: credential_value}
+    elif inject_as == "env":
+        if not env_var_name:
+            return {"error": "env_var_name is required when inject_as='env'."}
+        env = {env_var_name: credential_value}
+    else:
+        return {
+            "error": (
+                f"Unknown inject_as mode: '{inject_as}'. "
+                "Use 'bearer_token', 'api_key_header', or 'env'."
+            )
+        }
+
+    spec = config_targets.ServerSpec(
+        name=server_name,
+        url=url,
+        headers=headers,
+        command=command,
+        args=args,
+        env=env,
+    )
+    try:
+        spec.validate()
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    try:
+        path = (
+            Path(config_path)
+            if config_path
+            else config_targets.resolve_hermes_config_path()
+        )
+        result = config_targets.write_hermes_mcp_server(
+            config_path=path,
+            spec=spec,
+            dry_run=dry_run,
+            replace=replace,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    logger.info(
+        "export_key_to_mcp_config: %s mcp_servers.%s in %s (agent=%s, dry_run=%s)",
+        result["action"],
+        server_name,
+        path,
+        agent,
+        dry_run,
+    )
+    return {
+        "success": True,
+        "action": result["action"],
+        "agent": agent,
+        "server_name": server_name,
+        "config_path": result["config_path"],
+        "backup_path": result.get("backup_path"),
+        "dry_run": dry_run,
+        "credential": f"vault key '{key_name}' (redacted)",
+        "note": "Restart the agent host (new session) for the MCP server tools to load.",
+    }
