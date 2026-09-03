@@ -1064,3 +1064,84 @@ async def export_key_to_mcp_config(
         "credential": f"vault key '{key_name}' (redacted)",
         "note": "Restart the agent host (new session) for the MCP server tools to load.",
     }
+
+
+async def verify_api_key(
+    key_name: str,
+    verify_url: str | None = None,
+) -> dict:
+    """Prove a vault API key is valid against its provider's read-only endpoint.
+
+    Resolves the provider from the vault entry's service hint, probes the
+    bundled recipe endpoint (or an explicit ``verify_url`` override) with the
+    decrypted key, and returns pass/fail plus the probe status. The key value
+    is NEVER returned. This is the standalone half of the shared verify
+    executor also used as the gate inside ``export_key_to_mcp_config``.
+    """
+    if not is_logged_in():
+        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+
+    try:
+        access_token = get_access_token()
+        vek = get_vek()
+        encrypted_entry = await api_client.get_api_key_entry(access_token, key_name)
+        decrypted = decrypt_api_key(
+            vek=vek,
+            encrypted_blob=encrypted_entry["encrypted_blob"],
+            iv=encrypted_entry["iv"],
+        )
+        credential_value = decrypted["api_key"]
+    except Exception as exc:
+        return {"error": f"Failed to load API key '{key_name}': {exc}"}
+
+    provider = str(encrypted_entry.get("service") or "")
+    recipe = verify_recipes.get_verify_recipe(provider)
+    if recipe is None and not verify_url:
+        return {
+            "success": False,
+            "verification": "failed",
+            "key_name": key_name,
+            "detail": (
+                f"no verify recipe for provider '{provider or 'unknown'}' and no "
+                "verify_url given; pass verify_url=<read-only whoami endpoint>"
+            ),
+        }
+
+    probe_url = verify_url or recipe["url"]
+    method = recipe["method"] if recipe else "GET"
+    expect = recipe["expect"] if recipe else 200
+    if recipe:
+        auth_kind = recipe["auth_kind"]
+        header_name: str | None = None
+    else:
+        auth_kind = "bearer"
+        header_name = None
+    try:
+        v_result = await verify_executor.verify_key_http(
+            credential_value,
+            url=probe_url,
+            method=method,
+            expect=expect,
+            auth_kind=auth_kind,
+            header_name=header_name,
+        )
+    except ValueError as exc:
+        return {
+            "success": False,
+            "verification": "failed",
+            "key_name": key_name,
+            "detail": str(exc),
+        }
+
+    detail = v_result["detail"]
+    if not v_result["success"]:
+        detail = f"{detail} (error_class={v_result['error_class']})"
+    return {
+        "success": v_result["success"],
+        "verification": "verified" if v_result["success"] else "failed",
+        "key_name": key_name,
+        "provider": provider or None,
+        "status": v_result["status"],
+        "error_class": v_result["error_class"],
+        "detail": detail,
+    }
