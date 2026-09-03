@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "psamvault-mcp"
-version = "0.4.4"
+version = "0.4.5"
 description = "MCP server for psamvault — lets AI agents use stored credentials without seeing them."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,6 +34,7 @@ dependencies = [
     "keyring>=25.0.0",
     "starlette>=0.40.0",
     "uvicorn>=0.30.0",
+    "ruamel-yaml>=0.19.1",
 ]
 
 [project.scripts]
@@ -68,3 +69,10 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-httpx>=0.36.2",
+]
