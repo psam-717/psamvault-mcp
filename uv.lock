@@ -514,7 +514,7 @@ wheels = [
 
 [[package]]
 name = "psamvault-mcp"
-version = "0.4.5"
+version = "0.4.6"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
