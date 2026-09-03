@@ -49,6 +49,29 @@ async def _fake_lookup(monkeypatch, key: str, service: str = "render"):
     monkeypatch.setattr(api_client, "get_api_key_entry", fake_get_api_key_entry)
 
 
+async def _fake_lookup_real_shape(monkeypatch, key: str, service: str = "render"):
+    """Mirror the REAL backend entry shape: no top-level 'service' key.
+
+    The real vault entry carries service only inside the decrypted payload
+    (plus a top-level service_hint). Regression guard for provider resolution.
+    """
+    blob, iv = _encrypt_api_key(service, key)
+
+    async def fake_get_api_key_entry(access_token: str, key_name: str):
+        return {
+            "id": "k_123",
+            "name": key_name,
+            "service_hint": None,
+            "encrypted_blob": blob,
+            "iv": iv,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "notes": None,
+        }
+
+    monkeypatch.setattr(api_client, "get_api_key_entry", fake_get_api_key_entry)
+
+
 class TestVerifyApiKeyTool:
     @pytest.mark.asyncio
     async def test_known_provider_recipe_200__returns_verified(
@@ -117,6 +140,20 @@ class TestVerifyApiKeyTool:
         assert result.get("success") is True
         assert result.get("verification") == "verified"
         assert result.get("provider") == "acme"
+
+    @pytest.mark.asyncio
+    async def test_real_backend_shape_no_top_level_service__resolves_provider_from_decrypted(
+        self, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
+    ):
+        await _fake_lookup_real_shape(monkeypatch, "rnd_real_shape_f6", service="render")
+        httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=200)
+
+        result = await tools.verify_api_key(key_name="hermes_atlas_render")
+
+        assert result.get("success") is True
+        assert result.get("verification") == "verified"
+        assert result.get("provider") == "render"
+        assert "rnd_real_shape_f6" not in json.dumps(result)
 
     @pytest.mark.asyncio
     async def test_unknown_key__lookup_error(self, mock_tool_deps, monkeypatch):
