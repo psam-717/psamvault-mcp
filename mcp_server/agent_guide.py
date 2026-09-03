@@ -570,7 +570,23 @@ the agent host's config WITHOUT the key ever entering chat or your context.
 ### Step 1: Find the key name
 Call `list_api_keys()` to confirm the key exists (e.g. `hermes_atlas_render`).
 
-### Step 2: Call export_key_to_mcp_config
+### Step 2: Verify the key works before exporting — never export an unverified key
+A wrong, expired, or revoked key written into `config.yaml` poisons every
+future session that tries to connect. Prove the key *before* the export call:
+
+- **HTTP/bearer keys**: call `use_credential` against the provider's read-only
+  "whoami" endpoint and expect success. For Render:
+  `use_credential(site_name="hermes_atlas_render", target_url="https://api.render.com/v1/owners", inject_as="bearer_token")`
+  → HTTP 200 means the key is valid.
+- **Stdio/env keys**: confirm the key is current with whatever cheap check the
+  provider offers (e.g. a `whoami`/list command via `run_with_credential`).
+
+If verification fails, **stop — do not export**. The key may be expired,
+revoked, or the wrong name. (When built-in verification is added to
+`export_key_to_mcp_config`, this step becomes automatic for known providers;
+until then, the manual check is required.)
+
+### Step 3: Call export_key_to_mcp_config
 
 HTTP MCP server with a bearer token (the common case):
 ```
@@ -601,7 +617,7 @@ export_key_to_mcp_config(
 )
 ```
 
-### Step 3: Handle the response
+### Step 4: Handle the response
 - `success: true` + `action: added|replaced` → tell the user the entry was written
   and that the agent host must be **restarted / new session** for the tools to load.
 - `backup_path` → where a pre-write copy of the config was saved (always created).
