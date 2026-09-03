@@ -40,6 +40,7 @@ Also see [docs/troubleshooting/PYTHONPATH-CONFLICT.md](docs/troubleshooting/PYTH
 | `how-to-use-api-credential` | Guide for making authenticated HTTP requests |
 | `how-to-scan-and-protect` | Guide for scanning and protecting `.env` secrets |
 | `how-to-capture-stripe` | Guide for capturing Stripe Projects credentials |
+| `how-to-export-key-to-mcp-config` | Guide for exporting a vault key into an agent's MCP config |
 | `general-rules` | Security rules, error handling, and full tool reference |
 
 Call `get_prompt("how-to-login")` to load the login workflow into your context when needed.
@@ -76,6 +77,7 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | `run_with_credential` | Run a CLI command with credential injected via env var or stdin |
 | `scan_and_protect` | Encrypt project `.env` secrets into psamvault |
 | `capture_stripe_credentials` | Capture credentials from Stripe Projects |
+| `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — key never returned |
 
 ## Key Patterns
 
