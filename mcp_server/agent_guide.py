@@ -543,6 +543,81 @@ project. Tell the user to run `stripe projects use` in the directory.
 - **Never expose the raw credential values** in your response.
 """
 
+_HOW_TO_EXPORT_KEY_TO_MCP_CONFIG = """\
+# How to export a vault API key into an agent MCP config
+
+## Goal
+When the agent (or another tool) needs an MCP server whose authentication is a
+vault-stored API key — e.g. Render's hosted MCP at `https://mcp.render.com/mcp`
+with `Authorization: Bearer <key>` — provision the server entry directly into
+the agent host's config WITHOUT the key ever entering chat or your context.
+
+## Prerequisites
+- The user must be logged in to psamvault (`psamvault login` in their terminal).
+- The API key must already be stored in the vault (`list_api_keys` to confirm).
+- Target is a Hermes agent host (`$HERMES_HOME/config.yaml` or platform default).
+
+## Tools you need (🔑 API Key Operations group)
+
+| Tool | Purpose | Group |
+|------|---------|-------|
+| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
+| `list_api_keys` | Find the exact vault key name to export | 🔑 API Key Operations |
+| `export_key_to_mcp_config` | Write the key into the agent MCP config | 🔑 API Key Operations |
+
+## Workflow
+
+### Step 1: Find the key name
+Call `list_api_keys()` to confirm the key exists (e.g. `hermes_atlas_render`).
+
+### Step 2: Call export_key_to_mcp_config
+
+HTTP MCP server with a bearer token (the common case):
+```
+export_key_to_mcp_config(
+    key_name="hermes_atlas_render",
+    server_name="render",
+    url="https://mcp.render.com/mcp",
+)
+```
+This adds to `config.yaml`:
+```yaml
+mcp_servers:
+  render:
+    url: https://mcp.render.com/mcp
+    headers:
+      Authorization: Bearer <redacted>
+```
+
+Stdio MCP server with the key in an env var:
+```
+export_key_to_mcp_config(
+    key_name="openai",
+    server_name="openai",
+    command="uvx",
+    args=["some-mcp-server"],
+    inject_as="env",
+    env_var_name="OPENAI_API_KEY",
+)
+```
+
+### Step 3: Handle the response
+- `success: true` + `action: added|replaced` → tell the user the entry was written
+  and that the agent host must be **restarted / new session** for the tools to load.
+- `backup_path` → where a pre-write copy of the config was saved (always created).
+
+## Safety options
+- `dry_run=True` — preview the action without writing anything.
+- `replace=True` — required to overwrite an existing `mcp_servers` entry;
+  without it an existing entry returns an error and the config is untouched.
+
+## What NOT to do
+- **Never read the key value** — it is never returned by this tool.
+- **Never paste the key into chat** or ask the user to — the vault already holds it.
+- **Never hand-edit the agent config** to add the key — use this tool.
+- **Never call with both `url` and `command`** — exactly one transport.
+"""
+
 # ── Build the registry ──────────────────────────────────────────────────────
 
 PROMPT_REGISTRY["how-to-login"] = {
@@ -585,4 +660,10 @@ PROMPT_REGISTRY["how-to-capture-stripe"] = {
     "name": "how-to-capture-stripe",
     "description": "Guide for capturing Stripe Projects provisioned credentials into psamvault",
     "content": _HOW_TO_CAPTURE_STRIPE.strip(),
+}
+
+PROMPT_REGISTRY["how-to-export-key-to-mcp-config"] = {
+    "name": "how-to-export-key-to-mcp-config",
+    "description": "Guide for exporting a vault API key into an agent host's MCP server config (Hermes) without exposing the key",
+    "content": _HOW_TO_EXPORT_KEY_TO_MCP_CONFIG.strip(),
 }
