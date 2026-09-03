@@ -37,6 +37,15 @@ def test_render_recipe_known_provider__returns_complete_http_recipe():
     assert recipe["auth_kind"] == "bearer"
 
 
+def test_openrouter_recipe_known_provider__returns_complete_http_recipe():
+    recipe = verify_recipes.get_verify_recipe("openrouter")
+    assert recipe is not None
+    assert recipe["url"] == "https://openrouter.ai/api/v1/auth/key"
+    assert recipe["method"] == "GET"
+    assert recipe["expect"] == 200
+    assert recipe["auth_kind"] == "bearer"
+
+
 def test_lookup_unknown_provider__returns_none():
     assert verify_recipes.get_verify_recipe("definitely-not-a-provider") is None
 
@@ -46,10 +55,11 @@ def test_lookup_case_and_whitespace__normalized_to_lowercase_stripped():
     assert verify_recipes.get_verify_recipe("  Render  ") == verify_recipes.get_verify_recipe("render")
 
 
-def test_known_providers__sorted_list_and_includes_render():
+def test_known_providers__sorted_list_and_includes_render_and_openrouter():
     known = verify_recipes.known_providers()
     assert known == sorted(known)
     assert "render" in known
+    assert "openrouter" in known
 
 
 def test_every_bundled_recipe__is_well_formed():
