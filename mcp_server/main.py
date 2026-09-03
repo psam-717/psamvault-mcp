@@ -84,6 +84,7 @@ server = Server(
         "- run_with_credential      → run a CLI command with credential injected (env/stdin)\n"
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
         "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
+        "- export_key_to_mcp_config → export a vault key into an agent MCP config (never returns the key)\n"
     ),
 )
 
@@ -157,6 +158,12 @@ _TOOL_REGISTRY: dict[str, str] = {
         "After 'stripe projects add <provider>', call this to securely store "
         "the provisioned credentials. Params: provider (required), project_dir (optional), "
         "dry_run (optional)."
+    ),
+    "export_key_to_mcp_config": (
+        "Export a vault API key directly into an agent host's MCP server config "
+        "(Hermes config.yaml mcp_servers entry). The key value is never returned. "
+        "Params: key_name (required), server_name (required), url or command, "
+        "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path."
     ),
 }
 
@@ -547,6 +554,97 @@ TOOL_DEFINITIONS = [
             "required": ["provider"],
         }
     ),
+    Tool(
+        name="export_key_to_mcp_config",
+        description=(
+            "[🔑 API Key Operations] Export a vault API key directly into an agent host's "
+            "MCP server config (Hermes config.yaml → mcp_servers.<server_name>). "
+            "The key is decrypted locally and written into the config file as an HTTP server "
+            "(url + Authorization/custom header) or stdio server (command + env var). "
+            "The key value is NEVER returned to you — only a summary with config path and "
+            "backup path. Use when the agent needs an MCP server whose auth is a vault key "
+            "(e.g. Render's hosted MCP) and the config must be provisioned without the key "
+            "ever entering chat."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "key_name": {
+                    "type": "string",
+                    "description": "Name of the vault API key to export (see list_api_keys)."
+                },
+                "server_name": {
+                    "type": "string",
+                    "description": "Name of the mcp_servers entry to add/replace, e.g. 'render'."
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": ["hermes"],
+                    "default": "hermes",
+                    "description": "Target agent host whose config to write. v1 supports 'hermes'."
+                },
+                "url": {
+                    "type": "string",
+                    "description": (
+                        "HTTP transport: MCP server URL, e.g. https://mcp.render.com/mcp. "
+                        "Provide url (HTTP) XOR command (stdio)."
+                    )
+                },
+                "inject_as": {
+                    "type": "string",
+                    "enum": ["bearer_token", "api_key_header", "env"],
+                    "default": "bearer_token",
+                    "description": (
+                        "bearer_token → headers.Authorization: Bearer <key>; "
+                        "api_key_header → headers.<header_name>: <key> (header_name required); "
+                        "env → env.<env_var_name>: <key> (env_var_name required, stdio only)."
+                    )
+                },
+                "header_name": {
+                    "type": "string",
+                    "description": "Required when inject_as='api_key_header'. Header to put the key in."
+                },
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Stdio transport: executable for the MCP server, e.g. 'uvx', 'npx'. "
+                        "Provide url (HTTP) XOR command (stdio)."
+                    )
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional args for a stdio MCP server command."
+                },
+                "env_var_name": {
+                    "type": "string",
+                    "description": "Required when inject_as='env'. Env var to set the key as."
+                },
+                "config_path": {
+                    "type": "string",
+                    "description": (
+                        "Optional explicit path to the Hermes config.yaml. "
+                        "Defaults to $HERMES_HOME/config.yaml or the platform default."
+                    )
+                },
+                "replace": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "If the mcp_servers entry already exists, error unless replace=true."
+                    )
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Preview the change and write nothing. Returns the action that would occur."
+                    )
+                },
+            },
+            "required": ["key_name", "server_name"],
+        }
+    ),
 ]
 
 
@@ -651,6 +749,22 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 extra_env=arguments.get("extra_env"),
                 workdir=arguments.get("workdir"),
                 timeout=arguments.get("timeout", 120),
+            )
+
+        elif name == "export_key_to_mcp_config":
+            result = await tools.export_key_to_mcp_config(
+                key_name=arguments["key_name"],
+                server_name=arguments["server_name"],
+                agent=arguments.get("agent", "hermes"),
+                url=arguments.get("url"),
+                inject_as=arguments.get("inject_as", "bearer_token"),
+                header_name=arguments.get("header_name"),
+                command=arguments.get("command"),
+                args=arguments.get("args"),
+                env_var_name=arguments.get("env_var_name"),
+                config_path=arguments.get("config_path"),
+                replace=arguments.get("replace", False),
+                dry_run=arguments.get("dry_run", False),
             )
 
         else:
