@@ -54,6 +54,16 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
   comes back to you.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
+- `export_key_to_mcp_config` writes the key into an agent MCP config file —
+  only a summary (paths, action) comes back to you.
+
+### Rule 8: Provision MCP servers with export_key_to_mcp_config
+When an agent host needs an MCP server whose auth is a vault API key
+(e.g. Render's hosted MCP), call
+`export_key_to_mcp_config(key_name=..., server_name=..., url=...)` to write
+the entry into `config.yaml` directly. Never ask the user to paste the key,
+never hand-edit the config, and never run the agent host's own `mcp add`
+CLI — psamvault owns the write (with backup + dry_run).
 
 ## Error handling
 
