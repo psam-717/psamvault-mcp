@@ -55,7 +55,8 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 - `export_key_to_mcp_config` writes the key into an agent MCP config file —
-  only a summary (paths, action) comes back to you.
+  only a summary (paths, action, verification status) comes back to you.
+- `verify_api_key` returns pass/fail + status only — never the key.
 
 ### Rule 8: Provision MCP servers with export_key_to_mcp_config
 When an agent host needs an MCP server whose auth is a vault API key
@@ -65,11 +66,13 @@ the entry into `config.yaml` directly. Never ask the user to paste the key,
 never hand-edit the config, and never run the agent host's own `mcp add`
 CLI — psamvault owns the write (with backup + dry_run).
 
-**Never export an unverified key.** Before exporting, prove the key works via
-`use_credential` (bearer/API keys) or `run_with_credential` (stdio/env keys)
-against a cheap read-only provider check; a failed check means stop. When
-built-in verification lands on `export_key_to_mcp_config`, it becomes
-automatic for known providers.
+**Never export an unverified key.** `export_key_to_mcp_config` auto-verifies
+HTTP exports against the provider's bundled recipe (or an explicit
+`verify_url`) and refuses to write on failure (result: `verification:
+failed`, config untouched). For providers without a recipe and for
+stdio/env exports, verify manually via `verify_api_key` /
+`use_credential` / `run_with_credential` and pass `skip_verify=true` only
+after a real check — the result records `verification: skipped` loudly.
 
 ## Error handling
 
