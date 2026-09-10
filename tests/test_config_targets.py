@@ -10,6 +10,8 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
+from pathlib import Path
+
 import pytest
 
 from mcp_server import config_targets
@@ -227,6 +229,111 @@ class TestResolveHermesConfigPath:
 
         assert path.name == "config.yaml"
         assert "hermes" in path.parts
+
+
+class TestResolveAgentEnvPath:
+    """Where does an agent host read its .env? Explicit path wins; known hosts have defaults."""
+
+    def test_hermes_uses_hermes_home(self):
+        path = config_targets.resolve_agent_env_path("hermes", env={"HERMES_HOME": "C:/Users/test/.hermes"})
+
+        assert path.name == ".env"
+        assert path.parent.name == ".hermes"
+
+    def test_explicit_env_path_wins_over_the_table(self, tmp_path):
+        explicit = tmp_path / "custom.env"
+
+        path = config_targets.resolve_agent_env_path("hermes", env_path=explicit,
+                                                     env={"HERMES_HOME": "C:/elsewhere"})
+
+        assert path == explicit
+
+    def test_unknown_agent_without_env_path_fails_closed(self):
+        with pytest.raises(ValueError) as exc:
+            config_targets.resolve_agent_env_path("groku", env={"HERMES_HOME": "C:/x"})
+
+        message = str(exc.value)
+        assert "groku" in message
+        assert "env_path" in message, "the error must tell the caller how to proceed"
+        assert "hermes" in message, "the error must list the known agents"
+
+
+class TestWriteEnvVar:
+    """Dotenv writes: idempotent update in place, append when new, backup before modifying."""
+
+    def test_appends_a_new_variable(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("EXISTING=1\n", encoding="utf-8")
+
+        result = config_targets.write_env_var(env_file, "TAVILY_API_KEY", "tvly-secret")
+
+        assert result["action"] == "appended"
+        text = env_file.read_text(encoding="utf-8")
+        assert "EXISTING=1" in text
+        assert "TAVILY_API_KEY=tvly-secret" in text
+
+    def test_updates_in_place_instead_of_duplicating(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("# comment\nTAVILY_API_KEY=old\nOTHER=2\n", encoding="utf-8")
+
+        result = config_targets.write_env_var(env_file, "TAVILY_API_KEY", "new-value")
+
+        assert result["action"] == "updated"
+        text = env_file.read_text(encoding="utf-8")
+        assert text.count("TAVILY_API_KEY=") == 1
+        assert "TAVILY_API_KEY=new-value" in text
+        assert "OTHER=2" in text
+        assert "# comment" in text
+
+    def test_export_prefix_is_recognised(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("export TAVILY_API_KEY=old\n", encoding="utf-8")
+
+        result = config_targets.write_env_var(env_file, "TAVILY_API_KEY", "new")
+
+        assert result["action"] == "updated"
+        assert env_file.read_text(encoding="utf-8").count("TAVILY_API_KEY=") == 1
+
+    def test_creates_the_file_and_parents_when_missing(self, tmp_path):
+        env_file = tmp_path / "nested" / "dir" / ".env"
+
+        result = config_targets.write_env_var(env_file, "KEY", "value")
+
+        assert result["action"] == "appended"
+        assert env_file.is_file()
+        assert result["backup_path"] is None, "nothing existed to back up"
+
+    def test_backup_is_written_before_modifying_an_existing_file(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=old\n", encoding="utf-8")
+
+        result = config_targets.write_env_var(env_file, "KEY", "new")
+
+        assert result["backup_path"]
+        assert Path(result["backup_path"]).read_text(encoding="utf-8") == "KEY=old\n"
+
+    def test_dry_run_writes_nothing(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=old\n", encoding="utf-8")
+
+        result = config_targets.write_env_var(env_file, "KEY", "new", dry_run=True)
+
+        assert result["action"] == "updated"
+        assert result["backup_path"] is None
+        assert env_file.read_text(encoding="utf-8") == "KEY=old\n"
+
+    def test_quotes_values_that_need_it_and_rejects_multiline(self, tmp_path):
+        env_file = tmp_path / ".env"
+
+        config_targets.write_env_var(env_file, "WITH_SPACE", "a b")
+        assert 'WITH_SPACE="a b"' in env_file.read_text(encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            config_targets.write_env_var(env_file, "MULTI", "line1\nline2")
+
+    def test_rejects_invalid_variable_names(self, tmp_path):
+        with pytest.raises(ValueError):
+            config_targets.write_env_var(tmp_path / ".env", "NOT-A-NAME", "x")
 
 
 class TestWriteToMissingOrEmptyConfig:
