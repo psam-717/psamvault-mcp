@@ -1,4 +1,4 @@
 """psamvault MCP server package."""
 
 # Keep in sync with pyproject.toml [project].version
-__version__ = "0.4.6"
+__version__ = "0.5.0"
