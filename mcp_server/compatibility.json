@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "updated": "2026-09-10",
+  "skill": {
+    "name": "psamvault-mcp",
+    "repo": "psam-717/private-skills",
+    "path": "psamvault-mcp/SKILL.md",
+    "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
+  },
+  "releases": [
+    {
+      "mcp": "0.5.0",
+      "skill": "1.5.0",
+      "breaking": true,
+      "added": ["export_key_to_env_file"],
+      "removed": ["capture_stripe_credentials"],
+      "notes": "export_key_to_env_file added (.env targets); capture_stripe_credentials removed. Tool count stays 13, so only the fingerprint catches this.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
+    {
+      "mcp": "0.4.6",
+      "skill": "1.2.0",
+      "breaking": false,
+      "added": ["export_key_to_mcp_config", "verify_api_key"],
+      "removed": [],
+      "notes": "Auto-verifying export gate for HTTP keys.",
+      "tools": [
+        "browser_login",
+        "capture_stripe_credentials",
+        "check_credential_exists",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    }
+  ]
+}

@@ -477,6 +477,37 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 > `skip_verify=true` cannot override it (it covers only providers that cannot be probed at all, and
 > the result then records `verification: skipped`). Invalid keys never reach a config or `.env`.
 
+## Version lockstep (MCP ↔ skill)
+
+The server and its [usage skill](https://github.com/psam-717/private-skills) are a **pinned pair**, and
+the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MCP release → the skill
+version that documents it, plus the expected tool fingerprint).
+
+```bash
+psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 target not published
+psamvault-compat --check --json             # machine-readable
+psamvault-compat --apply                    # install the target release + pull the pinned skill
+psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
+psamvault-compat --apply --from-git         # install the local repo (merged but not yet released)
+```
+
+A contract entry exists the moment a release is **merged**, before it ships — so `--apply` checks the
+index first and refuses (exit 3) rather than dying inside the resolver. Use `--from-git` for the
+merged-but-unreleased case.
+
+- **The installed server wins** — the skill is pulled to match it, never the reverse.
+- A release marked **breaking** is never applied without `--allow-breaking`: a silently disappearing
+  tool is exactly the change a human should see.
+- `get_version` reports the pairing (`compatibility.paired_skill_version`, newest release,
+  `breaking_pending`), so an agent can self-check without extra tooling.
+- A tool count alone is **not** a version check: v0.5.0 removed one tool and added another, leaving
+  the count at 13 — only the fingerprint reveals that.
+- `tests/test_compat.py` fails when the newest contract entry disagrees with the code's actual tool
+  surface, so a release that forgets to record itself cannot ship quietly.
+- `scripts/docs-sync-check.py` is the release-time **docs gate**: it fails when any doc still names a
+  tool the code dropped, claims a stale tool count, omits a tool, or disagrees with the contract.
+  Run it first in every release — a tool count alone cannot reveal a renamed or removed tool.
+
 ## Architecture
 
 The MCP server manages a single Playwright Chromium instance in-process.

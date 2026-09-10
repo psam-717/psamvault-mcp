@@ -40,6 +40,8 @@ dependencies = [
 [project.scripts]
 # Registers  psamvault-mcp  as a terminal command after pip/pipx install
 psamvault-mcp = "mcp_server.main:main"
+# MCP ↔ skill version lockstep: psamvault-compat --check | --apply
+psamvault-compat = "mcp_server.compat:main"
 
 [project.urls]
 Homepage = "https://github.com/psam-717/psamvault-mcp"

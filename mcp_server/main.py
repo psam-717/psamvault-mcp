@@ -749,6 +749,38 @@ async def handle_list_tools() -> list[Tool]:
     return TOOL_DEFINITIONS
 
 
+def _version_payload() -> dict:
+    """Version plus the skill pairing from the shipped contract (no extra tool, no session needed).
+
+    An agent can tell from this whether the installed server and its usage skill are the matching
+    pair, and whether a breaking release is pending.
+    """
+    payload: dict = {"version": _VERSION}
+    try:
+        from mcp_server import compat
+
+        contract = compat.load_contract()
+        latest = compat.latest_release(contract)
+        tools = sorted(tool.name for tool in TOOL_DEFINITIONS)
+        # Same fingerprint-aware logic as compat.check(): a git/pre-release install can carry an older
+        # version label while already exposing the newest tool surface.
+        matches_newest = tools == sorted(latest["tools"])
+        effective = latest if matches_newest else (compat.release_for(_VERSION, contract) or latest)
+        payload["compatibility"] = {
+            "paired_skill_version": effective["skill"],
+            "effective_release": effective["mcp"],
+            "newest_release": latest["mcp"],
+            "newest_release_skill_version": latest["skill"],
+            "tool_surface_matches_newest": matches_newest,
+            "breaking_pending": bool(latest.get("breaking")) and _VERSION != latest["mcp"],
+            "expected_tool_count": len(effective["tools"]),
+            "check_command": "psamvault-compat --check",
+        }
+    except Exception as exc:  # a broken contract must never break get_version
+        payload["compatibility"] = {"error": f"{type(exc).__name__}: {exc}"}
+    return payload
+
+
 # Tool call handler
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
@@ -758,7 +790,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
     """
     # ── Tools handled inline, no session check needed ─────────────────────────
     if name == "get_version":
-        return [TextContent(type="text", text=json.dumps({"version": _VERSION}))]
+        return [TextContent(type="text", text=json.dumps(_version_payload()))]
 
     if name == "search_vault_tools":
         query = (arguments.get("query") or "").lower().strip()
