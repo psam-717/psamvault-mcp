@@ -83,7 +83,6 @@ server = Server(
         "- use_credential           → make an authenticated HTTP/API request\n"
         "- run_with_credential      → run a CLI command with credential injected (env/stdin)\n"
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
-        "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
         "- export_key_to_mcp_config → export a vault key into an agent MCP config (never returns the key)\n"
         "- export_key_to_env_file    → export a vault key into an agent .env as an env var (never returns the key)\n"
         "- verify_api_key           → prove a stored vault key is valid (pass/fail + status)\n"
@@ -154,12 +153,6 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Encrypts secrets into the vault and replaces plaintext with "
         "'psamvault:KEY_NAME' placeholders. "
         "Params: project_dir (optional), patterns (optional), project_name (optional)."
-    ),
-    "capture_stripe_credentials": (
-        "Capture credentials provisioned by Stripe Projects into psamvault. "
-        "After 'stripe projects add <provider>', call this to securely store "
-        "the provisioned credentials. Params: provider (required), project_dir (optional), "
-        "dry_run (optional)."
     ),
     "export_key_to_mcp_config": (
         "Export a vault API key directly into an agent host's MCP server config "
@@ -539,37 +532,6 @@ TOOL_DEFINITIONS = [
         }
     ),
     Tool(
-        name="capture_stripe_credentials",
-        description=(
-            "[🔑 API Key Operations] Capture credentials provisioned by Stripe Projects into psamvault. "
-            "After running the 'stripe projects add <provider>' command, the provisioned "
-            "credentials land in the project's .env file. This tool runs "
-            "'stripe projects env --pull', parses the resulting .env for secrets, "
-            "encrypts them into the psamvault API key store, and replaces the "
-            "plaintext values with 'psamvault:<KEY_NAME>' placeholders. "
-            "The captured secrets can then be used with use_credential."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "provider": {
-                    "type": "string",
-                    "description": "The Stripe Projects provider name, e.g. 'neon', 'supabase', 'openrouter'"
-                },
-                "project_dir": {
-                    "type": "string",
-                    "description": "Path to the project directory. Defaults to current working directory."
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "If True, only preview what would be captured without storing anything.",
-                    "default": False,
-                }
-            },
-            "required": ["provider"],
-        }
-    ),
-    Tool(
         name="export_key_to_mcp_config",
         description=(
             "[🔑 API Key Operations] Export a vault API key directly into an agent host's "
@@ -863,13 +825,6 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await tools.scan_and_protect(
                 project_dir=arguments.get("project_dir"),
                 patterns=arguments.get("patterns"),
-            )
-
-        elif name == "capture_stripe_credentials":
-            result = await tools.capture_stripe_credentials(
-                provider=arguments["provider"],
-                project_dir=arguments.get("project_dir"),
-                dry_run=arguments.get("dry_run", False),
             )
 
         elif name == "run_with_credential":
