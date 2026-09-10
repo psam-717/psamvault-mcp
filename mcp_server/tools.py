@@ -16,8 +16,7 @@ Tools are organised into 3 groups:
 
   🔑  API Key Operations (list_api_keys, use_credential,
                            run_with_credential, scan_and_protect,
-                           capture_stripe_credentials, export_key_to_mcp_config,
-                           verify_api_key)
+                           export_key_to_mcp_config, verify_api_key)
       — all tools that deal with API keys: discover, use, inject, and protect.
 
 Key architecture note:
@@ -713,51 +712,6 @@ async def scan_and_protect(
     except Exception as e:
         logger.error("scan_and_protect failed: %s", e)
         return {"error": f"scan_and_protect failed: {e}"}
-
-
-# ── capture_stripe_credentials ─────────────────────────────────────────────
-
-
-async def capture_stripe_credentials(
-    provider: str,
-    project_dir: str | None = None,
-    dry_run: bool = False,
-) -> dict:
-    """Capture credentials provisioned by Stripe Projects into psamvault.
-
-    After an agent runs ``stripe projects add <provider>``, the provisioned
-    credentials land in the project's ``.env`` file as plaintext. This tool:
-    1. Runs ``stripe projects env --pull`` to sync fresh credentials.
-    2. Parses ``.env`` for secrets using pattern matching.
-    3. Encrypts each secret with the VEK and stores it in the psamvault
-       API key store under ``stripe/<provider>/<KEY_NAME>``.
-    4. Replaces plaintext values with ``psamvault:<KEY_NAME>`` placeholders.
-
-    Args:
-        provider:    The Stripe Projects provider, e.g. ``"neon"``,
-                     ``"supabase"``, ``"openrouter"``.
-        project_dir: Project directory (defaults to CWD).
-        dry_run:     If ``True``, only preview what would be captured.
-
-    Returns:
-        Dict with: success, provider, project_dir, env_file, captured,
-        captured_count, files_modified, errors, message, stripe_output.
-    """
-    from mcp_server.stripe_capture import capture_stripe_credentials as _capture
-
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
-
-    try:
-        result = await _capture(
-            provider=provider,
-            project_dir=project_dir or str(Path.cwd()),
-            dry_run=dry_run,
-        )
-        return result
-    except Exception as e:
-        logger.error("capture_stripe_credentials failed: %s", e)
-        return {"error": f"capture_stripe_credentials failed: {e}"}
 
 
 # ── run_with_credential tool ─────────────────────────────────────────────

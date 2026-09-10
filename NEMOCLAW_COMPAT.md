@@ -22,7 +22,6 @@ psamvault's architecture aligns naturally with NemoClaw's security model:
 | API keys in sandbox | ❌ Secrets must not enter the sandbox | ✅ Keys stored *on host*, never copied in |
 | Agent reading secrets | ❌ Agent must not see plaintext | ✅ Credential values never returned to agent |
 | Plaintext .env files | ❌ Sandbox reads expose secrets | ✅ `scan_and_protect` replaces with placeholders |
-| Stripe provisioned creds | ❌ Fresh .env = leak risk | ✅ `capture_stripe_credentials` captures immediately |
 
 ---
 
@@ -198,7 +197,6 @@ so you don't need to re-authenticate on rebuild.
 | `use_credential` | ✅ | ✅ | Key never enters agent context |
 | `browser_login` | ⚠️ Requires GUI | ⚠️ Requires GUI | No display in headless sandbox |
 | `scan_and_protect` | ✅ | ✅ | Scans `.env` in sandbox filesystem |
-| `capture_stripe_credentials` | ⚠️ Stripe CLI | ⚠️ Stripe CLI | Needs Stripe CLI installed |
 
 ### browser_login note
 `browser_login` requires a graphical display (Playwright Chromium). NemoClaw

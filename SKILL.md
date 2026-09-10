@@ -120,7 +120,6 @@ Once connected, these tools become available (prefixed `mcp_psamvault_*` in Herm
 | `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Make authenticated HTTP request | ❗ Credential stays server-side |
 | `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run CLI command with credential injected | ❗ Output redacted of credential |
 | `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
-| `capture_stripe_credentials` | `provider, project_dir, dry_run` | Capture Stripe provisioned creds | ❗ Encrypts into vault |
 | `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a vault API key into a host MCP config (e.g. Hermes `config.yaml`) — auto-verifies HTTP keys | ❗ Key value never returned |
 | `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a vault API key into an agent `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up first | ❗ Key value never returned |
 | `verify_api_key` | `key_name, verify_url (optional)` | Verify a vault API key by probing the provider's read-only endpoint | No secrets involved — key value never returned |
@@ -197,20 +196,7 @@ When the user wants to secure project secrets:
    ```
 4. **Nothing else needed** — the `.env` file now has `psamvault:KEY` placeholders and pv-dotenv resolves them at runtime
 
-### 4. Stripe Projects Integration
-
-When the user runs `stripe projects add <provider>`:
-
-1. **Call** capture_stripe_credentials:
-   ```
-   capture_stripe_credentials(provider="neon", project_dir="/path")
-   ```
-2. **Optionally dry-run first**:
-   ```
-   capture_stripe_credentials(provider="neon", dry_run=True)
-   ```
-
-### 5. Vault Discovery
+### 4. Vault Discovery
 
 When the user asks "What credentials do I have?":
 
@@ -273,7 +259,7 @@ Tell users they can say things like:
 
 - [ ] `psamvault-mcp --version` and `psamvault-mcp --help` work (pipx binary)
 - [ ] Host config uses **absolute** path to that binary + `PYTHONPATH=""`
-- [ ] Host reloaded after config change; doctor/handshake OK (14 tools in v0.4.7+)
+- [ ] Host reloaded after config change; doctor/handshake OK (13 tools in v0.5.0+)
 - [ ] `get_version()` returns a version string
 - [ ] User logged in (`psamvault login` / `psamvault whoami`)
 - [ ] `search_vault_tools("")` returns the list of tools

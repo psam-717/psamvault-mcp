@@ -212,23 +212,17 @@ Supported injection modes:
 - `api_key_header` — <header_name>: <key> (requires `header_name`)
 - `basic_auth` — Authorization: Basic base64(<key>:<key>)
 
-### Rule 4: Capture Stripe Projects credentials immediately
-After running `stripe projects add <provider>`, call
-`capture_stripe_credentials(provider="<provider>")` **immediately** to encrypt
-the provisioned credentials into psamvault and replace them with placeholders.
-This prevents the agent from reading the plaintext `.env` file.
-
-### Rule 5: Scan and protect existing projects
+### Rule 4: Scan and protect existing projects
 When working in a project directory that has `.env` files, call
 `scan_and_protect()` to detect and encrypt any exposed secrets. This is a
 one-time safety check before the agent reads any files in the project.
 
-### Rule 6: Discover first, then act
+### Rule 5: Discover first, then act
 Always call `search_vault_tools` first when you are unsure which tool to use.
 If you are unsure which sites exist, call `list_vault_sites`.
 If you are unsure whether a credential exists, call `check_credential_exists`.
 
-### Rule 7: Credential values are never returned to you
+### Rule 6: Credential values are never returned to you
 - `browser_login` fills credentials inside a browser — you never see them.
 - `use_credential` injects credentials into HTTP requests — only the response
   comes back to you.
@@ -275,11 +269,6 @@ or checking for network issues.
 If `check_credential_exists` returns `exists: false`, the site isn't in the vault.
 The user must add it via `psamvault add` before you can use it.
 
-### Stripe CLI not found
-If `capture_stripe_credentials` returns `success: false` with a message about
-Stripe CLI not found, tell the user to install the Stripe CLI from
-https://stripe.com/docs/stripe-cli and authenticate.
-
 ### scan_and_protect returns nothing found
 If `scan_and_protect` returns 0 secrets found, the project is clean —
 no action needed. If it returns `files_not_gitignored`, suggest the user
@@ -314,7 +303,6 @@ add `.env` to their `.gitignore`.
 | `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
 | `run_with_credential` | Run CLI command with credential injected | When a CLI tool needs a credential (env/stdin) |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
-| `capture_stripe_credentials` | Capture Stripe Projects credentials | **Immediately** after `stripe projects add <provider>` |
 """
 
 _HOW_TO_USE_API_CREDENTIAL = """\
@@ -328,8 +316,7 @@ locally, injects it into the HTTP request, and returns only the response.
 
 ## Prerequisites
 - The user must be logged in to psamvault (`psamvault login` in their terminal).
-- The credential must already be stored (via `psamvault add`, `scan_and_protect`,
-  or `capture_stripe_credentials`).
+- The credential must already be stored (via `psamvault add` or `scan_and_protect`).
 
 ## Tools you need (🔑 API Key Operations group)
 
@@ -461,86 +448,6 @@ errors to the user.
 The captured secrets can be used with `use_credential` by their vault name:
 `env/<filename>/<KEY_NAME>`. For example, if `OPENAI_API_KEY` was captured
 from `.env`, it's stored as `env/.env/OPENAI_API_KEY`.
-"""
-
-_HOW_TO_CAPTURE_STRIPE = """\
-# How to capture Stripe Projects provisioned credentials
-
-## Goal
-After an agent provisions infrastructure via `stripe projects add <provider>`,
-the resulting credentials (database URLs, API keys, auth tokens) land in the
-project's `.env` file as plaintext. This guide captures them into psamvault,
-encrypts them, and replaces the plaintext values with placeholders.
-
-## Prerequisites
-- The user must be logged in to psamvault (`psamvault login` in terminal).
-- The Stripe CLI must be installed, authenticated, and a Stripe project
-  must be active in the current directory.
-- The `stripe projects add <provider>` command must have already been run.
-
-## Tools you need (🔑 API Key Operations group)
-
-| Tool | Purpose | Group |
-|------|---------|-------|
-| `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
-| `capture_stripe_credentials` | Capture Stripe-provisioned credentials | 🔑 API Key Operations |
-
-## Workflow
-
-### Step 1: Run stripe projects add (already done by agent)
-The agent should have run `stripe projects add neon/postgres` or similar
-to provision a resource. This writes credentials to `.env`.
-
-### Step 2: Call capture_stripe_credentials
-Call `capture_stripe_credentials(provider="neon")` **immediately** after
-provisioning, before any other agent action reads the `.env` file.
-
-You can also pass `project_dir` if the project isn't the current directory:
-```
-capture_stripe_credentials(
-    provider="supabase",
-    project_dir="/path/to/project"
-)
-```
-
-### Step 3: Review the results
-The tool returns:
-- `success` — whether the operation succeeded
-- `captured` — list of credentials that were captured
-- `captured_count` — total captured
-- `files_modified` — which `.env` files were updated
-- `message` — human-readable summary
-
-### Step 4: Use the captured credentials
-The captured credentials are stored as `stripe/<provider>/<KEY_NAME>`.
-Use them with `use_credential`:
-```
-use_credential("stripe/neon/NEON_DATABASE_URL", ...)
-```
-
-## Dry run mode
-Call `capture_stripe_credentials(provider="neon", dry_run=True)` to preview
-what would be captured without actually modifying anything. This is useful
-for verification before making changes.
-
-## Error handling
-
-### Stripe CLI not found
-If the tool fails with "Stripe CLI not found", tell the user to install it:
-https://stripe.com/docs/stripe-cli
-
-### No .env file
-If no `.env` file is found after the pull, Stripe Projects may not have been
-initialised. The user needs to run `stripe projects use` first.
-
-### Not a Stripe project
-If the Stripe CLI exits with an error, the directory may not be a Stripe
-project. Tell the user to run `stripe projects use` in the directory.
-
-## What NOT to do
-- **Never read the plaintext `.env` file** directly — let the tool handle it.
-- **Never skip the capture step** — credentials in `.env` are a security risk.
-- **Never expose the raw credential values** in your response.
 """
 
 _HOW_TO_EXPORT_KEY_TO_MCP_CONFIG = """\
@@ -677,12 +584,6 @@ PROMPT_REGISTRY["how-to-scan-and-protect"] = {
     "name": "how-to-scan-and-protect",
     "description": "Guide for scanning project .env files for exposed secrets and protecting them with psamvault",
     "content": _HOW_TO_SCAN_AND_PROTECT.strip(),
-}
-
-PROMPT_REGISTRY["how-to-capture-stripe"] = {
-    "name": "how-to-capture-stripe",
-    "description": "Guide for capturing Stripe Projects provisioned credentials into psamvault",
-    "content": _HOW_TO_CAPTURE_STRIPE.strip(),
 }
 
 PROMPT_REGISTRY["how-to-export-key-to-mcp-config"] = {
