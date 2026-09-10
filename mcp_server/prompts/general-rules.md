@@ -56,6 +56,9 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 - `list_vault_sites` only returns site names and username hints.
 - `export_key_to_mcp_config` writes the key into an agent MCP config file —
   only a summary (paths, action, verification status) comes back to you.
+- `export_key_to_env_file` writes the key into an agent `.env` as an
+  environment variable — only a summary (path, line, action, backup) comes
+  back to you, never the value.
 - `verify_api_key` returns pass/fail + status only — never the key.
 
 ### Rule 8: Provision MCP servers with export_key_to_mcp_config
@@ -73,6 +76,19 @@ failed`, config untouched). For providers without a recipe and for
 stdio/env exports, verify manually via `verify_api_key` /
 `use_credential` / `run_with_credential` and pass `skip_verify=true` only
 after a real check — the result records `verification: skipped` loudly.
+
+### Rule 9: Put tool credentials into the agent `.env` with export_key_to_env_file
+When an agent *tool* (not an MCP server) needs a credential, it usually reads
+a dotenv file at process start — Hermes' web tools read `TAVILY_API_KEY` from
+`HERMES_HOME/.env`. Call
+`export_key_to_env_file(key_name=..., env_var_name=...)` instead of asking
+the user to paste the value or hand-editing the file. The write is idempotent
+(the variable's line is updated in place, so re-runs cannot leave duplicate
+keys that different loaders resolve differently) and a timestamped backup is
+taken first. Pass `env_path` for a host without a verified default location —
+**never** invent a path: only `agent="hermes"` has a verified `.env`, and an
+unknown host is rejected on purpose. Restart the host session afterwards (the
+`.env` is read at startup) and verify with the consumer, not the file.
 
 ## Error handling
 
@@ -138,3 +154,7 @@ add `.env` to their `.gitignore`.
 | `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
 | `capture_stripe_credentials` | Capture Stripe Projects credentials | **Immediately** after `stripe projects add <provider>` |
+| `run_with_credential` | Run a CLI command with the credential injected (env or stdin; output redacted) | For twine/docker/npm/git and any CLI needing a secret |
+| `export_key_to_mcp_config` | Write a vault key into an agent MCP config (auto-verifies) | When an agent host needs an MCP server authenticated by a vault key |
+| `export_key_to_env_file` | Write a vault key into an agent `.env` as an env var (in place, backed up) | When an agent **tool** reads its credential from a dotenv file |
+| `verify_api_key` | Probe a stored key against its provider | Before exporting, or to prove a key still works |
