@@ -1072,6 +1072,133 @@ async def export_key_to_mcp_config(
     }
 
 
+async def export_key_to_env_file(
+    key_name: str,
+    env_var_name: str,
+    agent: str = "hermes",
+    env_path: str | None = None,
+    dry_run: bool = False,
+    verify_url: str | None = None,
+    skip_verify: bool = False,
+) -> dict:
+    """Export a vault API key into an agent host's ``.env`` file as an environment variable.
+
+    Most agent *tools* read their credentials from a dotenv file rather than from MCP config
+    (Hermes' web tools read ``HERMES_HOME/.env``), so this is the path that makes a vault key usable
+    without anyone copy-pasting the plaintext. The key value is NEVER returned.
+
+    Target resolution: an explicit ``env_path`` wins; otherwise ``agent`` must have a VERIFIED
+    location (only ``hermes`` today — a guessed path would mean writing a secret where nothing
+    reads it, or where something else does).
+
+    Verification gate (same policy as ``export_key_to_mcp_config``): HTTP keys are auto-verified
+    against the provider's bundled recipe (or ``verify_url``); a key that cannot be probed requires
+    ``skip_verify=true`` as a loud acknowledgement. Failed verification blocks any write.
+
+    Write semantics: the variable's line is updated in place when it already exists (idempotent
+    re-runs, no duplicate keys), otherwise appended, with a timestamped backup before any change.
+    """
+    if not is_logged_in():
+        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+
+    try:
+        access_token = get_access_token()
+        vek = get_vek()
+        encrypted_entry = await api_client.get_api_key_entry(access_token, key_name)
+        decrypted = decrypt_api_key(
+            vek=vek,
+            encrypted_blob=encrypted_entry["encrypted_blob"],
+            iv=encrypted_entry["iv"],
+        )
+        credential_value = decrypted["api_key"]
+    except Exception as exc:
+        return {"error": f"Failed to load API key '{key_name}': {exc}"}
+
+    try:
+        target = config_targets.resolve_agent_env_path(agent=agent, env_path=env_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    async def _gate_fail(detail: str) -> dict:
+        return {
+            "success": False,
+            "verification": "failed",
+            "detail": detail,
+            "error": detail,
+            "agent": agent,
+            "variable": env_var_name,
+        }
+
+    verification: str | None = None
+    provider = str(
+        decrypted.get("service")
+        or encrypted_entry.get("service_hint")
+        or agent
+        or ""
+    )
+    recipe = verify_recipes.get_verify_recipe(provider)
+    if skip_verify:
+        verification = "skipped"
+    elif recipe is None and not verify_url:
+        return await _gate_fail(
+            f"no verify recipe for provider '{provider}' and no verify_url given; "
+            "pass verify_url=<read-only whoami endpoint> or skip_verify=true"
+        )
+    else:
+        probe_url = verify_url or recipe["url"]
+        method = recipe["method"] if recipe else "GET"
+        expect = recipe["expect"] if recipe else 200
+        auth_kind = recipe["auth_kind"] if recipe else "bearer"
+        try:
+            v_result = await verify_executor.verify_key_http(
+                credential_value,
+                url=probe_url,
+                method=method,
+                expect=expect,
+                auth_kind=auth_kind,
+                header_name=None,
+            )
+        except ValueError as exc:
+            return await _gate_fail(str(exc))
+        if not v_result["success"]:
+            return await _gate_fail(
+                f"key verification failed: {v_result['detail']} "
+                f"(error_class={v_result['error_class']}, probe={v_result['probe_url']})"
+            )
+        verification = "verified"
+
+    try:
+        written = config_targets.write_env_var(
+            target, env_var_name, credential_value, dry_run=dry_run
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except OSError as exc:
+        return {"error": f"could not write {target}: {exc}"}
+
+    logger.info(
+        "export_key_to_env_file: %s %s in %s (agent=%s, dry_run=%s)",
+        written["action"],
+        env_var_name,
+        target,
+        agent,
+        dry_run,
+    )
+    return {
+        "success": True,
+        "verification": verification,
+        "agent": agent,
+        "variable": env_var_name,
+        "action": written["action"],
+        "env_path": written["env_path"],
+        "line": written["line"],
+        "backup_path": written["backup_path"],
+        "dry_run": dry_run,
+        "credential": f"vault key '{key_name}' (redacted)",
+        "note": "Restart the agent host (new session) so tools pick up the new variable.",
+    }
+
+
 async def verify_api_key(
     key_name: str,
     verify_url: str | None = None,
