@@ -166,13 +166,13 @@ _TOOL_REGISTRY: dict[str, str] = {
         "(Hermes config.yaml mcp_servers entry). The key value is never returned. "
         "Params: key_name (required), server_name (required), url or command, "
         "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path, "
-        "verify_url (probe override), skip_verify (loud no-verify)."
+        "verify_url (probe override), skip_verify (only when no probe is possible)."
     ),
     "export_key_to_env_file": (
         "Export a vault API key into an agent host's .env file as an environment variable "
         "(default: HERMES_HOME/.env for agent='hermes'; unknown hosts need env_path). "
         "The key value is never returned. Params: key_name (required), env_var_name (required), "
-        "agent, env_path, dry_run, verify_url (probe override), skip_verify (loud no-verify)."
+        "agent, env_path, dry_run, verify_url (probe override), skip_verify (only when no probe is possible)."
     ),
     "verify_api_key": (
         "Verify a vault API key is valid by probing the provider's read-only "
@@ -670,9 +670,10 @@ TOOL_DEFINITIONS = [
                     "type": "boolean",
                     "default": False,
                     "description": (
-                        "LOUD escape hatch: export without verification. Only for providers with "
-                        "no probe (or stdio/env exports where you ran a manual check). The result "
-                        "records verification: skipped."
+                        "Loud escape hatch for providers that CANNOT be probed (or stdio/env exports "
+                        "where you ran a manual check). It never overrides a failed probe: a key the "
+                        "provider rejects is definitively invalid and the write is blocked. The result "
+                        "records verification: skipped when it applies."
                     )
                 },
             },
@@ -737,8 +738,9 @@ TOOL_DEFINITIONS = [
                     "type": "boolean",
                     "default": False,
                     "description": (
-                        "LOUD escape hatch: write without verification. Only for providers with no "
-                        "probe endpoint. The result records verification: skipped."
+                        "Loud escape hatch for providers with no probe endpoint. It never overrides a "
+                        "failed probe: a key the provider rejects is definitively invalid and the write "
+                        "is blocked. The result records verification: skipped when it applies."
                     )
                 },
             },

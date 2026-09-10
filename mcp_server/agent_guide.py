@@ -584,6 +584,9 @@ Still manual in v1:
 - **Stdio/env exports**: no command probes in v1 — run a manual check
   (e.g. `run_with_credential`) then pass `skip_verify=true` (loud;
   result records `verification: skipped`).
+- **A failed probe is FINAL**: even with `skip_verify=true`, a provider that
+  rejects the key blocks the write (`verification: failed`). `skip_verify` is
+  for providers that CANNOT be probed, not for overriding a "no".
 - **Pre-check before export**: call `verify_api_key(key_name=...)` to get
   pass/fail + status for any stored key without touching a config file.
 

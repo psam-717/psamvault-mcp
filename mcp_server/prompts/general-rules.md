@@ -76,6 +76,9 @@ failed`, config untouched). For providers without a recipe and for
 stdio/env exports, verify manually via `verify_api_key` /
 `use_credential` / `run_with_credential` and pass `skip_verify=true` only
 after a real check — the result records `verification: skipped` loudly.
+**A failed probe is final:** `skip_verify=true` never overrides a provider
+rejecting the key (that is a definitive "invalid", not an unknown), so an
+invalid key can never be written into a config or `.env`.
 
 ### Rule 9: Put tool credentials into the agent `.env` with export_key_to_env_file
 When an agent *tool* (not an MCP server) needs a credential, it usually reads
