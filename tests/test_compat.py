@@ -103,12 +103,15 @@ def test_tool_drift_distinguishes_missing_from_unexpected():
     assert report["in_sync"] is False
 
 
-def test_breaking_release_is_flagged_when_not_installed():
-    report = compat.check(
-        installed_version="0.4.6",
-        tools=list(compat.release_for("0.4.6")["tools"]),
-        skill_version="1.2.0",
-    )
+def test_breaking_release_is_flagged_when_not_installed(monkeypatch):
+    """A breaking newest release is flagged while it is not the installed version.
+
+    Built on an explicit contract fixture: the shipped contract's newest release changes every
+    release, so asserting on it makes the suite fail on every bump (it did, on 0.5.1).
+    """
+    contract = _fake_contract(latest_breaking=True)
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    report = compat.check(installed_version="0.5.0", tools=["browser_login"], skill_version="1.4.0")
     assert report["breaking_pending"] is True
     assert any("REMOVED" in f or "removed" in f for f in report["findings"])
 
@@ -166,13 +169,14 @@ def test_missing_or_malformed_skill_returns_none(tmp_path):
 def test_apply_refuses_a_breaking_target_without_the_flag(monkeypatch, capsys):
     called = []
     monkeypatch.setattr(compat, "_install", lambda *a, **k: called.append("install"))
+    monkeypatch.setattr(compat, "_install_from_git", lambda *a, **k: called.append("git"))
     monkeypatch.setattr(compat, "_sync_skill", lambda *a, **k: called.append("skill"))
-    # deterministic environment: an older, mutually consistent pair (0.4.6 + skill 1.2.0)
-    monkeypatch.setattr(compat, "installed_tools", lambda: list(compat.release_for("0.4.6")["tools"]))
-    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.2.0")
-    latest = compat.latest_release()
-    assert latest["breaking"] is True
-    rc = compat.main(["--apply", "--installed-version", "0.4.6"])
+    # explicit fixture: an older installed version, a breaking newest release
+    contract = _fake_contract(latest_breaking=True)
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+
+    rc = compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
     assert rc == 2
     assert called == [], "a breaking target must not be installed"
