@@ -1,8 +1,12 @@
 """Cron detector: is the installed psamvault MCP paired with its matching skill version?
 
-Silent when in sync (a cron job must stay quiet), prints a drift report and exits 1 when the pair
-needs attention. The contract ships inside the installed package, so this needs no network and no
-agent session. Cron-env safe: .py only, absolute interpreter, cleared PYTHONPATH.
+STDOUT IS THE SIGNAL, and the exit code is always 0: this script is used as a cron `monitor` source,
+where the engine hashes stdout to decide whether to wake the agent — a non-zero exit is treated as a
+script FAILURE, not as "something changed". Empty stdout = in sync (the agent is not woken). A drift
+report or an error report = changed output (the agent is woken with the diff).
+
+The `psamvault-compat` CLI keeps real exit codes (0/1/2) for humans and other tooling; this wrapper
+deliberately does not. Cron-env safe: .py only, absolute interpreter, cleared PYTHONPATH.
 
 Installed copy: ``$HERMES_HOME/scripts/psamvault-compat-check.py`` (this file is the source of truth).
 """
@@ -32,6 +36,7 @@ def run(python_exe: str) -> subprocess.CompletedProcess:
 
 
 def main() -> int:
+    """Always returns 0 — stdout carries the signal (see the module docstring)."""
     for python_exe in (VENV_PYTHON, FALLBACK_PYTHON):
         if not os.path.isfile(python_exe):
             continue
@@ -39,18 +44,18 @@ def main() -> int:
             proc = run(python_exe)
         except Exception as exc:  # noqa: BLE001 — a hung probe must not wedge the cron tick
             print(json.dumps({"psamvault_compat": "probe failed", "error": f"{type(exc).__name__}: {exc}"}))
-            return 1
+            return 0
         if not proc.stdout.strip():
             print(json.dumps({"psamvault_compat": "no output", "stderr": proc.stderr[-500:]}))
-            return 1
+            return 0
         try:
             report = json.loads(proc.stdout)
         except json.JSONDecodeError:
             print(json.dumps({"psamvault_compat": "unparseable output", "stdout": proc.stdout[-500:]}))
-            return 1
+            return 0
 
         if report.get("exit_code") == 0:
-            return 0  # in sync — stay silent
+            return 0  # in sync — print nothing, so the monitor sees no change
 
         print(json.dumps({
             "psamvault_compat": "DRIFT",
@@ -64,9 +69,9 @@ def main() -> int:
             "apply_command": "psamvault-compat --apply"
             + (" --allow-breaking" if report.get("breaking_pending") else ""),
         }, indent=2))
-        return 1
+        return 0
     print(json.dumps({"psamvault_compat": "no python found", "tried": [VENV_PYTHON, FALLBACK_PYTHON]}))
-    return 1
+    return 0
 
 
 if __name__ == "__main__":

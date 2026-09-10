@@ -1,7 +1,9 @@
 """Tests for the cron detector script (silence when in sync, a report when not).
 
 A cron detector that talks when nothing is wrong is worse than no detector: the agent job wakes,
-spends tokens, and reports noise. These tests pin that contract.
+spends tokens, and reports noise. Just as important, the script must ALWAYS exit 0 — the cron engine
+treats a non-zero exit as a script FAILURE, while the change-detection signal is stdout, so an exit 1
+on drift marks a healthy detector as broken.
 """
 
 import importlib.util
@@ -38,7 +40,7 @@ def test_reports_drift_with_the_apply_command(monkeypatch, capsys):
         ' "expected_skill": "1.4.0", "tool_drift": {"missing": [], "unexpected": []},'
         ' "breaking_pending": true, "findings": ["x"]}'
     ))
-    assert detector.main() == 1
+    assert detector.main() == 0, "the exit code must stay 0 — stdout is the signal, not the status"
     out = capsys.readouterr().out
     assert "DRIFT" in out and "0.5.0" in out
     assert "--allow-breaking" in out, "a breaking target must be flagged for the human"
@@ -47,11 +49,11 @@ def test_reports_drift_with_the_apply_command(monkeypatch, capsys):
 def test_unparseable_output_is_reported_not_crashed(monkeypatch, capsys):
     monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
     monkeypatch.setattr(detector, "run", _fake_probe("not json at all"))
-    assert detector.main() == 1
+    assert detector.main() == 0
     assert "unparseable" in capsys.readouterr().out
 
 
 def test_no_interpreter_found_is_reported(monkeypatch, capsys):
     monkeypatch.setattr(detector.os.path, "isfile", lambda path: False)
-    assert detector.main() == 1
+    assert detector.main() == 0
     assert "no python found" in capsys.readouterr().out
