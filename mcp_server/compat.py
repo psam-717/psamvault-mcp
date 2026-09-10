@@ -216,6 +216,32 @@ def _install(target_version: str) -> dict:
     return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
 
 
+def _install_from_git() -> dict:
+    """Install the repo's current code — the normal path for a merged-but-unreleased version."""
+    repo = os.environ.get("PSAMVAULT_MCP_REPO") or "D:/Projects/py-projects/psamvault-mcp"
+    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), repo]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
+
+
+def target_is_published(version: str, timeout: float = 20.0) -> bool | None:
+    """Is this version actually on PyPI? None when the index can't be reached.
+
+    Without this check, applying a contract entry for a not-yet-published release fails deep inside
+    the resolver with an opaque "no version of psamvault-mcp==X" error — which is exactly the state a
+    contract entry creates between "merged" and "released".
+    """
+    try:
+        import httpx
+
+        response = httpx.get(f"https://pypi.org/pypi/psamvault-mcp/json", timeout=timeout)
+        if response.status_code != 200:
+            return None
+        return version in (response.json().get("releases") or {})
+    except Exception:
+        return None
+
+
 def _skill_blob_for_version(skill_version: str, entry: dict) -> str | None:
     """Fetch the skill text whose frontmatter matches a version, from the clone's history."""
     repo, rel = clone_path(), load_contract()["skill"]["path"]
@@ -258,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="report drift (default)")
     parser.add_argument("--apply", action="store_true", help="install the target release and sync the skill")
     parser.add_argument("--allow-breaking", action="store_true", help="permit applying a breaking release")
+    parser.add_argument(
+        "--from-git",
+        action="store_true",
+        help="install the local repo instead of PyPI (for a merged-but-unreleased target)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--installed-version", default=None, help="override the detected version (diagnostics)")
     parser.add_argument("--skill-path", default=None, help="override the installed skill path (diagnostics)")
@@ -279,8 +310,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     entry = latest_release()
-    installed = _install(entry["mcp"])
-    print(f"install psamvault-mcp=={entry['mcp']}: {'ok' if installed['ok'] else 'FAILED'}")
+    if args.from_git:
+        installed = _install_from_git()
+        print(f"install psamvault-mcp from the local repo: {'ok' if installed['ok'] else 'FAILED'}")
+    else:
+        published = target_is_published(entry["mcp"])
+        if published is False:
+            print(
+                f"refusing: {entry['mcp']} is not published on PyPI yet, so applying would fail in the "
+                f"resolver (the contract entry exists the moment a release is merged, before it ships). "
+                f"Publish it first, or pass --from-git to install the local repo."
+            )
+            return 3
+        if published is None:
+            print("warning: could not reach PyPI to confirm the target is published — attempting anyway")
+        installed = _install(entry["mcp"])
+        print(f"install psamvault-mcp=={entry['mcp']}: {'ok' if installed['ok'] else 'FAILED'}")
     if not installed["ok"]:
         print(installed["stderr"] or installed["stdout"])
         return 1

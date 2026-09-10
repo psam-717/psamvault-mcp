@@ -157,11 +157,69 @@ def test_apply_refuses_a_breaking_target_without_the_flag(monkeypatch, capsys):
     assert "allow-breaking" in out
 
 
+def _fake_contract(latest_breaking: bool = False) -> dict:
+    """A two-entry contract: installed 0.5.0, newest 0.6.0 (skill 1.5.0)."""
+    real_skill = compat.load_contract()["skill"]
+    return {
+        "schema": 1,
+        "skill": real_skill,
+        "releases": [
+            {"mcp": "0.6.0", "skill": "1.5.0", "breaking": latest_breaking, "added": ["browser_login"],
+             "removed": [], "tools": ["browser_login"]},
+            {"mcp": "0.5.0", "skill": "1.4.0", "breaking": False, "added": [], "removed": [],
+             "tools": ["browser_login"]},
+        ],
+    }
+
+
+def _offline(monkeypatch):
+    monkeypatch.setattr(compat, "installed_tools", lambda: ["browser_login"])
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.4.0")
+
+
+def test_apply_refuses_when_the_target_is_not_published_yet(monkeypatch, capsys):
+    """A contract entry exists as soon as a release is merged — before it ships. Say so clearly
+    instead of letting the resolver produce an opaque 'no version of psamvault-mcp==X'."""
+    called = []
+    monkeypatch.setattr(compat, "_install", lambda v: (called.append("install"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install_from_git", lambda: (called.append("git"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "target_is_published", lambda v: False)
+    contract = _fake_contract()  # built BEFORE load_contract is patched (else it recurses)
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+
+    rc = compat.main(["--apply", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert rc == 3, out
+    assert called == [], "nothing may be installed when the target is not on the index"
+    assert "not published" in out and "--from-git" in out
+
+
+def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(compat, "_install", lambda v: (calls.append("pypi"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("git"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+
+    def _boom(version):
+        raise AssertionError("--from-git must not consult PyPI")
+
+    monkeypatch.setattr(compat, "target_is_published", _boom)
+    contract = _fake_contract()  # built BEFORE load_contract is patched (else it recurses)
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+
+    compat.main(["--apply", "--from-git", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert "git" in calls and "pypi" not in calls, out
+
+
 def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
     """An older pair + a newer non-breaking release → install it and pull the pinned skill."""
     calls = []
     monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append(("skill", e["skill"])), {"ok": True})[1])
+    monkeypatch.setattr(compat, "target_is_published", lambda v: True)  # keep the suite offline
     monkeypatch.setattr(compat, "installed_tools", lambda: ["browser_login"])
     monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.4.0")
     real_skill = compat.load_contract()["skill"]
