@@ -199,22 +199,44 @@ def _offline(monkeypatch):
     monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.4.0")
 
 
-def test_apply_refuses_when_the_target_is_not_published_yet(monkeypatch, capsys):
-    """A contract entry exists as soon as a release is merged — before it ships. Say so clearly
-    instead of letting the resolver produce an opaque 'no version of psamvault-mcp==X'."""
-    called = []
-    monkeypatch.setattr(compat, "_install", lambda v: (called.append("install"), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_install_from_git", lambda: (called.append("git"), {"ok": True})[1])
+def test_apply_explains_a_target_missing_from_the_index(monkeypatch, capsys):
+    """The index check is ADVISORY: the install is attempted and only a real failure explains itself.
+
+    PyPI's JSON API lags an upload, so refusing up front produced a false "not published yet" right
+    after a release (seen live with 0.5.1).
+    """
+    calls = []
+    monkeypatch.setattr(compat, "_install", lambda v: (
+        calls.append(("install", v)), {"ok": False, "stdout": "resolver said no", "stderr": ""})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda *a, **k: calls.append("skill"))
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)
-    contract = _fake_contract()  # built BEFORE load_contract is patched (else it recurses)
+    contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)
 
     rc = compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
     assert rc == 3, out
-    assert called == [], "nothing may be installed when the target is not on the index"
-    assert "not published" in out and "--from-git" in out
+    assert ("install", "0.6.0") in calls, "the install must be attempted — the index check is advisory"
+    assert "skill" not in calls
+    assert "not listed on PyPI" in out and "--from-git" in out
+
+
+def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeypatch, capsys):
+    """Regression for the live 0.5.1 bug: JSON API lagging must not block the repair."""
+    calls = []
+    monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append(("skill", e["skill"])), {"ok": True})[1])
+    monkeypatch.setattr(compat, "target_is_published", lambda v: False)  # index has not caught up
+    contract = _fake_contract()
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.5.0")
+
+    rc = compat.main(["--apply", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert ("skill", "1.5.0") in calls, "a lagging index must not block the repair"
 
 
 def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):

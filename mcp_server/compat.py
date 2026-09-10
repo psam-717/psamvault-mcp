@@ -317,25 +317,30 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     entry = latest_release()
+    published: bool | None = None
     if args.from_git:
         installed = _install_from_git()
         print(f"install psamvault-mcp from the local repo: {'ok' if installed['ok'] else 'FAILED'}")
     else:
+        # The index pre-check is ADVISORY only. PyPI's JSON API lags an upload (CDN cache), so
+        # refusing on it produces a false "not published yet" in exactly the publish-then-apply
+        # window this command exists for. Attempt the install (--refresh makes it authoritative)
+        # and use the index state only to explain a real failure.
         published = target_is_published(entry["mcp"])
-        if published is False:
-            print(
-                f"refusing: {entry['mcp']} is not published on PyPI yet, so applying would fail in the "
-                f"resolver (the contract entry exists the moment a release is merged, before it ships). "
-                f"Publish it first, or pass --from-git to install the local repo."
-            )
-            return 3
-        if published is None:
-            print("warning: could not reach PyPI to confirm the target is published — attempting anyway")
         installed = _install(entry["mcp"])
         print(f"install psamvault-mcp=={entry['mcp']}: {'ok' if installed['ok'] else 'FAILED'}")
     if not installed["ok"]:
         print(installed["stderr"] or installed["stdout"])
+        if published is False:
+            print(
+                f"refusing: {entry['mcp']} is not listed on PyPI, so applying failed in the resolver "
+                f"(a contract entry exists the moment a release is merged, before it ships). "
+                f"Publish it first, or pass --from-git to install the local repo."
+            )
+            return 3
         return 1
+    if published is None and not args.from_git:
+        print("note: could not reach PyPI to confirm the target is published (install succeeded regardless)")
     synced = _sync_skill(entry)
     print(f"skill -> {entry['skill']}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
 
