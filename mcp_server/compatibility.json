@@ -10,7 +10,7 @@
   "releases": [
     {
       "mcp": "0.5.0",
-      "skill": "1.5.0",
+      "skill": "1.6.0",
       "breaking": true,
       "added": ["export_key_to_env_file"],
       "removed": ["capture_stripe_credentials"],
