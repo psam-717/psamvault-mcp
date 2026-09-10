@@ -100,10 +100,18 @@ def write_hermes_mcp_server(
     """
     spec.validate()
 
-    text = config_path.read_text(encoding="utf-8")
+    # A target that does not exist yet (scratch config, first-time install) is a legitimate
+    # destination: treat it as an empty config instead of failing on the read. The same goes for a
+    # file that exists but is empty — yaml.load("") returns None, which used to blow up as
+    # "'NoneType' object has no attribute 'get'".
+    text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
     yaml = YAML()
     yaml.preserve_quotes = True
-    data = yaml.load(text)
+    data = yaml.load(text) if text.strip() else None
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("config root is not a mapping")
 
     servers = data.get("mcp_servers")
     if servers is None:
@@ -130,12 +138,16 @@ def write_hermes_mcp_server(
             "server_name": spec.name,
         }
 
-    # Timestamped backup BEFORE any write so a bad edit is always recoverable.
-    backup_path = config_path.with_name(
-        f"{config_path.name}.bak-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-    )
-    backup_path.write_text(text, encoding="utf-8")
+    # Timestamped backup BEFORE any write so a bad edit is always recoverable. Nothing to back up
+    # when the target is new/empty — report None rather than leaving an empty .bak behind.
+    backup_path: Path | None = None
+    if text:
+        backup_path = config_path.with_name(
+            f"{config_path.name}.bak-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        )
+        backup_path.write_text(text, encoding="utf-8")
 
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
         yaml.dump(data, f)
 
@@ -144,11 +156,11 @@ def write_hermes_mcp_server(
         action,
         spec.name,
         config_path,
-        backup_path.name,
+        backup_path.name if backup_path else "none (new file)",
     )
     return {
         "action": action,
         "config_path": str(config_path),
-        "backup_path": str(backup_path),
+        "backup_path": str(backup_path) if backup_path else None,
         "server_name": spec.name,
     }

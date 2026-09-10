@@ -229,6 +229,51 @@ class TestResolveHermesConfigPath:
         assert "hermes" in path.parts
 
 
+class TestWriteToMissingOrEmptyConfig:
+    """A destination that does not exist yet, or is empty, is a legitimate target.
+
+    Covers a scratch path passed via ``config_path`` and a freshly installed agent whose
+    config.yaml exists but has no content yet. Both used to fail: ``FileNotFoundError`` on the
+    read, and ``AttributeError: 'NoneType' object has no attribute 'get'`` on the empty file.
+    """
+
+    @staticmethod
+    def _spec():
+        return config_targets.ServerSpec(
+            name="render",
+            url="https://mcp.render.com/mcp",
+            headers={"Authorization": "Bearer rnd_secret123"},
+        )
+
+    def test_creates_the_file_when_the_target_does_not_exist(self, tmp_path):
+        cfg = tmp_path / "new-config.yaml"  # deliberately never created
+
+        result = config_targets.write_hermes_mcp_server(config_path=cfg, spec=self._spec())
+
+        assert result["action"] == "added"
+        assert cfg.is_file(), "a missing target config should be created, not rejected"
+        text = cfg.read_text(encoding="utf-8")
+        assert "mcp_servers:" in text
+        assert "render:" in text
+        assert result["backup_path"] is None, "nothing existed to back up"
+
+    def test_empty_config_file_is_treated_as_an_empty_mapping(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("", encoding="utf-8")
+
+        result = config_targets.write_hermes_mcp_server(config_path=cfg, spec=self._spec())
+
+        assert result["action"] == "added"
+        assert "render:" in cfg.read_text(encoding="utf-8")
+
+    def test_creates_missing_parent_directories(self, tmp_path):
+        cfg = tmp_path / "nested" / "deeper" / "config.yaml"
+
+        config_targets.write_hermes_mcp_server(config_path=cfg, spec=self._spec())
+
+        assert cfg.is_file()
+
+
 
 
 
