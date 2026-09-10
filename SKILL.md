@@ -204,6 +204,13 @@ When the user asks "What credentials do I have?":
 2. **For each site**, optionally `get_username_for_site(site_name)` to show usernames
 3. Present the information as a clean list to the user
 
+## Version lockstep
+
+`mcp_server/compatibility.json` ships in the wheel and pins the skill version per MCP release plus the
+expected tool fingerprint. Verify with `psamvault-compat --check`; repair with
+`psamvault-compat --apply` (a release marked `breaking` needs `--allow-breaking`). The installed
+server is authoritative — pull the skill to match it, never the reverse. See PLAN_version_lockstep.md.
+
 ## Common Agent Prompts (for the user)
 
 Tell users they can say things like:
