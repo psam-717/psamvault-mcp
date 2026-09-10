@@ -210,8 +210,15 @@ def clone_path() -> Path:
 
 
 def _install(target_version: str) -> dict:
-    """Install the target release into the pipx venv (uv, WITH deps — --no-deps drops tools)."""
-    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), f"psamvault-mcp=={target_version}"]
+    """Install the target release into the pipx venv (uv, WITH deps — --no-deps drops tools).
+
+    ``--refresh`` is deliberate: PyPI's simple index answers with ``cache-control: max-age=600``, so
+    right after a release is published uv's cached metadata can still claim the version does not
+    exist — the exact "publish, then immediately apply" sequence this command exists for.
+    """
+    cmd = [
+        "uv", "pip", "install", "--python", str(pipx_python()), "--refresh", f"psamvault-mcp=={target_version}"
+    ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
 
