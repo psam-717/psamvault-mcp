@@ -484,11 +484,16 @@ the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MC
 version that documents it, plus the expected tool fingerprint).
 
 ```bash
-psamvault-compat --check              # exit 0 in sync, 1 drift, 2 refused
-psamvault-compat --check --json       # machine-readable
-psamvault-compat --apply              # install the target release + pull the pinned skill
+psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 target not published
+psamvault-compat --check --json             # machine-readable
+psamvault-compat --apply                    # install the target release + pull the pinned skill
 psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
+psamvault-compat --apply --from-git         # install the local repo (merged but not yet released)
 ```
+
+A contract entry exists the moment a release is **merged**, before it ships — so `--apply` checks the
+index first and refuses (exit 3) rather than dying inside the resolver. Use `--from-git` for the
+merged-but-unreleased case.
 
 - **The installed server wins** — the skill is pulled to match it, never the reverse.
 - A release marked **breaking** is never applied without `--allow-breaking`: a silently disappearing

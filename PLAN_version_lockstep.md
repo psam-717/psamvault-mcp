@@ -75,10 +75,14 @@ Exit codes: `0` in sync, `1` drift found (a cron detector can branch on this wit
 1. Resolve the target release (contract's latest).
 2. If the target is marked `breaking` and the installed version differs → **refuse and print what
    changed**, unless `--allow-breaking` is passed.
-3. Install the target into the pipx venv (uv, with deps — never `--no-deps`).
-4. Pull the skill pinned to the target (`git` lookup in the private-skills clone by frontmatter
+3. Confirm the target exists **on the index** — a contract entry is created when a release is merged,
+   which is before it ships, so applying early otherwise fails deep in the resolver with an opaque
+   `no version of psamvault-mcp==X`. Refuse with exit `3` and name the fix (publish first, or
+   `--from-git` for a merged-but-unreleased target).
+4. Install the target into the pipx venv (uv, with deps — never `--no-deps`).
+5. Pull the skill pinned to the target (`git` lookup in the private-skills clone by frontmatter
    version) and write it to `HERMES_HOME/skills/psam-custom/psamvault-mcp/SKILL.md`.
-5. Re-verify (version + tool fingerprint + skill version) and report, including
+6. Re-verify (version + tool fingerprint + skill version) and report, including
    "restart the gateway/session so the running server picks it up".
 
 ### 4. Cron
