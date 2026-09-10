@@ -565,6 +565,7 @@ the agent host's config WITHOUT the key ever entering chat or your context.
 | `list_api_keys` | Find the exact vault key name to export | 🔑 API Key Operations |
 | `verify_api_key` | Pre-check any stored key (pass/fail + status) | 🔑 API Key Operations |
 | `export_key_to_mcp_config` | Write the key into the agent MCP config (auto-verifies) | 🔑 API Key Operations |
+| `export_key_to_env_file` | Write the key into the agent `.env` as an env var (default `HERMES_HOME/.env`) | 🔑 API Key Operations |
 
 ## Workflow
 
