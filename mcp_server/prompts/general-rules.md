@@ -32,23 +32,17 @@ Supported injection modes:
 - `api_key_header` — <header_name>: <key> (requires `header_name`)
 - `basic_auth` — Authorization: Basic base64(<key>:<key>)
 
-### Rule 4: Capture Stripe Projects credentials immediately
-After running `stripe projects add <provider>`, call
-`capture_stripe_credentials(provider="<provider>")` **immediately** to encrypt
-the provisioned credentials into psamvault and replace them with placeholders.
-This prevents the agent from reading the plaintext `.env` file.
-
-### Rule 5: Scan and protect existing projects
+### Rule 4: Scan and protect existing projects
 When working in a project directory that has `.env` files, call
 `scan_and_protect()` to detect and encrypt any exposed secrets. This is a
 one-time safety check before the agent reads any files in the project.
 
-### Rule 6: Discover first, then act
+### Rule 5: Discover first, then act
 Always call `search_vault_tools` first when you are unsure which tool to use.
 If you are unsure which sites exist, call `list_vault_sites`.
 If you are unsure whether a credential exists, call `check_credential_exists`.
 
-### Rule 7: Credential values are never returned to you
+### Rule 6: Credential values are never returned to you
 - `browser_login` fills credentials inside a browser — you never see them.
 - `use_credential` injects credentials into HTTP requests — only the response
   comes back to you.
@@ -61,7 +55,7 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
   back to you, never the value.
 - `verify_api_key` returns pass/fail + status only — never the key.
 
-### Rule 8: Provision MCP servers with export_key_to_mcp_config
+### Rule 7: Provision MCP servers with export_key_to_mcp_config
 When an agent host needs an MCP server whose auth is a vault API key
 (e.g. Render's hosted MCP), call
 `export_key_to_mcp_config(key_name=..., server_name=..., url=...)` to write
@@ -80,7 +74,7 @@ after a real check — the result records `verification: skipped` loudly.
 rejecting the key (that is a definitive "invalid", not an unknown), so an
 invalid key can never be written into a config or `.env`.
 
-### Rule 9: Put tool credentials into the agent `.env` with export_key_to_env_file
+### Rule 8: Put tool credentials into the agent `.env` with export_key_to_env_file
 When an agent *tool* (not an MCP server) needs a credential, it usually reads
 a dotenv file at process start — Hermes' web tools read `TAVILY_API_KEY` from
 `HERMES_HOME/.env`. Call
@@ -133,11 +127,6 @@ or checking for network issues.
 If `check_credential_exists` returns `exists: false`, the site isn't in the vault.
 The user must add it via `psamvault add` before you can use it.
 
-### Stripe CLI not found
-If `capture_stripe_credentials` returns `success: false` with a message about
-Stripe CLI not found, tell the user to install the Stripe CLI from
-https://stripe.com/docs/stripe-cli and authenticate.
-
 ### scan_and_protect returns nothing found
 If `scan_and_protect` returns 0 secrets found, the project is clean —
 no action needed. If it returns `files_not_gitignored`, suggest the user
@@ -156,7 +145,6 @@ add `.env` to their `.gitignore`.
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
 | `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
-| `capture_stripe_credentials` | Capture Stripe Projects credentials | **Immediately** after `stripe projects add <provider>` |
 | `run_with_credential` | Run a CLI command with the credential injected (env or stdin; output redacted) | For twine/docker/npm/git and any CLI needing a secret |
 | `export_key_to_mcp_config` | Write a vault key into an agent MCP config (auto-verifies) | When an agent host needs an MCP server authenticated by a vault key |
 | `export_key_to_env_file` | Write a vault key into an agent `.env` as an env var (in place, backed up) | When an agent **tool** reads its credential from a dotenv file |
