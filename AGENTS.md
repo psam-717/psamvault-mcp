@@ -39,7 +39,6 @@ Also see [docs/troubleshooting/PYTHONPATH-CONFLICT.md](docs/troubleshooting/PYTH
 | `how-to-get-username` | Guide for retrieving a stored username |
 | `how-to-use-api-credential` | Guide for making authenticated HTTP requests |
 | `how-to-scan-and-protect` | Guide for scanning and protecting `.env` secrets |
-| `how-to-capture-stripe` | Guide for capturing Stripe Projects credentials |
 | `how-to-export-key-to-mcp-config` | Guide for exporting a vault key into an agent's MCP config |
 | `general-rules` | Security rules, error handling, and full tool reference |
 
@@ -76,7 +75,6 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | `use_credential` | Make authenticated HTTP request — only the response is returned |
 | `run_with_credential` | Run a CLI command with credential injected via env var or stdin |
 | `scan_and_protect` | Encrypt project `.env` secrets into psamvault |
-| `capture_stripe_credentials` | Capture credentials from Stripe Projects |
 | `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — auto-verifies, key never returned |
 | `export_key_to_env_file` | Export a vault API key into an agent's `.env` as an env var (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
 | `verify_api_key` | Verify a stored vault key is valid (pass/fail + status) |
