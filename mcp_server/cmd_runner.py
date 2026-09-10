@@ -12,8 +12,12 @@ psamvault CLI itself (``psamvault get``, ``psamvault show``,
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
+import signal
+import subprocess
+import tempfile
 from typing import Optional
 
 # Commands that are blocked from run_with_credential because they
@@ -123,28 +127,44 @@ async def run_command_with_credential(
             "error": f"Unknown inject_as mode: '{inject_as}'. Use 'env' or 'stdin'.",
         }
 
-    # Run the command
+    # Run the command. Output goes to FILES, never pipes: a launcher that spawns a long-lived
+    # grandchild (uv-tool .exe shims do exactly this — ``twine.exe`` → python) hands that grandchild
+    # the pipe handles, so ``communicate()`` keeps waiting for EOF long after the command itself has
+    # finished: the caller got "timed out" with empty output for work that actually succeeded, and
+    # the still-running process was abandoned. Files have no EOF to wait on, so the deadline
+    # measures the COMMAND, not its descendants.
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdin=asyncio.subprocess.PIPE if stdin_data is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            cwd=workdir,
-        )
-
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(input=stdin_data),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        return {
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": f"Command timed out after {timeout}s",
-            "error": "timeout",
-        }
+        with tempfile.TemporaryDirectory(prefix="psamvault-run-",
+                                         ignore_cleanup_errors=True) as tmp:
+            out_path = os.path.join(tmp, "stdout")
+            err_path = os.path.join(tmp, "stderr")
+            in_path = os.path.join(tmp, "stdin") if stdin_data is not None else None
+            if in_path:
+                with open(in_path, "wb") as fh:
+                    fh.write(stdin_data)
+            stdin_ctx = open(in_path, "rb") if in_path else contextlib.nullcontext(None)
+            with open(out_path, "wb") as out_f, open(err_path, "wb") as err_f, stdin_ctx as in_f:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdin=in_f,
+                    stdout=out_f,
+                    stderr=err_f,
+                    env=env,
+                    cwd=workdir,
+                    # POSIX: own process group so a timeout can kill the whole tree.
+                    start_new_session=(os.name != "nt"),
+                )
+                timed_out = False
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    # Kill the tree, not just the launcher: the real worker is usually a grandchild.
+                    _kill_process_tree(proc.pid)
+                    with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
+                        await asyncio.wait_for(proc.wait(), timeout=15)
+            stdout_text = _redact(_read_output_file(out_path), credential_value)
+            stderr_text = _redact(_read_output_file(err_path), credential_value)
     except Exception as e:
         return {
             "exit_code": -1,
@@ -153,22 +173,50 @@ async def run_command_with_credential(
             "error": str(e),
         }
 
-    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-
-    # Redact the credential value from all output
-    if credential_value:
-        stdout_text = stdout_text.replace(credential_value, "[REDACTED]")
-        stderr_text = stderr_text.replace(credential_value, "[REDACTED]")
-
-        # Also redact first 8 chars (common partial leak pattern)
-        if len(credential_value) > 8:
-            prefix = credential_value[:8]
-            stdout_text = stdout_text.replace(prefix, "[REDACTED]")
-            stderr_text = stderr_text.replace(prefix, "[REDACTED]")
+    if timed_out:
+        # Hand back whatever the command managed to print — a partial result is evidence, an empty
+        # string is not. The credential is already redacted above.
+        return {
+            "exit_code": -1,
+            "stdout": stdout_text,
+            "stderr": stderr_text or f"Command timed out after {timeout}s",
+            "error": "timeout",
+            "timed_out": True,
+        }
 
     return {
         "exit_code": proc.returncode or 0,
         "stdout": stdout_text,
         "stderr": stderr_text,
     }
+
+
+def _read_output_file(path: str) -> str:
+    """Decoded contents of a captured-output file (empty string when it could not be read)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _redact(text: str, credential_value: str) -> str:
+    """Replace the credential (and its 8-char prefix) so it can never reach the caller."""
+    if not credential_value or not text:
+        return text
+    text = text.replace(credential_value, "[REDACTED]")
+    if len(credential_value) > 8:
+        text = text.replace(credential_value[:8], "[REDACTED]")
+    return text
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Kill a child AND everything it spawned (best effort)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=30)
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:
+        pass
