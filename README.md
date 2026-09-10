@@ -504,6 +504,9 @@ merged-but-unreleased case.
   the count at 13 — only the fingerprint reveals that.
 - `tests/test_compat.py` fails when the newest contract entry disagrees with the code's actual tool
   surface, so a release that forgets to record itself cannot ship quietly.
+- `scripts/docs-sync-check.py` is the release-time **docs gate**: it fails when any doc still names a
+  tool the code dropped, claims a stale tool count, omits a tool, or disagrees with the contract.
+  Run it first in every release — a tool count alone cannot reveal a renamed or removed tool.
 
 ## Architecture
 
