@@ -43,9 +43,14 @@ Tools are grouped into three categories. Always start in **Entry & Orientation**
 | **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
 | **`capture_stripe_credentials`** | Captures provisioned credentials from `stripe projects add <provider>` into psamvault |
 | **`export_key_to_mcp_config`** | Exports a vault API key directly into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before writing |
+| **`export_key_to_env_file`** | Exports a vault API key into an agent's `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
 | **`verify_api_key`** | Verifies a stored API key is valid against its provider's API — returns status, provider, and verification result |
 
 > **New in v0.4.6:** `export_key_to_mcp_config`, `verify_api_key`, and the auto-verifying export gate (verified-before-write for HTTP keys).
+
+> **New in v0.4.7:** `export_key_to_env_file` — put a vault key into an agent `.env` as an environment
+> variable (default `HERMES_HOME/.env`, explicit `env_path` for other hosts), updating in place with a
+> timestamped backup.
 >
 > **New in v0.4.0:** `use_credential`, `run_with_credential`, `scan_and_protect`, `capture_stripe_credentials`, `list_api_keys`, single-process browser architecture (no fragile subprocess daemon), auto-restart on crash.
 
@@ -463,7 +468,13 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
 | `capture_stripe_credentials` | Capture provisioned credentials from `stripe projects add <provider>` into psamvault |
 | `export_key_to_mcp_config` | Export a vault API key into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before write, with `skip_verify` / `verify_url` overrides |
+| `export_key_to_env_file` | Export a vault API key into an agent `.env` as a variable (`agent="hermes"` → `HERMES_HOME/.env`, or explicit `env_path`) — updates in place, timestamped backup, auto-verifies HTTP keys |
 | `verify_api_key` | Verify a stored API key is valid against its provider's API. Returns `success`, `verification`, `provider`, `status`, `detail` |
+
+> **Key verification is mandatory before an export write.** HTTP keys are probed against the
+> provider's read-only endpoint, and a failed probe blocks the write —
+> `skip_verify=true` cannot override it (it covers only providers that cannot be probed at all, and
+> the result then records `verification: skipped`). Invalid keys never reach a config or `.env`.
 
 ## Architecture
 

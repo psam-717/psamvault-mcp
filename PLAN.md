@@ -72,6 +72,11 @@
 | 2 | **Hard block + `skip_verify` escape hatch** (loud, recorded in output) | Strict default with an explicit override for edge cases | Two paths to test/document |
 | 3 | **Warn-and-continue** (write anyway with warning) | Never blocks a user | Violates the core rule; dangerous default |
 
+> **Tightened in v0.5.0:** the escape hatch no longer overrides a *definitive* probe failure. A probe
+> that can be attempted is always attempted, and a provider rejecting the key blocks the write;
+> `skip_verify` now covers only the "cannot be probed" case. See `PLAN_env_export.md` and the gate in
+> `tools.py`.
+
 ### Decision 5: Relationship to the deferred endpoint registry — ✅ DECIDED (option 1)
 
 **Context:** Earlier discussion scored a full registry (`list_known_mcp_endpoints`, `provider=` lookup) 6/10 and deferred it. Probe recipes overlap that idea.

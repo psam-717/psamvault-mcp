@@ -915,6 +915,9 @@ async def export_key_to_mcp_config(
       - HTTP exports auto-verify against the provider's bundled recipe when
         one exists; ``verify_url`` overrides the probe URL for providers
         without a recipe. Failed verification hard-blocks before any write.
+      - A probe that CAN be attempted is always attempted, even when
+        ``skip_verify=true``: a key the provider rejects is definitively
+        invalid, and skip_verify means "cannot check", not "write anyway".
       - Stdio/env exports cannot auto-verify in v1: they require
         ``skip_verify=true`` (loud acknowledgment that a manual check was
         performed). The result records ``verification: verified|skipped``.
@@ -983,20 +986,17 @@ async def export_key_to_mcp_config(
         }
 
     verification: str | None = None
-    if spec.url and not skip_verify:
-        provider = str(
-            decrypted.get("service")
-            or encrypted_entry.get("service_hint")
-            or server_name
-            or ""
-        )
-        recipe = verify_recipes.get_verify_recipe(provider)
-        if recipe is None and not verify_url:
-            return await _gate_fail(
-                f"no verify recipe for provider '{provider}' and no verify_url "
-                "given; pass verify_url=<read-only whoami endpoint> or "
-                "skip_verify=true"
-            )
+    provider = str(
+        decrypted.get("service")
+        or encrypted_entry.get("service_hint")
+        or server_name
+        or ""
+    )
+    recipe = verify_recipes.get_verify_recipe(provider) if spec.url else None
+    can_probe = bool(spec.url) and (recipe is not None or bool(verify_url))
+    if can_probe:
+        # Always probe when a probe is possible — skip_verify does NOT authorize writing a key the
+        # provider has already rejected.
         probe_url = verify_url or recipe["url"]
         method = recipe["method"] if recipe else "GET"
         expect = recipe["expect"] if recipe else 200
@@ -1025,15 +1025,22 @@ async def export_key_to_mcp_config(
                 f"key verification failed: {v_result['detail']} "
                 f"(error_class={v_result['error_class']}, "
                 f"probe={v_result['probe_url']})"
+                + (" — skip_verify cannot override a definitive failure" if skip_verify else "")
             )
         verification = "verified"
-    elif spec.command and not skip_verify:
+    elif skip_verify:
+        verification = "skipped"
+    elif spec.command:
         return await _gate_fail(
             "stdio/env export cannot auto-verify in v1; run a manual check "
             "(e.g. run_with_credential) then pass skip_verify=true"
         )
     else:
-        verification = "skipped" if skip_verify else None
+        return await _gate_fail(
+            f"no verify recipe for provider '{provider}' and no verify_url "
+            "given; pass verify_url=<read-only whoami endpoint> or "
+            "skip_verify=true"
+        )
 
     try:
         path = (
@@ -1069,6 +1076,141 @@ async def export_key_to_mcp_config(
         "dry_run": dry_run,
         "credential": f"vault key '{key_name}' (redacted)",
         "note": "Restart the agent host (new session) for the MCP server tools to load.",
+    }
+
+
+async def export_key_to_env_file(
+    key_name: str,
+    env_var_name: str,
+    agent: str = "hermes",
+    env_path: str | None = None,
+    dry_run: bool = False,
+    verify_url: str | None = None,
+    skip_verify: bool = False,
+) -> dict:
+    """Export a vault API key into an agent host's ``.env`` file as an environment variable.
+
+    Most agent *tools* read their credentials from a dotenv file rather than from MCP config
+    (Hermes' web tools read ``HERMES_HOME/.env``), so this is the path that makes a vault key usable
+    without anyone copy-pasting the plaintext. The key value is NEVER returned.
+
+    Target resolution: an explicit ``env_path`` wins; otherwise ``agent`` must have a VERIFIED
+    location (only ``hermes`` today — a guessed path would mean writing a secret where nothing
+    reads it, or where something else does).
+
+    Verification gate (same policy as ``export_key_to_mcp_config``): HTTP keys are auto-verified
+    against the provider's bundled recipe (or ``verify_url``). An INVALID key is never written — a
+    failed probe blocks the write even when ``skip_verify=true``, which covers only the case where no
+    probe is possible ("cannot check", not "write anyway"); it is then a loud acknowledgement and the
+    result records ``verification: skipped``.
+
+    Write semantics: the variable's line is updated in place when it already exists (idempotent
+    re-runs, no duplicate keys), otherwise appended, with a timestamped backup before any change.
+    """
+    if not is_logged_in():
+        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+
+    try:
+        access_token = get_access_token()
+        vek = get_vek()
+        encrypted_entry = await api_client.get_api_key_entry(access_token, key_name)
+        decrypted = decrypt_api_key(
+            vek=vek,
+            encrypted_blob=encrypted_entry["encrypted_blob"],
+            iv=encrypted_entry["iv"],
+        )
+        credential_value = decrypted["api_key"]
+    except Exception as exc:
+        return {"error": f"Failed to load API key '{key_name}': {exc}"}
+
+    try:
+        target = config_targets.resolve_agent_env_path(agent=agent, env_path=env_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    async def _gate_fail(detail: str) -> dict:
+        return {
+            "success": False,
+            "verification": "failed",
+            "detail": detail,
+            "error": detail,
+            "agent": agent,
+            "variable": env_var_name,
+        }
+
+    verification: str | None = None
+    provider = str(
+        decrypted.get("service")
+        or encrypted_entry.get("service_hint")
+        or agent
+        or ""
+    )
+    recipe = verify_recipes.get_verify_recipe(provider)
+    if recipe is not None or verify_url:
+        # A probe that CAN be attempted is ALWAYS attempted, even with skip_verify: a key the provider
+        # rejects is definitively invalid, and skip_verify means "I cannot check this", not "write it
+        # even though it is bad".
+        probe_url = verify_url or recipe["url"]
+        method = recipe["method"] if recipe else "GET"
+        expect = recipe["expect"] if recipe else 200
+        auth_kind = recipe["auth_kind"] if recipe else "bearer"
+        try:
+            v_result = await verify_executor.verify_key_http(
+                credential_value,
+                url=probe_url,
+                method=method,
+                expect=expect,
+                auth_kind=auth_kind,
+                header_name=None,
+            )
+        except ValueError as exc:
+            return await _gate_fail(str(exc))
+        if not v_result["success"]:
+            return await _gate_fail(
+                f"key verification failed: {v_result['detail']} "
+                f"(error_class={v_result['error_class']}, probe={v_result['probe_url']})"
+                + (" — skip_verify cannot override a definitive failure" if skip_verify else "")
+            )
+        verification = "verified"
+    elif skip_verify:
+        # No probe is possible for this provider: skip_verify is the loud acknowledgement and the
+        # result records verification: skipped.
+        verification = "skipped"
+    else:
+        return await _gate_fail(
+            f"no verify recipe for provider '{provider}' and no verify_url given; "
+            "pass verify_url=<read-only whoami endpoint> or skip_verify=true"
+        )
+
+    try:
+        written = config_targets.write_env_var(
+            target, env_var_name, credential_value, dry_run=dry_run
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except OSError as exc:
+        return {"error": f"could not write {target}: {exc}"}
+
+    logger.info(
+        "export_key_to_env_file: %s %s in %s (agent=%s, dry_run=%s)",
+        written["action"],
+        env_var_name,
+        target,
+        agent,
+        dry_run,
+    )
+    return {
+        "success": True,
+        "verification": verification,
+        "agent": agent,
+        "variable": env_var_name,
+        "action": written["action"],
+        "env_path": written["env_path"],
+        "line": written["line"],
+        "backup_path": written["backup_path"],
+        "dry_run": dry_run,
+        "credential": f"vault key '{key_name}' (redacted)",
+        "note": "Restart the agent host (new session) so tools pick up the new variable.",
     }
 
 
