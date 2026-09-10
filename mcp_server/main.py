@@ -85,6 +85,7 @@ server = Server(
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
         "- capture_stripe_credentials → capture Stripe Projects provisioned credentials\n"
         "- export_key_to_mcp_config → export a vault key into an agent MCP config (never returns the key)\n"
+        "- export_key_to_env_file    → export a vault key into an agent .env as an env var (never returns the key)\n"
         "- verify_api_key           → prove a stored vault key is valid (pass/fail + status)\n"
     ),
 )
@@ -166,6 +167,12 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Params: key_name (required), server_name (required), url or command, "
         "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path, "
         "verify_url (probe override), skip_verify (loud no-verify)."
+    ),
+    "export_key_to_env_file": (
+        "Export a vault API key into an agent host's .env file as an environment variable "
+        "(default: HERMES_HOME/.env for agent='hermes'; unknown hosts need env_path). "
+        "The key value is never returned. Params: key_name (required), env_var_name (required), "
+        "agent, env_path, dry_run, verify_url (probe override), skip_verify (loud no-verify)."
     ),
     "verify_api_key": (
         "Verify a vault API key is valid by probing the provider's read-only "
@@ -673,6 +680,72 @@ TOOL_DEFINITIONS = [
         }
     ),
     Tool(
+        name="export_key_to_env_file",
+        description=(
+            "[🔑 API Key Operations] Export a vault API key into an agent host's .env file as an "
+            "environment variable (default: $HERMES_HOME/.env for agent='hermes'). Use this when an "
+            "agent TOOL reads its credential from a dotenv file rather than from MCP config — e.g. "
+            "Hermes' web tools read HERMES_HOME/.env. The key value is NEVER returned to you — only "
+            "a summary with the path, line, action and backup path. The existing variable is updated "
+            "in place (idempotent re-runs, no duplicate keys) and a timestamped backup is written "
+            "before any change. The key is auto-verified against the provider first "
+            "(verification: verified|skipped|failed); a key that cannot be probed requires "
+            "skip_verify=true. Pass env_path to target a host without a verified default location."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "key_name": {
+                    "type": "string",
+                    "description": "Name of the vault API key to export (see list_api_keys)."
+                },
+                "env_var_name": {
+                    "type": "string",
+                    "description": "Environment variable to set, e.g. 'TAVILY_API_KEY'."
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": ["hermes"],
+                    "default": "hermes",
+                    "description": (
+                        "Target agent host whose .env to write. v1 has a verified location for "
+                        "'hermes' only; other hosts need env_path."
+                    )
+                },
+                "env_path": {
+                    "type": "string",
+                    "description": (
+                        "Optional explicit path to the .env file. Overrides the per-agent default."
+                    )
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Preview the change and write nothing. Returns the action that would occur."
+                    )
+                },
+                "verify_url": {
+                    "type": "string",
+                    "description": (
+                        "Optional read-only provider endpoint to probe with the key (whoami). "
+                        "Overrides the bundled recipe; required for providers without one unless "
+                        "skip_verify=true."
+                    )
+                },
+                "skip_verify": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "LOUD escape hatch: write without verification. Only for providers with no "
+                        "probe endpoint. The result records verification: skipped."
+                    )
+                },
+            },
+            "required": ["key_name", "env_var_name"],
+        }
+    ),
+    Tool(
         name="verify_api_key",
         description=(
             "[🔑 API Key Operations] Verify a vault API key is valid by probing the "
@@ -821,6 +894,17 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 env_var_name=arguments.get("env_var_name"),
                 config_path=arguments.get("config_path"),
                 replace=arguments.get("replace", False),
+                dry_run=arguments.get("dry_run", False),
+                verify_url=arguments.get("verify_url"),
+                skip_verify=arguments.get("skip_verify", False),
+            )
+
+        elif name == "export_key_to_env_file":
+            result = await tools.export_key_to_env_file(
+                key_name=arguments["key_name"],
+                env_var_name=arguments["env_var_name"],
+                agent=arguments.get("agent", "hermes"),
+                env_path=arguments.get("env_path"),
                 dry_run=arguments.get("dry_run", False),
                 verify_url=arguments.get("verify_url"),
                 skip_verify=arguments.get("skip_verify", False),
