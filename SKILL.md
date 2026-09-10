@@ -125,6 +125,10 @@ Once connected, these tools become available (prefixed `mcp_psamvault_*` in Herm
 | `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a vault API key into an agent `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up first | ❗ Key value never returned |
 | `verify_api_key` | `key_name, verify_url (optional)` | Verify a vault API key by probing the provider's read-only endpoint | No secrets involved — key value never returned |
 
+> **Invalid keys are never written.** A probe that can be attempted is always attempted, and a
+> provider rejecting the key blocks the write — `skip_verify=true` cannot override it (it covers only
+> providers that cannot be probed at all, and the result then records `verification: skipped`).
+
 ## Workflows
 
 ### 1. Browser Login

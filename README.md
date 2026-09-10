@@ -471,6 +471,11 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | `export_key_to_env_file` | Export a vault API key into an agent `.env` as a variable (`agent="hermes"` → `HERMES_HOME/.env`, or explicit `env_path`) — updates in place, timestamped backup, auto-verifies HTTP keys |
 | `verify_api_key` | Verify a stored API key is valid against its provider's API. Returns `success`, `verification`, `provider`, `status`, `detail` |
 
+> **Key verification is mandatory before an export write.** HTTP keys are probed against the
+> provider's read-only endpoint, and a failed probe blocks the write —
+> `skip_verify=true` cannot override it (it covers only providers that cannot be probed at all, and
+> the result then records `verification: skipped`). Invalid keys never reach a config or `.env`.
+
 ## Architecture
 
 The MCP server manages a single Playwright Chromium instance in-process.
