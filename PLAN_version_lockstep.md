@@ -84,7 +84,11 @@ Exit codes: `0` in sync, `1` drift found (a cron detector can branch on this wit
 ### 4. Cron
 
 - `HERMES_HOME/scripts/psamvault-compat-check.py` — thin detector, `.py` only (cron env has no bash),
-  absolute interpreter path, cleared `PYTHONPATH`; prints nothing when in sync.
+  absolute interpreter path, cleared `PYTHONPATH`; **always exits 0** and prints nothing when in sync.
+  The cron engine hashes the monitor script's stdout to decide whether to wake the agent, and treats a
+  non-zero exit as a *script failure* — so the signal is stdout, while `psamvault-compat` keeps the
+  0/1/2 exit codes for humans and other tooling. (Learned the hard way: the first fire marked the job
+  `last_status=error` because the detector exited 1 on drift.)
 - Cron job — daily: silent when in sync; on drift, apply if non-breaking (then verify + report), and
   on breaking drift **notify the user and stop** without installing.
 
