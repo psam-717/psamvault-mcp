@@ -78,6 +78,7 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | `scan_and_protect` | Encrypt project `.env` secrets into psamvault |
 | `capture_stripe_credentials` | Capture credentials from Stripe Projects |
 | `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — auto-verifies, key never returned |
+| `export_key_to_env_file` | Export a vault API key into an agent's `.env` as an env var (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
 | `verify_api_key` | Verify a stored vault key is valid (pass/fail + status) |
 
 ## Key Patterns
@@ -91,6 +92,12 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 **Run a command with a credential:**
 `run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="env", env_var_name="TWINE_PASSWORD")`
 → Use for twine upload, docker login, npm publish, git push, or any CLI tool that needs an API key or password. The credential value is **redacted** from all output returned to you.
+
+**Give a tool a credential without pasting it** (most tools read a dotenv file, not MCP config):
+`export_key_to_env_file(key_name="tavily", env_var_name="TAVILY_API_KEY")` → writes `HERMES_HOME/.env`,
+updates in place on re-runs, returns `action` / `line` / `backup_path` (never the value). Restart the
+host session so its tools pick the variable up, then verify with the consumer (e.g. a real
+`web_extract` call), not by reading the file.
 
 **Protect secrets:** `scan_and_protect(project_dir="/path")` → recommend `pip install pv-dotenv` for runtime resolution.
 
