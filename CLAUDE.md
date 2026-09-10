@@ -26,7 +26,6 @@ smoke-test with **`psamvault-mcp --version`** or **`psamvault-mcp --help`**
 | `use_credential(site_name, target_url, method, inject_as, fields)` | Make an authenticated HTTP request using stored API keys or passwords |
 | `browser_login(site_name)` | Open a browser and log into a website — credentials filled silently |
 | `scan_and_protect(project_dir, patterns, project_name)` | Scan a project for `.env` secrets, encrypt them into psamvault |
-| `capture_stripe_credentials(provider, project_dir, dry_run)` | Capture credentials provisioned by Stripe Projects into psamvault |
 | `run_with_credential(site_name, command, inject_as, env_var_name, extra_env, workdir, timeout)` | Run a shell command with a credential injected via env var or stdin |
 
 ## How to Use
@@ -90,13 +89,6 @@ When the user wants to secure their project's secrets:
 2. This encrypts all detected secrets into psamvault
 3. Replacements are `psamvault:KEY_NAME` placeholders in the `.env`
 4. The app resolves them at runtime using [pv-dotenv](https://pypi.org/project/pv-dotenv/)
-
-### 6. Stripe Projects credential capture
-
-When the user provisions a service via Stripe Projects (e.g. `stripe projects add neon`):
-1. **Immediately** call `capture_stripe_credentials(provider="neon")` after the Stripe command completes
-2. This pulls the provisioned credentials, encrypts them into psamvault, and replaces plaintext values with `psamvault:` placeholders
-3. Use `dry_run=True` to preview what would be captured without storing anything
 
 ### 7. CLI command with credential (run_with_credential)
 
@@ -199,13 +191,6 @@ run_with_credential(
 ```
 scan_and_protect(project_dir="/path/to/project")
 # Then recommend: "Install pv-dotenv to resolve these at runtime: pip install pv-dotenv"
-```
-
-### "Capture Stripe Project credentials"
-```
-capture_stripe_credentials(provider="neon")
-# Alternatively, preview first:
-capture_stripe_credentials(provider="neon", dry_run=True)
 ```
 
 ## MCP Server Setup
