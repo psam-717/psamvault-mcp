@@ -915,6 +915,9 @@ async def export_key_to_mcp_config(
       - HTTP exports auto-verify against the provider's bundled recipe when
         one exists; ``verify_url`` overrides the probe URL for providers
         without a recipe. Failed verification hard-blocks before any write.
+      - A probe that CAN be attempted is always attempted, even when
+        ``skip_verify=true``: a key the provider rejects is definitively
+        invalid, and skip_verify means "cannot check", not "write anyway".
       - Stdio/env exports cannot auto-verify in v1: they require
         ``skip_verify=true`` (loud acknowledgment that a manual check was
         performed). The result records ``verification: verified|skipped``.
@@ -983,20 +986,17 @@ async def export_key_to_mcp_config(
         }
 
     verification: str | None = None
-    if spec.url and not skip_verify:
-        provider = str(
-            decrypted.get("service")
-            or encrypted_entry.get("service_hint")
-            or server_name
-            or ""
-        )
-        recipe = verify_recipes.get_verify_recipe(provider)
-        if recipe is None and not verify_url:
-            return await _gate_fail(
-                f"no verify recipe for provider '{provider}' and no verify_url "
-                "given; pass verify_url=<read-only whoami endpoint> or "
-                "skip_verify=true"
-            )
+    provider = str(
+        decrypted.get("service")
+        or encrypted_entry.get("service_hint")
+        or server_name
+        or ""
+    )
+    recipe = verify_recipes.get_verify_recipe(provider) if spec.url else None
+    can_probe = bool(spec.url) and (recipe is not None or bool(verify_url))
+    if can_probe:
+        # Always probe when a probe is possible — skip_verify does NOT authorize writing a key the
+        # provider has already rejected.
         probe_url = verify_url or recipe["url"]
         method = recipe["method"] if recipe else "GET"
         expect = recipe["expect"] if recipe else 200
@@ -1025,15 +1025,22 @@ async def export_key_to_mcp_config(
                 f"key verification failed: {v_result['detail']} "
                 f"(error_class={v_result['error_class']}, "
                 f"probe={v_result['probe_url']})"
+                + (" — skip_verify cannot override a definitive failure" if skip_verify else "")
             )
         verification = "verified"
-    elif spec.command and not skip_verify:
+    elif skip_verify:
+        verification = "skipped"
+    elif spec.command:
         return await _gate_fail(
             "stdio/env export cannot auto-verify in v1; run a manual check "
             "(e.g. run_with_credential) then pass skip_verify=true"
         )
     else:
-        verification = "skipped" if skip_verify else None
+        return await _gate_fail(
+            f"no verify recipe for provider '{provider}' and no verify_url "
+            "given; pass verify_url=<read-only whoami endpoint> or "
+            "skip_verify=true"
+        )
 
     try:
         path = (
@@ -1092,8 +1099,10 @@ async def export_key_to_env_file(
     reads it, or where something else does).
 
     Verification gate (same policy as ``export_key_to_mcp_config``): HTTP keys are auto-verified
-    against the provider's bundled recipe (or ``verify_url``); a key that cannot be probed requires
-    ``skip_verify=true`` as a loud acknowledgement. Failed verification blocks any write.
+    against the provider's bundled recipe (or ``verify_url``). An INVALID key is never written — a
+    failed probe blocks the write even when ``skip_verify=true``, which covers only the case where no
+    probe is possible ("cannot check", not "write anyway"); it is then a loud acknowledgement and the
+    result records ``verification: skipped``.
 
     Write semantics: the variable's line is updated in place when it already exists (idempotent
     re-runs, no duplicate keys), otherwise appended, with a timestamped backup before any change.
@@ -1137,14 +1146,10 @@ async def export_key_to_env_file(
         or ""
     )
     recipe = verify_recipes.get_verify_recipe(provider)
-    if skip_verify:
-        verification = "skipped"
-    elif recipe is None and not verify_url:
-        return await _gate_fail(
-            f"no verify recipe for provider '{provider}' and no verify_url given; "
-            "pass verify_url=<read-only whoami endpoint> or skip_verify=true"
-        )
-    else:
+    if recipe is not None or verify_url:
+        # A probe that CAN be attempted is ALWAYS attempted, even with skip_verify: a key the provider
+        # rejects is definitively invalid, and skip_verify means "I cannot check this", not "write it
+        # even though it is bad".
         probe_url = verify_url or recipe["url"]
         method = recipe["method"] if recipe else "GET"
         expect = recipe["expect"] if recipe else 200
@@ -1164,8 +1169,18 @@ async def export_key_to_env_file(
             return await _gate_fail(
                 f"key verification failed: {v_result['detail']} "
                 f"(error_class={v_result['error_class']}, probe={v_result['probe_url']})"
+                + (" — skip_verify cannot override a definitive failure" if skip_verify else "")
             )
         verification = "verified"
+    elif skip_verify:
+        # No probe is possible for this provider: skip_verify is the loud acknowledgement and the
+        # result records verification: skipped.
+        verification = "skipped"
+    else:
+        return await _gate_fail(
+            f"no verify recipe for provider '{provider}' and no verify_url given; "
+            "pass verify_url=<read-only whoami endpoint> or skip_verify=true"
+        )
 
     try:
         written = config_targets.write_env_var(

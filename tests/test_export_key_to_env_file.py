@@ -65,6 +65,50 @@ async def test_writes_variable_and_never_returns_the_key(
 
 
 @pytest.mark.asyncio
+async def test_skip_verify_cannot_override_a_failed_probe(
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
+):
+    """The point of the gate: an INVALID key must never reach the .env.
+
+    skip_verify means "this provider cannot be probed", NOT "write it even though the provider
+    rejected it" — so a failed probe blocks the write and the file is left exactly as it was.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text("KEEP=me\n", encoding="utf-8")
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=401)
+    _patch_key(monkeypatch, "render")
+
+    result = await tools.export_key_to_env_file(
+        key_name="hermes_atlas_render",
+        env_var_name="RENDER_API_KEY",
+        env_path=str(env_file),
+        skip_verify=True,
+    )
+
+    assert result["success"] is False
+    assert result["verification"] == "failed"
+    assert "cannot override" in result["detail"]
+    assert env_file.read_text(encoding="utf-8") == "KEEP=me\n"
+    assert SECRET not in env_file.read_text(encoding="utf-8"), "an invalid key must never be written"
+
+
+@pytest.mark.asyncio
+async def test_invalid_key_does_not_create_the_file_at_all(
+    tmp_path, mock_tool_deps, monkeypatch, httpx_mock: HTTPXMock
+):
+    env_file = tmp_path / "fresh.env"
+    httpx_mock.add_response(url=RENDER_VERIFY_URL, status_code=403)
+    _patch_key(monkeypatch, "render")
+
+    result = await tools.export_key_to_env_file(
+        key_name="hermes_atlas_render", env_var_name="RENDER_API_KEY", env_path=str(env_file)
+    )
+
+    assert result["success"] is False and result["verification"] == "failed"
+    assert not env_file.exists(), "a rejected key must not create the destination"
+
+
+@pytest.mark.asyncio
 async def test_skip_verify_allows_a_key_without_a_recipe(
     tmp_path, mock_tool_deps, monkeypatch
 ):

@@ -213,6 +213,32 @@ class TestVerifyUrlOverrideAndUnknownProvider:
         assert "rnd_skip_key_3" not in json.dumps(result)
 
 
+class TestSkipVerifyCannotOverrideADefinitiveFailure:
+    """skip_verify covers 'cannot probe', never 'probe said no' — for BOTH export targets."""
+
+    @pytest.mark.asyncio
+    async def test_recipe_provider_401_with_skip_verify__still_blocked(
+        self, tmp_path, mock_tool_deps, monkeypatch, httpx_mock
+    ):
+        cfg = _write_config(tmp_path)
+        await _fake_lookup(monkeypatch, "rnd_definitely_invalid_9", service="render")
+        httpx_mock.add_response(url="https://api.render.com/v1/owners", status_code=401)
+        before = cfg.read_text(encoding="utf-8")
+
+        result = await tools.export_key_to_mcp_config(
+            key_name="hermes_atlas_render",
+            server_name="render",
+            url="https://mcp.render.com/mcp",
+            config_path=str(cfg),
+            skip_verify=True,
+        )
+
+        assert result.get("success") is not True
+        assert result["verification"] == "failed"
+        assert "cannot override" in result["detail"]
+        assert cfg.read_text(encoding="utf-8") == before
+
+
 class TestStdioEnvContract:
     @pytest.mark.asyncio
     async def test_stdio_env_export_without_skip_verify__refused(
