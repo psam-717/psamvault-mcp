@@ -6,6 +6,7 @@ that turns the contract into a lie.
 
 import json
 import os as _os
+import subprocess
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -124,6 +125,27 @@ def test_get_version_payload_exposes_the_pairing():
     assert block["expected_tool_count"] == len(main.TOOL_DEFINITIONS), (
         "the reported tool count must describe the code that is running"
     )
+
+
+def test_install_refreshes_the_index_cache(monkeypatch):
+    """Publishing then immediately applying must not fail on cached index metadata.
+
+    PyPI's simple index answers with `cache-control: max-age=600`, so uv's cached view can still lack
+    the brand-new version — observed live right after 0.5.0 was published ("no version of
+    psamvault-mcp==0.5.0" while the index already listed it).
+    """
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(compat.subprocess, "run", fake_run)
+    result = compat._install("0.5.0")
+    assert result["ok"] is True
+    assert "--refresh" in captured["cmd"], captured["cmd"]
+    assert "psamvault-mcp==0.5.0" in captured["cmd"]
+    assert "--no-deps" not in captured["cmd"], "deps must be resolved (--no-deps drops tools)"
 
 
 # ── skill frontmatter parsing ──────────────────────────────────────────────────
