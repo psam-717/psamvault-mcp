@@ -127,51 +127,33 @@ async def run_command_with_credential(
             "error": f"Unknown inject_as mode: '{inject_as}'. Use 'env' or 'stdin'.",
         }
 
-    # Run the command. Output goes to FILES, never pipes: a launcher that spawns a long-lived
-    # grandchild (uv-tool .exe shims do exactly this — ``twine.exe`` → python) hands that grandchild
-    # the pipe handles, so ``communicate()`` keeps waiting for EOF long after the command itself has
-    # finished: the caller got "timed out" with empty output for work that actually succeeded, and
-    # the still-running process was abandoned. Files have no EOF to wait on, so the deadline
-    # measures the COMMAND, not its descendants.
-    try:
-        with tempfile.TemporaryDirectory(prefix="psamvault-run-",
-                                         ignore_cleanup_errors=True) as tmp:
-            out_path = os.path.join(tmp, "stdout")
-            err_path = os.path.join(tmp, "stderr")
-            in_path = os.path.join(tmp, "stdin") if stdin_data is not None else None
-            if in_path:
-                with open(in_path, "wb") as fh:
-                    fh.write(stdin_data)
-            stdin_ctx = open(in_path, "rb") if in_path else contextlib.nullcontext(None)
-            with open(out_path, "wb") as out_f, open(err_path, "wb") as err_f, stdin_ctx as in_f:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    stdin=in_f,
-                    stdout=out_f,
-                    stderr=err_f,
-                    env=env,
-                    cwd=workdir,
-                    # POSIX: own process group so a timeout can kill the whole tree.
-                    start_new_session=(os.name != "nt"),
-                )
-                timed_out = False
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    timed_out = True
-                    # Kill the tree, not just the launcher: the real worker is usually a grandchild.
-                    _kill_process_tree(proc.pid)
-                    with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
-                        await asyncio.wait_for(proc.wait(), timeout=15)
-            stdout_text = _redact(_read_output_file(out_path), credential_value)
-            stderr_text = _redact(_read_output_file(err_path), credential_value)
-    except Exception as e:
-        return {
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": str(e),
-            "error": str(e),
-        }
+    # Run the command on a WORKER THREAD with a blocking Popen. Two independent traps live here:
+    #
+    # 1. asyncio's Windows subprocess transport cannot be trusted in the MCP server's event loop:
+    #    children were created but never executed their own code and never exited, so every call
+    #    ended in the deadline ("Command timed out after Ns", empty output) for work that would run
+    #    the same way in milliseconds from a plain process. A blocking Popen on a thread sidesteps
+    #    the transport entirely.
+    # 2. Never hand a pipe to a command whose launcher spawns a long-lived grandchild (uv-tool .exe
+    #    shims: twine.exe -> python). The grandchild inherits the pipe handles, so waiting for EOF
+    #    blocks long after the command itself finished — that is what reported finished uploads as
+    #    timeouts. Files have no EOF to wait on.
+    with tempfile.TemporaryDirectory(prefix="psamvault-run-",
+                                     ignore_cleanup_errors=True) as tmp:
+        out_path = os.path.join(tmp, "stdout")
+        err_path = os.path.join(tmp, "stderr")
+        try:
+            timed_out, returncode, stdout_text, stderr_text = await asyncio.to_thread(
+                _run_blocking, command, env, workdir, timeout, stdin_data, out_path, err_path)
+        except Exception as e:
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": str(e),
+                "error": str(e),
+            }
+    stdout_text = _redact(stdout_text, credential_value)
+    stderr_text = _redact(stderr_text, credential_value)
 
     if timed_out:
         # Hand back whatever the command managed to print — a partial result is evidence, an empty
@@ -185,10 +167,59 @@ async def run_command_with_credential(
         }
 
     return {
-        "exit_code": proc.returncode or 0,
+        "exit_code": returncode or 0,
         "stdout": stdout_text,
         "stderr": stderr_text,
     }
+
+
+def _run_blocking(
+    command: str,
+    env: dict,
+    workdir: Optional[str],
+    timeout: int,
+    stdin_bytes: Optional[bytes],
+    out_path: str,
+    err_path: str,
+) -> tuple[bool, Optional[int], str, str]:
+    """Run ``command`` with a blocking Popen (worker thread); returns
+    ``(timed_out, returncode, stdout, stderr)``.
+
+    ``stdin`` is a file (or DEVNULL), never a pipe: with ``inject_as='stdin'`` the credential is
+    written to a temp file first, so nothing here depends on pipe semantics at all.
+    """
+    stdin_file = None
+    try:
+        stdin_src = subprocess.DEVNULL
+        if stdin_bytes is not None:
+            stdin_path = out_path + ".stdin"
+            with open(stdin_path, "wb") as fh:
+                fh.write(stdin_bytes)
+            stdin_file = open(stdin_path, "rb")
+            stdin_src = stdin_file
+        with open(out_path, "wb") as out_f, open(err_path, "wb") as err_f:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                stdin=stdin_src,
+                stdout=out_f,
+                stderr=err_f,
+                env=env,
+                cwd=workdir,
+            )
+            try:
+                proc.wait(timeout=timeout)
+                timed_out = False
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                # Kill the tree, not just the launcher: the real worker is usually a grandchild.
+                _kill_process_tree(proc.pid)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=15)
+        return timed_out, proc.returncode, _read_output_file(out_path), _read_output_file(err_path)
+    finally:
+        if stdin_file is not None:
+            stdin_file.close()
 
 
 def _read_output_file(path: str) -> str:

@@ -8,6 +8,7 @@ abandoned instead of killed.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -81,6 +82,33 @@ def slow_script(tmp_path):
     yield script, pid_file
     if pid_file.exists():
         _kill(int(pid_file.read_text().strip() or 0))
+
+
+async def test_runner_does_not_depend_on_loop_subprocess_support(monkeypatch):
+    """Invariant: the runner must work even when the event loop cannot create subprocesses.
+
+    Live symptom this pins (MCP server context): asyncio's Windows subprocess transport created the
+    child but the child never executed its own code and never exited, so every call hit the deadline
+    with empty output. Running the command on a worker thread with a blocking Popen works
+    regardless of the loop's subprocess support.
+    """
+    async def _unsupported(*args, **kwargs):
+        raise NotImplementedError("loop has no subprocess support")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _unsupported)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _unsupported)
+
+    result = await run_command_with_credential(
+        command=f'"{sys.executable}" -c "print(7)"',
+        credential_value="pypi-token-abcdef123456",
+        inject_as="env",
+        env_var_name="TWINE_PASSWORD",
+        timeout=30,
+    )
+
+    assert result.get("error") is None, f"runner leaned on the event loop: {result.get('error')!r}"
+    assert result["exit_code"] == 0
+    assert "7" in result["stdout"]
 
 
 async def test_finished_command_is_not_reported_as_timeout(shim_script):
