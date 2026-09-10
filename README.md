@@ -484,7 +484,7 @@ the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MC
 version that documents it, plus the expected tool fingerprint).
 
 ```bash
-psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 target not published
+psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed: target not on the index
 psamvault-compat --check --json             # machine-readable
 psamvault-compat --apply                    # install the target release + pull the pinned skill
 psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
