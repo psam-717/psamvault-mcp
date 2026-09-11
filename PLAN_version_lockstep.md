@@ -133,6 +133,7 @@ downgrade, repeated daily by the cron detector.
 | `skill > floor` | drift ❌ | healthy ✅ (`skill_ahead`, `in_sync` true, detector silent) |
 | `skill == floor` | healthy | healthy |
 | `skill < floor` / missing | drift | drift (remedy: `--sync-skill`) |
+| skill *older than installed* (clone behind) | installed silently | **refused**; `--allow-downgrade` overrides, and `--check` reports `skill_source_stale` |
 | `--apply` skill source | exact pinned blob from the clone's git history | the clone's **newest** skill (working tree, as-is), if it meets the floor |
 | Standalone skill update | impossible without a release | `psamvault-compat --sync-skill` |
 

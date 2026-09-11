@@ -82,6 +82,60 @@ def test_version_drift_is_reported():
     assert any("0.4.5" in f for f in report["findings"])
 
 
+def test_sync_skill_refuses_to_downgrade(tmp_path, monkeypatch):
+    """The clone is read as-is, so a clone parked on an older branch holds an older skill. Installing
+    it would delete documentation that exists nowhere else — refused unless explicitly allowed."""
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text("---\nversion: 1.7.0\n---\nolder\n", encoding="utf-8")
+    installed = tmp_path / "installed" / "SKILL.md"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("---\nversion: 1.8.0\n---\nnewer\n", encoding="utf-8")
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "installed_skill_path", lambda: installed)
+    monkeypatch.setattr(compat, "clone_skill_branch", lambda: "docs/older-branch")
+
+    out = compat._sync_skill({"mcp": "0.5.1", "skill": "1.6.0"})
+
+    assert out["ok"] is False
+    assert "refusing to downgrade" in out["reason"], out
+    assert "1.8.0" in out["reason"] and "docs/older-branch" in out["reason"], out
+    assert installed.read_text(encoding="utf-8").endswith("newer\n"), "the installed skill was touched"
+
+
+def test_sync_skill_downgrade_is_allowed_with_the_flag(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text("---\nversion: 1.7.0\n---\nolder\n", encoding="utf-8")
+    installed = tmp_path / "installed" / "SKILL.md"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("---\nversion: 1.8.0\n---\nnewer\n", encoding="utf-8")
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "installed_skill_path", lambda: installed)
+
+    out = compat._sync_skill({"mcp": "0.5.1", "skill": "1.6.0"}, allow_downgrade=True)
+
+    assert out["ok"] and out["version"] == "1.7.0" and out["replaced"] == "1.8.0", out
+    assert installed.read_text(encoding="utf-8").endswith("older\n")
+
+
+def test_check_reports_a_clone_that_is_behind_the_installed_skill(tmp_path, monkeypatch):
+    """Informational, not drift: the installed pair is healthy, but the source of truth is behind —
+    which is exactly how a silent downgrade opportunity goes unnoticed."""
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text("---\nversion: 1.7.0\n---\n", encoding="utf-8")
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.8.0")
+    monkeypatch.setattr(compat, "installed_tools", lambda: list(compat.latest_release()["tools"]))
+
+    report = compat.check(installed_version=compat.latest_release()["mcp"])
+
+    assert report["skill_source"] == "1.7.0" and report["skill_source_stale"] is True
+    assert report["in_sync"] is True, "an older clone must not be reported as drift"
+    assert "skill in clone" in compat.render(report), compat.render(report)
+
+
 def test_skill_drift_names_both_versions():
     latest = compat.latest_release()
     report = compat.check(
@@ -339,7 +393,7 @@ def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeyp
     """Regression for the live 0.5.1 bug: JSON API lagging must not block the repair."""
     calls = []
     monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append(("skill", e["skill"])), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)  # index has not caught up
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
@@ -356,7 +410,7 @@ def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(compat, "_install", lambda v: (calls.append("pypi"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("git"), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
 
     def _boom(version):
         raise AssertionError("--from-git must not consult PyPI")
@@ -375,7 +429,7 @@ def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
     """An older pair + a newer non-breaking release → install it and pull the pinned skill."""
     calls = []
     monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append(("skill", e["skill"])), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)  # keep the suite offline
     monkeypatch.setattr(compat, "installed_tools", lambda: ["browser_login"])
     monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.4.0")
@@ -415,7 +469,7 @@ def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
     order = []
     monkeypatch.setattr(compat.safety, "snapshot_skill", lambda *a, **k: order.append("snapshot") or Path("b"))
     monkeypatch.setattr(compat, "_install", lambda v: (order.append("install"), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: {"ok": True, "version": e["skill"]})
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: {"ok": True, "version": e["skill"]})
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
@@ -430,7 +484,7 @@ def test_apply_rolls_back_when_the_smoke_test_fails(monkeypatch, capsys):
     """A half-finished install must not be left installed."""
     calls = []
     monkeypatch.setattr(compat, "_install", lambda v: {"ok": True})
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     monkeypatch.setattr(compat.safety, "smoke_test",
                         lambda *a, **k: {"ok": False, "version": None, "tools": [], "detail": "ImportError"})
@@ -456,7 +510,7 @@ def test_apply_refuses_to_install_when_the_pull_fails(monkeypatch, capsys):
         "message": "git pull --ff-only origin main failed — your local changes were restored.",
     })
     monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("install"), {"ok": True})[1])
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)
@@ -476,7 +530,7 @@ def test_apply_from_git_reports_what_will_be_installed(monkeypatch, capsys):
     })
     monkeypatch.setattr(compat.safety, "is_pipx_editable", lambda: True)
     monkeypatch.setattr(compat, "_install_from_git", lambda: {"ok": True})
-    monkeypatch.setattr(compat, "_sync_skill", lambda e: {"ok": True, "version": e["skill"]})
+    monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: {"ok": True, "version": e["skill"]})
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)

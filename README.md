@@ -524,9 +524,16 @@ psamvault-compat --sync-skill     # installs the clone's working-tree skill, if 
 ```
 
 `--sync-skill` reads the clone **as-is** (mirrors `--from-git`: uncommitted skill work is installable),
-snapshots the current skill first, and refuses — writing nothing — when the clone's skill is *below* the
-floor the installed server requires. `--apply` installs `max(newest available, floor)`, so installing an
-MCP release also brings the skill current.
+snapshots the current skill first, and applies two guards so the skill can never move backwards
+silently:
+
+| Guard | Behaviour |
+|---|---|
+| floor | refuses when the clone's skill is *below* the floor the installed server requires — and writes nothing |
+| no downgrade | refuses when the clone's skill is *older* than the skill already installed (a clone parked on an older branch holds an older skill); the message names the clone, its branch and both versions. `--allow-downgrade` overrides |
+
+`--check` also reports `skill_source` / `skill_source_stale` — when the clone is behind the installed
+skill it says so, because a silent downgrade opportunity is exactly what nobody notices.
 
 A contract entry exists the moment a release is **merged**, before it ships. The index pre-check is
 deliberately **advisory**: PyPI's JSON API lags an upload (CDN cache), so it never blocks an install
@@ -546,7 +553,8 @@ never left installed.**
 | Smoke test | imports the freshly installed server in a **fresh** interpreter from a neutral cwd — so the repo tree cannot masquerade as the install — and reports its version + tool count |
 | Rollback | if the install fails or the smoke test fails, the previously installed release is put back automatically |
 
-- **The installed server wins** — the skill is pulled to match it, never the reverse.
+- **The installed server wins** — the skill is pulled to match it, never the reverse, and never rolled
+  back: an older clone skill is refused (see the guards above).
 - A release marked **breaking** is never applied without `--allow-breaking`: a silently disappearing
   tool is exactly the change a human should see.
 - `get_version` reports the pairing (`compatibility.paired_skill_version`, newest release,
