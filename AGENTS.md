@@ -97,10 +97,11 @@ updates in place on re-runs, returns `action` / `line` / `backup_path` (never th
 host session so its tools pick the variable up, then verify with the consumer (e.g. a real
 `web_extract` call), not by reading the file.
 
-**Version lockstep:** `get_version()` returns a `compatibility` block (paired skill version, newest
-release, `breaking_pending`). If it disagrees with the skill you loaded, run
-`psamvault-compat --check` — never hand-edit `compatibility.json` or the skill frontmatter to make a
-check pass.
+**Version lockstep:** `get_version()` returns a `compatibility` block (skill floor, newest release,
+`breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-compat --check` — never
+hand-edit `compatibility.json` or the skill frontmatter to make a check pass. The recorded skill version
+is a **floor**: a newer skill is fine, and a skill-only improvement ships with
+`psamvault-compat --sync-skill` (no MCP release needed).
 
 **Protect secrets:** `scan_and_protect(project_dir="/path")` → recommend `pip install pv-dotenv` for runtime resolution.
 

@@ -13,8 +13,8 @@ The psamvault MCP server (PyPI, `psamvault-mcp`) and its usage skill (`psamvault
 without the other and the skill silently documents a tool set the server does not have.
 
 This plan makes the pair **checkable and self-healing**: a machine-readable contract ships inside the
-wheel, a checker detects drift against the *installed* server, and the skill is pulled to the version
-pinned for that server. Breaking releases stop for a human.
+wheel, a checker detects drift against the *installed* server, and the skill is brought up to the
+version floor that server requires. Breaking releases stop for a human.
 
 ## Problem (measured, not theoretical)
 
@@ -32,8 +32,9 @@ pinned for that server. Breaking releases stop for a human.
 | 1 | Where the pairing lives | `compatibility.json` in the MCP repo, **shipped inside the wheel** so the installed server can report its own expectation |
 | 2 | Trigger | **Cron detector** (wakes the agent only on drift) **+ an on-demand command** |
 | 3 | Autonomy | Auto-apply normal updates; **stop and ask on a release marked breaking** |
-| 4 | Authority on disagreement | **Installed MCP wins** — pull the skill pinned to that MCP version |
+| 4 | Authority on disagreement | **Installed MCP wins** — the skill is brought to the version floor that MCP requires |
 | 5 | Latest-version source | Contract declares the target release; installs come from **PyPI** (a `--source git` fallback covers the pre-release case; see Open Questions) |
+| 6 | Skill version relationship (**revised 2026-09-11**) | **Floor, not a pin** — `skill >= floor` is healthy, so the skill may move ahead of the MCP; a *skill-only* update (`--sync-skill`) needs no release |
 
 ## Design
 
@@ -80,8 +81,9 @@ Exit codes: `0` in sync, `1` drift found (a cron detector can branch on this wit
    `no version of psamvault-mcp==X`. Refuse with exit `3` and name the fix (publish first, or
    `--from-git` for a merged-but-unreleased target).
 4. Install the target into the pipx venv (uv, with deps — never `--no-deps`).
-5. Pull the skill pinned to the target (`git` lookup in the private-skills clone by frontmatter
-   version) and write it to `HERMES_HOME/skills/psam-custom/psamvault-mcp/SKILL.md`.
+5. Install the clone's **newest** skill, provided its frontmatter version meets the floor for that
+   release (`read_clone_skill()` — the working tree, as-is) and write it to
+   `HERMES_HOME/skills/psam-custom/psamvault-mcp/SKILL.md`. Below the floor: refuse and write nothing.
 6. Re-verify (version + tool fingerprint + skill version) and report, including
    "restart the gateway/session so the running server picks it up".
 
@@ -115,6 +117,27 @@ into a lie, which is worse than not having one.
 6. Unit tests cover: contract load, version→skill mapping, fingerprint diff, breaking detection,
    skill-frontmatter parsing, exit codes.
 7. Cron detector stays silent when in sync and wakes the agent only on drift.
+
+## Decision change — 2026-09-11: skill versions are a floor
+
+**Why:** the original design treated the recorded skill version as an exact pin (`skill_drift = installed
+!= pinned`). That made a legitimate *skill-only* update impossible: improving the description of an
+existing tool meant bumping the skill, which registered as drift, and the documented remedy (`--apply`)
+would install the released MCP and pull the skill **back down** to the pinned version — a self-inflicted
+downgrade, repeated daily by the cron detector.
+
+**Now:** the recorded version is the **minimum** the server requires.
+
+| | Before | After |
+|---|---|---|
+| `skill > floor` | drift ❌ | healthy ✅ (`skill_ahead`, `in_sync` true, detector silent) |
+| `skill == floor` | healthy | healthy |
+| `skill < floor` / missing | drift | drift (remedy: `--sync-skill`) |
+| `--apply` skill source | exact pinned blob from the clone's git history | the clone's **newest** skill (working tree, as-is), if it meets the floor |
+| Standalone skill update | impossible without a release | `psamvault-compat --sync-skill` |
+
+**Backward compatible:** a published contract entry keeps its `skill` value — it is simply read as a
+floor now, so an already-installed 0.5.1 accepts a newer skill instead of reporting drift.
 
 ## Risks / notes
 
