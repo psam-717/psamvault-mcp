@@ -152,6 +152,12 @@ def check(
             f"skill version {skill_current!r} is BELOW the floor {skill_floor} required by server "
             f"{effective['mcp']} ({skill_location}) — run: psamvault-compat --sync-skill"
         )
+    # Where the skill WOULD come from, so a clone parked on an older branch is visible before anyone
+    # runs --sync-skill (which refuses to downgrade, but silence is what let this go unnoticed).
+    clone_version, _ = read_clone_skill()
+    skill_source_stale = bool(
+        clone_version and skill_current and _vkey(clone_version) < _vkey(str(skill_current))
+    )
     if unexpected:
         findings.append(f"server exposes tools the {effective['mcp']} contract does not have: {unexpected}")
     if missing:
@@ -179,6 +185,8 @@ def check(
         "expected_skill": expected_skill,
         "skill_floor": skill_floor,
         "skill_ahead": skill_ahead,
+        "skill_source": clone_version,
+        "skill_source_stale": skill_source_stale,
         "installed_skill": skill_current,
         "skill_drift": skill_drift,
         "skill_path": skill_location,
@@ -207,6 +215,12 @@ def render(report: dict) -> str:
         f"  skill floor      : {report['skill_floor']}  (minimum this server requires)",
         f"  tools            : {'+%d/-%d vs contract' % (len(report['tool_drift']['unexpected']), len(report['missing'])) if not report['in_sync'] else 'match contract'}",
     ]
+    if report.get("skill_source_stale"):
+        lines.append(
+            f"  skill in clone   : {report['skill_source']}  [BEHIND installed "
+            f"{report['installed_skill']} — the clone is on an older branch; "
+            f"--sync-skill will refuse to downgrade]"
+        )
     if report["findings"]:
         lines.append("findings:")
         lines.extend(f"  - {finding}" for finding in report["findings"])
@@ -276,6 +290,16 @@ def clone_skill_path() -> Path:
     return clone_path() / load_contract()["skill"]["path"]
 
 
+def clone_skill_branch() -> str | None:
+    """Branch the clone is checked out on — the reason its skill version is what it is."""
+    try:
+        proc = subprocess.run(["git", "-C", str(clone_path()), "rev-parse", "--abbrev-ref", "HEAD"],
+                              capture_output=True, text=True, timeout=60)
+        return proc.stdout.strip() or None if proc.returncode == 0 else None
+    except Exception:
+        return None
+
+
 def read_clone_skill() -> tuple[str | None, str | None]:
     """The clone's CURRENT skill — its working tree, as-is (mirrors ``--from-git``).
 
@@ -289,13 +313,18 @@ def read_clone_skill() -> tuple[str | None, str | None]:
     return (match.group(1) if match else None), text
 
 
-def _sync_skill(entry: dict) -> dict:
-    """Install the clone's newest skill, provided it meets the floor the server requires.
+def _sync_skill(entry: dict, allow_downgrade: bool = False) -> dict:
+    """Install the clone's newest skill, provided it passes two guards.
 
-    A skill-only update is legitimate: an existing tool can get a better description without an MCP
-    release, so this installs whatever the clone currently holds (>= floor) rather than the exact
-    version a release happened to record. Below the floor it refuses and writes nothing — a skill that
-    is older than the server it documents is the one case worth stopping for.
+    Both guards exist so the skill can never move *backwards* without being told to:
+
+    * **floor** — the clone's skill must document the installed server (``>= entry["skill"]``);
+    * **no silent downgrade** — it must not be older than the skill already installed. The clone is
+      read as-is, so a clone parked on an older branch holds an older skill; installing it would
+      delete documentation that exists nowhere else, with no error to notice. ``allow_downgrade`` is
+      the explicit override.
+
+    Above the floor, a *newer* skill is exactly the point: a skill-only update needs no MCP release.
     """
     floor = entry["skill"]
     version, text = read_clone_skill()
@@ -312,6 +341,17 @@ def _sync_skill(entry: dict) -> dict:
                 f"update the skill in {clone_path()} first"
             ),
         }
+    installed = read_skill_version()
+    if installed and _vkey(version) < _vkey(str(installed)) and not allow_downgrade:
+        branch = clone_skill_branch() or "unknown"
+        return {
+            "ok": False,
+            "reason": (
+                f"refusing to downgrade: the clone holds {version} but {installed} is installed "
+                f"(clone {clone_path()} is on branch '{branch}'). Update the clone to at least "
+                f"{installed}, or pass --allow-downgrade to accept the older skill."
+            ),
+        }
     target = installed_skill_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_file():
@@ -324,6 +364,8 @@ def _sync_skill(entry: dict) -> dict:
         "version": read_skill_version(target),
         "floor": floor,
         "source_version": version,
+        "replaced": installed,
+        "clone_branch": clone_skill_branch(),
     }
 
 
@@ -350,6 +392,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="install the clone's newest skill without touching the MCP (skill-only update)",
     )
+    parser.add_argument(
+        "--allow-downgrade",
+        action="store_true",
+        help="permit installing a skill OLDER than the installed one (refused by default)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--installed-version", default=None, help="override the detected version (diagnostics)")
     parser.add_argument("--skill-path", default=None, help="override the installed skill path (diagnostics)")
@@ -364,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         backup = safety.snapshot_skill(installed_skill_path())
         print(f"snapshot: skill backed up to {backup}" if backup
               else "snapshot: no installed skill to back up")
-        synced = _sync_skill(entry)
+        synced = _sync_skill(entry, allow_downgrade=args.allow_downgrade)
         print(f"skill -> {synced.get('version') or synced.get('reason')}: "
               f"{'ok' if synced['ok'] else 'FAILED'} ({synced})")
         if not synced["ok"]:
@@ -444,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"smoke test: {smoke['version']} exposes {len(smoke['tools'])} tools")
 
-    synced = _sync_skill(entry)
+    synced = _sync_skill(entry, allow_downgrade=args.allow_downgrade)
     print(f"skill -> {entry['skill']}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
 
     after = check(installed_version=entry["mcp"], skill_version=read_skill_version(args.skill_path))
