@@ -28,6 +28,9 @@
 
 ## Fixed
 
+- fix(compat): **`--sync-skill` refuses to downgrade.** The clone is read as-is, so a clone parked on an older branch holds an older skill; installing it silently deleted newer documentation that exists nowhere else. It now refuses (naming the clone, its branch and both versions) unless `--allow-downgrade` is passed. `--check` additionally reports `skill_source` / `skill_source_stale` so a behind-the-installed clone is visible *before* anyone runs the command.
+- fix(compat): `--apply` and `--sync-skill` share the same guard (both call `_sync_skill`), so a release install cannot quietly roll the skill back either.
+
 - fix(compat): the index pre-check is now **advisory** — `--apply` always attempts the install (`--refresh` makes it authoritative) and consults PyPI's JSON API only to explain a genuine resolver failure. Previously a lagging JSON API (it follows an upload by up to ~1 minute) made `--apply` refuse with exit 3, reporting the target as "not published on PyPI yet" while the index already had it — found live applying 0.5.1 seconds after publishing it.
 - fix(compat): an unreachable PyPI no longer short-circuits `--apply`; the install proceeds and a note records that the published-ness of the target could not be confirmed.
 
