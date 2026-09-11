@@ -9,8 +9,22 @@ reuse it without rework):
     {url, method, expect, auth_kind}
 
 Only providers whose recipes have been verified against the live service
-belong here (render verified Sep 3 2026: GET /v1/owners -> 200; openrouter
-verified Sep 3 2026: GET /api/v1/auth/key -> 200).
+belong here, and each entry records the date it was proven:
+  - render      verified Sep 3 2026:  GET /v1/owners             -> 200 (bearer)
+  - openrouter  verified Sep 3 2026:  GET /api/v1/auth/key       -> 200 (bearer)
+  - tavily      verified Sep 11 2026: GET /usage                 -> 200 (bearer)
+  - github      verified Sep 11 2026: GET /user                  -> 200 (bearer)
+
+Deliberately ABSENT — no read-only whoami exists, so these need
+``verify_url`` or ``skip_verify=true``:
+  - pypi / testpypi — an upload token cannot be validated without attempting
+    an upload (the public JSON API answers for anyone); verification is not
+    possible read-only, so the store must not pretend otherwise.
+
+Adding a provider: find a read-only endpoint that returns 200 for a VALID key
+and != 200 for a bad one, probe it with the real key, then record it with the
+date. Never add an endpoint that answers 200 anonymously — it would "verify"
+an invalid key.
 """
 
 from __future__ import annotations
@@ -24,6 +38,18 @@ VERIFY_RECIPES: dict[str, dict] = {
     },
     "render": {
         "url": "https://api.render.com/v1/owners",
+        "method": "GET",
+        "expect": 200,
+        "auth_kind": "bearer",
+    },
+    "tavily": {
+        "url": "https://api.tavily.com/usage",
+        "method": "GET",
+        "expect": 200,
+        "auth_kind": "bearer",
+    },
+    "github": {
+        "url": "https://api.github.com/user",
         "method": "GET",
         "expect": 200,
         "auth_kind": "bearer",

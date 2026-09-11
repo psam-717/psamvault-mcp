@@ -30,6 +30,12 @@ def _encrypt_api_key(service: str, key: str) -> tuple[str, str]:
     return ciphertext.hex(), iv.hex()
 
 
+# A provider with NO bundled verify recipe — the "cannot be probed" case.
+# Never borrow a real provider for this: adding its recipe later (tavily, Sep 11 2026) silently
+# invalidates the premise and turns these tests red for the wrong reason.
+UNPROBEABLE_SERVICE = "acme-internal"
+
+
 def _patch_key(monkeypatch, service: str) -> None:
     blob, iv = _encrypt_api_key(service, SECRET)
 
@@ -113,18 +119,18 @@ async def test_skip_verify_allows_a_key_without_a_recipe(
     tmp_path, mock_tool_deps, monkeypatch
 ):
     env_file = tmp_path / ".env"
-    _patch_key(monkeypatch, "tavily")
+    _patch_key(monkeypatch, UNPROBEABLE_SERVICE)
 
     result = await tools.export_key_to_env_file(
-        key_name="tavily",
-        env_var_name="TAVILY_API_KEY",
+        key_name=UNPROBEABLE_SERVICE,
+        env_var_name="ACME_API_KEY",
         env_path=str(env_file),
         skip_verify=True,
     )
 
     assert result.get("success") is True
     assert result["verification"] == "skipped"
-    assert "TAVILY_API_KEY=" + SECRET in env_file.read_text(encoding="utf-8")
+    assert "ACME_API_KEY=" + SECRET in env_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -132,11 +138,11 @@ async def test_unverifiable_key_without_skip_verify_is_blocked(
     tmp_path, mock_tool_deps, monkeypatch
 ):
     env_file = tmp_path / ".env"
-    _patch_key(monkeypatch, "tavily")
+    _patch_key(monkeypatch, UNPROBEABLE_SERVICE)
 
     result = await tools.export_key_to_env_file(
-        key_name="tavily",
-        env_var_name="TAVILY_API_KEY",
+        key_name=UNPROBEABLE_SERVICE,
+        env_var_name="ACME_API_KEY",
         env_path=str(env_file),
     )
 
@@ -187,11 +193,11 @@ async def test_updates_in_place_on_a_second_run(tmp_path, mock_tool_deps, monkey
 @pytest.mark.asyncio
 async def test_dry_run_reports_without_writing(tmp_path, mock_tool_deps, monkeypatch):
     env_file = tmp_path / ".env"
-    _patch_key(monkeypatch, "tavily")
+    _patch_key(monkeypatch, UNPROBEABLE_SERVICE)
 
     result = await tools.export_key_to_env_file(
-        key_name="tavily",
-        env_var_name="TAVILY_API_KEY",
+        key_name=UNPROBEABLE_SERVICE,
+        env_var_name="ACME_API_KEY",
         env_path=str(env_file),
         skip_verify=True,
         dry_run=True,
