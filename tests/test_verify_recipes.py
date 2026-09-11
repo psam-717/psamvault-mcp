@@ -46,6 +46,45 @@ def test_openrouter_recipe_known_provider__returns_complete_http_recipe():
     assert recipe["auth_kind"] == "bearer"
 
 
+def test_tavily_recipe_known_provider__returns_complete_http_recipe():
+    # verified live Sep 11 2026: GET /usage -> 200 with a valid bearer key
+    recipe = verify_recipes.get_verify_recipe("tavily")
+    assert recipe is not None
+    assert recipe["url"] == "https://api.tavily.com/usage"
+    assert recipe["method"] == "GET"
+    assert recipe["expect"] == 200
+    assert recipe["auth_kind"] == "bearer"
+
+
+def test_github_recipe_known_provider__returns_complete_http_recipe():
+    # verified live Sep 11 2026: GET /user -> 200 (login psam-717) with a bearer token
+    recipe = verify_recipes.get_verify_recipe("github")
+    assert recipe is not None
+    assert recipe["url"] == "https://api.github.com/user"
+    assert recipe["method"] == "GET"
+    assert recipe["expect"] == 200
+    assert recipe["auth_kind"] == "bearer"
+
+
+def test_service_hint_casing_matches_recipes():
+    # Vault service hints are free text ("Tavily", "Github"), so lookup normalises.
+    for hint, provider in (
+        ("Tavily", "tavily"),
+        ("Github", "github"),
+        ("Render", "render"),
+        ("openrouter", "openrouter"),
+    ):
+        assert verify_recipes.get_verify_recipe(hint) == verify_recipes.get_verify_recipe(provider)
+
+
+def test_providers_without_a_read_only_whoami_stay_absent():
+    # A PyPI upload token cannot be validated read-only (the public JSON API answers for anyone), so a
+    # recipe would silently "verify" an invalid key. Absence is the correct state.
+    known = verify_recipes.known_providers()
+    assert "pypi" not in known
+    assert "testpypi" not in known
+
+
 def test_lookup_unknown_provider__returns_none():
     assert verify_recipes.get_verify_recipe("definitely-not-a-provider") is None
 
