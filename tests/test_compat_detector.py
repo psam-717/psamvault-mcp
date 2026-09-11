@@ -57,3 +57,32 @@ def test_no_interpreter_found_is_reported(monkeypatch, capsys):
     monkeypatch.setattr(detector.os.path, "isfile", lambda path: False)
     assert detector.main() == 0
     assert "no python found" in capsys.readouterr().out
+
+
+def test_drift_report_names_both_remedies(monkeypatch, capsys):
+    """A skill below its floor is fixed by --sync-skill; suggesting an MCP install would DOWNGRADE a
+    runtime that carries unreleased work, so the report must offer both, clearly."""
+    monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(detector, "run", _fake_probe(
+        '{"exit_code": 1, "installed_mcp": "0.5.1", "target_mcp": "0.5.1", "installed_skill": "1.4.0",'
+        ' "skill_floor": "1.6.0", "skill_ahead": false, "tool_drift": {"missing": [], "unexpected": []},'
+        ' "breaking_pending": false, "findings": ["skill version \'1.4.0\' is BELOW the floor 1.6.0"]}'
+    ))
+    assert detector.main() == 0
+    out = capsys.readouterr().out
+    assert '"psamvault_compat": "DRIFT"' in out
+    assert '"skill_floor": "1.6.0"' in out
+    assert "psamvault-compat --sync-skill" in out
+    assert "psamvault-compat --apply" in out
+
+
+def test_skill_floor_falls_back_to_the_expected_skill_key(monkeypatch, capsys):
+    """Older compat builds only report `expected_skill`; the detector must still populate the floor."""
+    monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(detector, "run", _fake_probe(
+        '{"exit_code": 1, "installed_mcp": "0.4.6", "target_mcp": "0.5.0", "installed_skill": "1.2.0",'
+        ' "expected_skill": "1.4.0", "tool_drift": {"missing": [], "unexpected": []},'
+        ' "breaking_pending": false, "findings": ["x"]}'
+    ))
+    assert detector.main() == 0
+    assert '"skill_floor": "1.4.0"' in capsys.readouterr().out

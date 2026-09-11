@@ -91,6 +91,115 @@ def test_skill_drift_names_both_versions():
     assert any("0.9.9" in f and latest["skill"] in f for f in report["findings"])
 
 
+# ── skill versions are a FLOOR, not a pin ─────────────────────────────────────
+def test_a_newer_skill_is_not_drift():
+    """A skill-only update (better docs for an existing tool) must need no MCP release."""
+    latest = compat.latest_release()
+    report = compat.check(
+        installed_version=latest["mcp"], tools=list(latest["tools"]), skill_version="99.0.0"
+    )
+    assert report["skill_drift"] is False
+    assert report["skill_ahead"] is True
+    assert report["in_sync"] is True and report["exit_code"] == 0
+    assert report["findings"] == [], report["findings"]
+
+
+def test_skill_below_the_floor_points_at_sync_skill():
+    latest = compat.latest_release()
+    report = compat.check(
+        installed_version=latest["mcp"], tools=list(latest["tools"]), skill_version="0.0.1"
+    )
+    assert report["skill_drift"] is True and report["skill_ahead"] is False
+    assert report["exit_code"] == 1
+    assert any("--sync-skill" in finding for finding in report["findings"]), report["findings"]
+
+
+def test_missing_skill_counts_as_below_the_floor(monkeypatch):
+    latest = compat.latest_release()
+    # a missing skill file reads as None; that is below any floor
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: None)
+    report = compat.check(
+        installed_version=latest["mcp"], tools=list(latest["tools"]), skill_version=None
+    )
+    assert report["skill_drift"] is True and report["exit_code"] == 1
+
+
+def test_render_shows_the_floor_and_the_ahead_marker():
+    latest = compat.latest_release()
+    report = compat.check(
+        installed_version=latest["mcp"], tools=list(latest["tools"]), skill_version="99.0.0"
+    )
+    out = compat.render(report)
+    assert "skill floor" in out and "ahead of the floor" in out, out
+    assert "in sync — nothing to do" in out, "a healthy pair must not look like a problem"
+
+
+def test_sync_skill_installs_the_clone_working_tree(tmp_path, monkeypatch):
+    """Skill-only update: whatever the clone currently holds (>= floor) is what gets installed."""
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text(
+        "---\nname: psamvault\nversion: 1.8.0\n---\nnew docs\n", encoding="utf-8"
+    )
+    installed = tmp_path / "installed" / "SKILL.md"
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "installed_skill_path", lambda: installed)
+
+    out = compat._sync_skill({"mcp": "0.5.1", "skill": "1.6.0"})
+
+    assert out["ok"] and out["version"] == "1.8.0" and out["source_version"] == "1.8.0"
+    assert installed.read_text(encoding="utf-8").endswith("new docs\n")
+
+
+def test_sync_skill_refuses_a_clone_below_the_floor(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text(
+        "---\nname: psamvault\nversion: 1.0.0\n---\nold\n", encoding="utf-8"
+    )
+    installed = tmp_path / "installed" / "SKILL.md"
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "installed_skill_path", lambda: installed)
+
+    out = compat._sync_skill({"mcp": "0.5.1", "skill": "1.6.0"})
+
+    assert out["ok"] is False and "at least 1.6.0" in out["reason"], out
+    assert not installed.exists(), "nothing may be written when the floor is not met"
+
+
+def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
+    """`--sync-skill` must work with no MCP release and no MCP install at all."""
+    clone = tmp_path / "clone"
+    (clone / "psamvault-mcp").mkdir(parents=True)
+    (clone / "psamvault-mcp" / "SKILL.md").write_text(
+        "---\nname: psamvault\nversion: 1.8.0\n---\nnew\n", encoding="utf-8"
+    )
+    installed = tmp_path / "installed" / "SKILL.md"
+    monkeypatch.setattr(compat, "clone_path", lambda: clone)
+    monkeypatch.setattr(compat, "installed_skill_path", lambda: installed)
+    monkeypatch.setattr(compat, "installed_tools", lambda: list(compat.latest_release()["tools"]))
+
+    def _version_of(path=None):
+        target = Path(path or installed)
+        if not target.is_file():
+            return None
+        match = compat.FRONTMATTER_VERSION.search(target.read_text(encoding="utf-8")[:200])
+        return match.group(1) if match else None
+
+    monkeypatch.setattr(compat, "read_skill_version", _version_of)
+    monkeypatch.setattr(compat, "_install", lambda v: pytest.fail("--sync-skill must not install the MCP"))
+    monkeypatch.setattr(compat, "_install_from_git",
+                        lambda: pytest.fail("--sync-skill must not install the MCP"))
+
+    # the MCP side is irrelevant to a skill-only update: hold it fixed so the exit code reflects the
+    # skill, not this venv's stale dist metadata
+    rc = compat.main(["--sync-skill", "--installed-version", compat.latest_release()["mcp"]])
+    out = capsys.readouterr().out
+
+    assert "skill -> 1.8.0" in out, out
+    assert rc == 0, out
+
+
 def test_tool_drift_distinguishes_missing_from_unexpected():
     latest = compat.latest_release()
     tools = list(latest["tools"])
