@@ -503,11 +503,26 @@ psamvault-compat --check --json             # machine-readable
 psamvault-compat --apply                    # install the target release + pull the pinned skill
 psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
 psamvault-compat --apply --from-git         # install the local repo (merged but not yet released)
+psamvault-compat --apply --from-git --pull  # ...after stashing local changes and pulling origin/main
 ```
 
-A contract entry exists the moment a release is **merged**, before it ships — so `--apply` checks the
-index first and refuses (exit 3) rather than dying inside the resolver. Use `--from-git` for the
+A contract entry exists the moment a release is **merged**, before it ships. The index pre-check is
+deliberately **advisory**: PyPI's JSON API lags an upload (CDN cache), so it never blocks an install
+that would succeed — it only explains a real failure (exit 3). Use `--from-git` for the
 merged-but-unreleased case.
+
+### Upgrade safety (`--apply`)
+
+Same model as the psamvault CLI's upgrade path: **local work is never lost, and a failed upgrade is
+never left installed.**
+
+| Step | What it does |
+|---|---|
+| Snapshot | copies the installed skill aside (`backups/backup-<stamp>/`, keeps the newest 5) before overwriting it |
+| `--pull` | stashes uncommitted work (untracked included), `git pull --ff-only origin main`, then restores it. A failed pull restores immediately and stops; a *conflicting* restore leaves the work parked in a labelled stash and prints the recovery commands |
+| Repo report | `--from-git` prints branch, HEAD, dirtiness and position vs `origin/main` (fetched, or marked "as of the last fetch"), and warns when the venv is an editable/source install that a released wheel would detach |
+| Smoke test | imports the freshly installed server in a **fresh** interpreter from a neutral cwd — so the repo tree cannot masquerade as the install — and reports its version + tool count |
+| Rollback | if the install fails or the smoke test fails, the previously installed release is put back automatically |
 
 - **The installed server wins** — the skill is pulled to match it, never the reverse.
 - A release marked **breaking** is never applied without `--allow-breaking`: a silently disappearing
