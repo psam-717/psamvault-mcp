@@ -22,7 +22,8 @@ _spec.loader.exec_module(docs_sync)
 TOOLS = ["browser_login", "get_version", "export_key_to_env_file"]
 
 
-def _make_repo(tmp_path, readme: str, count: str = "3", contract_tools=None, agents=None, skill=None):
+def _make_repo(tmp_path, readme: str, count: str = "3", contract_tools=None, agents=None, skill=None,
+               changelog=True, unreleased=True):
     (tmp_path / "README.md").write_text(readme, encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text(
         agents if agents is not None else "\n".join(f"- `{t}`" for t in TOOLS), encoding="utf-8"
@@ -30,6 +31,15 @@ def _make_repo(tmp_path, readme: str, count: str = "3", contract_tools=None, age
     (tmp_path / "SKILL.md").write_text(
         skill if skill is not None else "\n".join(f"- `{t}`" for t in TOOLS), encoding="utf-8"
     )
+    if changelog is not False:
+        (tmp_path / "CHANGELOG.md").write_text(
+            changelog if isinstance(changelog, str) else "## 0.5.0 — 2026-09-10\n\n### Added\n\n- feat: a thing\n",
+            encoding="utf-8",
+        )
+    if unreleased is not False:
+        (tmp_path / "CHANGELOG.unreleased.md").write_text(
+            unreleased if isinstance(unreleased, str) else "# Unreleased Changes\n", encoding="utf-8"
+        )
     (tmp_path / "mcp_server").mkdir(exist_ok=True)
     (tmp_path / "mcp_server" / "compatibility.json").write_text(
         __import__("json").dumps({
@@ -77,6 +87,39 @@ def test_contract_mismatch_is_caught(tmp_path):
     )
     found = docs_sync.problems(repo=repo, tools=TOOLS)
     assert any("compatibility.json" in f for f in found), found
+
+
+def test_missing_unreleased_file_is_caught(tmp_path):
+    """Unreleased work must have a home, or 'what is pending?' is answerable only by reading git."""
+    repo = _make_repo(tmp_path, "\n".join(f"| `{t}` | x |" for t in TOOLS), unreleased=False)
+    found = docs_sync.problems(repo=repo, tools=TOOLS)
+    assert any("CHANGELOG.unreleased.md is missing" in f for f in found), found
+
+
+def test_missing_changelog_is_caught(tmp_path):
+    repo = _make_repo(tmp_path, "\n".join(f"| `{t}` | x |" for t in TOOLS), changelog=False)
+    found = docs_sync.problems(repo=repo, tools=TOOLS)
+    assert any("CHANGELOG.md is missing" in f for f in found), found
+
+
+def test_changelog_older_than_the_contract_is_caught(tmp_path):
+    """A release that forgets to roll the unreleased entries in must not ship quietly."""
+    repo = _make_repo(
+        tmp_path,
+        "\n".join(f"| `{t}` | x |" for t in TOOLS),
+        changelog="## 0.4.0 — 2026-09-01\n\n### Added\n\n- feat: older\n",
+    )
+    found = docs_sync.problems(repo=repo, tools=TOOLS)
+    assert any("CHANGELOG.md" in f and "0.5.0" in f for f in found), found
+
+
+def test_bracketed_version_headings_are_understood(tmp_path):
+    repo = _make_repo(
+        tmp_path,
+        "\n".join(f"| `{t}` | x |" for t in TOOLS),
+        changelog="## [0.5.0] - 2026-09-10\n\n### Added\n\n- feat: bracketed style\n",
+    )
+    assert docs_sync.problems(repo=repo, tools=TOOLS) == []
 
 
 def test_exit_code_is_one_when_drift_exists(tmp_path, monkeypatch, capsys):

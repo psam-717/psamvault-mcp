@@ -477,6 +477,20 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 > `skip_verify=true` cannot override it (it covers only providers that cannot be probed at all, and
 > the result then records `verification: skipped`). Invalid keys never reach a config or `.env`.
 
+## Changelog and unreleased tracking
+
+Two files, one rule: **nothing merged to `main` should have to be rediscovered at release time.**
+
+| File | Holds | Who writes it |
+|---|---|---|
+| [`CHANGELOG.unreleased.md`](CHANGELOG.unreleased.md) | merges that are on `main` but **not yet on PyPI** — the answer to "what is pending for the next release?" | whoever merges the change (usually via a follow-up PR) |
+| [`CHANGELOG.md`](CHANGELOG.md) | released history, newest first | rolled over **at release time** from the unreleased file |
+
+At release time the unreleased entries are used twice: pasted into the **GitHub release notes** and
+prepended to `CHANGELOG.md` under the new version heading; the unreleased file is then reset to its
+header. `scripts/docs-sync-check.py` fails the release when `CHANGELOG.md`'s newest section is not the
+release the contract calls newest, so a release that forgets the roll-over cannot ship quietly.
+
 ## Version lockstep (MCP ↔ skill)
 
 The server and its [usage skill](https://github.com/psam-717/private-skills) are a **pinned pair**, and

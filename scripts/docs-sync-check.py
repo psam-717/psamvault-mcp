@@ -8,7 +8,10 @@ It checks, against the code's actual tool surface (`mcp_server.main.TOOL_DEFINIT
   1. every tool the code exposes is documented in README / AGENTS / SKILL;
   2. no doc table still names a tool the code no longer has (the failure a tool COUNT cannot catch);
   3. every "N tools" claim in the docs matches the real count;
-  4. `mcp_server/compatibility.json`'s newest entry lists exactly the code's tools.
+  4. `mcp_server/compatibility.json`'s newest entry lists exactly the code's tools;
+  5. the unreleased-work file exists (unreleased changes must be tracked somewhere central);
+  6. `CHANGELOG.md`'s newest section is the release the contract calls newest, so a release that
+     forgets to roll the unreleased entries into the changelog cannot ship quietly.
 
 Exit 0 when the docs and the code agree, 1 otherwise (with each problem printed).
 """
@@ -38,8 +41,11 @@ ALL_DOCS = TOOL_DOCS + (
 FIRST_CELL = re.compile(r"^\|\s*`([a-z][a-z0-9_]*)`", re.MULTILINE)
 COUNT_CLAIM = re.compile(r"\b(\d{1,3})\s+tools\b")
 TOOL_SHAPED = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)+$")
+RELEASED_HEADING = re.compile(r"^##\s*\[?(\d+\.\d+\.\d+)\]?", re.MULTILINE)
 # snake_case first-column entries that are legitimately not tools
 NOT_TOOLS = {"psam_vault_backend", "hermes_gateway", "mcp_servers"}
+CHANGELOG = "CHANGELOG.md"
+UNRELEASED = "CHANGELOG.unreleased.md"
 
 
 def code_tools() -> list[str]:
@@ -69,13 +75,33 @@ def problems(repo: Path = REPO, tools: list[str] | None = None) -> list[str]:
                 if f"`{name}`" not in text:
                     found.append(f"{rel}: does not document the tool '{name}'")
     contract = repo / "mcp_server" / "compatibility.json"
+    contract_version: str | None = None
     if contract.is_file():
         releases = json.loads(contract.read_text(encoding="utf-8"))["releases"]
         newest = max(releases, key=lambda rel: rel["mcp"])
+        contract_version = newest["mcp"]
         if sorted(newest["tools"]) != tools:
             found.append(
                 f"compatibility.json: newest entry ({newest['mcp']}) lists a different tool surface "
                 "than the code"
+            )
+
+    if not (repo / UNRELEASED).is_file():
+        found.append(
+            f"{UNRELEASED} is missing — merged-but-unpublished work must be tracked there "
+            "(it is what the next release and the changelog are built from)"
+        )
+    changelog = repo / CHANGELOG
+    if not changelog.is_file():
+        found.append(f"{CHANGELOG} is missing — released history must live there")
+    else:
+        versions = RELEASED_HEADING.findall(changelog.read_text(encoding="utf-8", errors="replace"))
+        if not versions:
+            found.append(f"{CHANGELOG}: no '## <version>' section found")
+        elif contract_version and versions[0] != contract_version:
+            found.append(
+                f"{CHANGELOG}: newest section is {versions[0]}, but the contract's newest release is "
+                f"{contract_version} — roll the unreleased entries in at release time"
             )
     return found
 
@@ -87,7 +113,7 @@ def main() -> int:
         print(f"docs are OUT OF SYNC with the code ({len(tools)} tools):")
         for line in found:
             print(f"  - {line}")
-        print("\nUpdate the docs before releasing (README, AGENTS, SKILL, agent prompts, docs/).")
+        print("\nUpdate the docs before releasing (README, AGENTS, SKILL, agent prompts, docs/, CHANGELOG.md).")
         return 1
     print(f"docs in sync with the code ({len(tools)} tools)")
     return 0
