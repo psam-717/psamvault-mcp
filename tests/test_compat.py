@@ -283,3 +283,100 @@ def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert ("install", "0.6.0") in calls, out
     assert ("skill", "1.5.0") in calls, "the skill must be pulled to the version pinned for the target"
+
+
+# ── upgrade safety: snapshot / smoke test / rollback / pull ────────────────────
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_machine(monkeypatch):
+    """`--apply` tests must not write to the real skill dir or run the real pipx venv.
+
+    Tests that assert on these behaviours override them locally — a monkeypatch inside the test body
+    is applied after this fixture, so it wins.
+    """
+    monkeypatch.setattr(compat.safety, "snapshot_skill", lambda *a, **k: None)
+    monkeypatch.setattr(
+        compat.safety, "smoke_test",
+        lambda *a, **k: {"ok": True, "version": "0.0.0", "tools": ["browser_login"], "detail": ""},
+    )
+    monkeypatch.setattr(compat.safety, "is_pipx_editable", lambda: False)
+
+
+def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
+    """The skill file is overwritten by --apply, so it must be backed up first."""
+    order = []
+    monkeypatch.setattr(compat.safety, "snapshot_skill", lambda *a, **k: order.append("snapshot") or Path("b"))
+    monkeypatch.setattr(compat, "_install", lambda v: (order.append("install"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: {"ok": True, "version": e["skill"]})
+    monkeypatch.setattr(compat, "target_is_published", lambda v: True)
+    contract = _fake_contract()
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.5.0")
+
+    compat.main(["--apply", "--installed-version", "0.5.0"])
+    assert order[:2] == ["snapshot", "install"], order
+
+
+def test_apply_rolls_back_when_the_smoke_test_fails(monkeypatch, capsys):
+    """A half-finished install must not be left installed."""
+    calls = []
+    monkeypatch.setattr(compat, "_install", lambda v: {"ok": True})
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "target_is_published", lambda v: True)
+    monkeypatch.setattr(compat.safety, "smoke_test",
+                        lambda *a, **k: {"ok": False, "version": None, "tools": [], "detail": "ImportError"})
+    monkeypatch.setattr(compat.safety, "rollback", lambda previous, python: (
+        calls.append(("rollback", previous)), {"ok": True, "message": f"rolled back to {previous}"})[1])
+    contract = _fake_contract()
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+
+    rc = compat.main(["--apply", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert ("rollback", "0.5.0") in calls, "the previous version must be restored"
+    assert "smoke test FAILED" in out and "rolled back to 0.5.0" in out
+    assert "skill" not in calls, "a broken install must not get its skill synced"
+
+
+def test_apply_refuses_to_install_when_the_pull_fails(monkeypatch, capsys):
+    """--pull: a diverged branch must stop the upgrade with the user's work restored."""
+    calls = []
+    monkeypatch.setattr(compat.safety, "stash_and_pull", lambda repo: {
+        "ok": False, "stashed": True, "conflict": False, "pulled": False,
+        "message": "git pull --ff-only origin main failed — your local changes were restored.",
+    })
+    monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("install"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: (calls.append("skill"), {"ok": True})[1])
+    contract = _fake_contract()
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+
+    rc = compat.main(["--apply", "--pull", "--allow-breaking", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert calls == [], "nothing may be installed when the pull failed"
+    assert "restored" in out
+
+
+def test_apply_from_git_reports_what_will_be_installed(monkeypatch, capsys):
+    """Installing a working tree means the user must see branch / dirtiness / position vs origin."""
+    monkeypatch.setattr(compat.safety, "git_repo_state", lambda *a, **k: {
+        "ok": True, "dirty": True, "ahead": 2, "behind": 1, "branch": "main", "head": "abc1234",
+        "fetched": True, "reason": None,
+    })
+    monkeypatch.setattr(compat.safety, "is_pipx_editable", lambda: True)
+    monkeypatch.setattr(compat, "_install_from_git", lambda: {"ok": True})
+    monkeypatch.setattr(compat, "_sync_skill", lambda e: {"ok": True, "version": e["skill"]})
+    contract = _fake_contract()
+    monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
+    _offline(monkeypatch)
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.5.0")
+
+    rc = compat.main(["--apply", "--from-git", "--allow-breaking", "--installed-version", "0.5.0"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "branch main" in out and "dirty (uncommitted changes)" in out, out
+    assert "2 ahead / 1 behind" in out, out
+    assert "editable/source install" in out, "an editable install must be flagged before it is replaced"
+    assert "smoke test" in out
