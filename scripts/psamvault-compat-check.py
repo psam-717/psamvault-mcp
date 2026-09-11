@@ -62,10 +62,15 @@ def main() -> int:
             "installed_mcp": report.get("installed_mcp"),
             "target_mcp": report.get("target_mcp"),
             "installed_skill": report.get("installed_skill"),
-            "expected_skill": report.get("expected_skill"),
+            "skill_floor": report.get("skill_floor") or report.get("expected_skill"),
+            "skill_ahead": report.get("skill_ahead"),
             "tool_drift": report.get("tool_drift"),
             "breaking_pending": report.get("breaking_pending"),
             "findings": report.get("findings"),
+            # A skill that is merely AHEAD of the floor is healthy and never reaches this branch; a
+            # skill BELOW it is repaired by --sync-skill, which must never be answered with an MCP
+            # install (that would downgrade a runtime carrying unreleased work).
+            "sync_skill_command": "psamvault-compat --sync-skill",
             "apply_command": "psamvault-compat --apply"
             + (" --allow-breaking" if report.get("breaking_pending") else ""),
         }, indent=2))

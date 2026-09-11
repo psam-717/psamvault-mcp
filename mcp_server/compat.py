@@ -5,12 +5,18 @@ document a tool the server no longer has (v0.5.0 removed a tool and added anothe
 COUNT unchanged at 13 — a count check cannot see that). This module ships a machine-readable contract
 inside the wheel, checks the *installed* server against it, and can apply the matching pair.
 
-Authority: the installed server wins. The skill is pulled to the version pinned for the installed
-server, never the other way round. A release marked ``breaking`` is never applied without
+Authority: the installed server wins. The skill is brought up to the version the installed server
+requires, never the other way round. A release marked ``breaking`` is never applied without
 ``--allow-breaking`` — a silently disappearing tool is exactly the change a human should see.
 
-CLI: ``psamvault-compat`` (``--check`` default, ``--json``, ``--apply``, ``--allow-breaking``).
-Exit codes: 0 in sync, 1 drift found, 2 refused (breaking without the flag).
+Skill versions are a FLOOR, not a pin. Each release records the *minimum* skill version that documents
+it; any skill at or above that floor is healthy. This lets the skill move ahead of the MCP — an
+improved description of an existing tool is a legitimate skill-only update that needs no release —
+while still catching a skill that has fallen behind the server it documents.
+
+CLI: ``psamvault-compat`` (``--check`` default, ``--json``, ``--apply``, ``--sync-skill``,
+``--allow-breaking``, ``--from-git``, ``--pull``).
+Exit codes: 0 in sync, 1 drift found, 2 refused (breaking without the flag), 3 install failed.
 """
 
 from __future__ import annotations
@@ -118,7 +124,10 @@ def check(
     effective = latest if fingerprint_matches_latest else (entry or latest)
 
     expected_tools = sorted(effective["tools"])
-    expected_skill = effective["skill"]
+    # The skill version recorded for a release is a FLOOR (minimum that documents it), not an equality:
+    # the skill may legitimately move ahead of the MCP without a release.
+    skill_floor = effective["skill"]
+    expected_skill = skill_floor  # kept for tooling that reads the older key
     missing = [name for name in expected_tools if name not in tool_list]
     unexpected = [name for name in tool_list if name not in expected_tools]
 
@@ -135,11 +144,13 @@ def check(
         known = ", ".join(rel["mcp"] for rel in releases(contract))
         findings.append(f"no contract entry for server {mcp} (known: {known})")
 
-    skill_drift = skill_current != expected_skill
-    if skill_drift:
+    skill_below_floor = skill_current is None or _vkey(str(skill_current)) < _vkey(skill_floor)
+    skill_ahead = (not skill_below_floor) and str(skill_current) != str(skill_floor)
+    skill_drift = skill_below_floor  # name kept: drift means "worse than required", never "newer"
+    if skill_below_floor:
         findings.append(
-            f"skill version {skill_current!r} != {expected_skill} pinned for server "
-            f"{effective['mcp']} ({skill_location})"
+            f"skill version {skill_current!r} is BELOW the floor {skill_floor} required by server "
+            f"{effective['mcp']} ({skill_location}) — run: psamvault-compat --sync-skill"
         )
     if unexpected:
         findings.append(f"server exposes tools the {effective['mcp']} contract does not have: {unexpected}")
@@ -166,6 +177,8 @@ def check(
         "update_available": version_drift,
         "effective_release": effective["mcp"],
         "expected_skill": expected_skill,
+        "skill_floor": skill_floor,
+        "skill_ahead": skill_ahead,
         "installed_skill": skill_current,
         "skill_drift": skill_drift,
         "skill_path": skill_location,
@@ -188,8 +201,10 @@ def render(report: dict) -> str:
         f"  server target    : {report['target_mcp']}"
         + ("  (BREAKING)" if report["breaking_pending"] else ""),
         f"  effective release: {report['effective_release']}",
-        f"  skill installed  : {report['installed_skill']}",
-        f"  skill expected   : {report['expected_skill']}",
+        f"  skill installed  : {report['installed_skill']}"
+        + ("  [ahead of the floor — fine]" if report.get("skill_ahead")
+           else ("  [BELOW the floor]" if report["skill_drift"] else "")),
+        f"  skill floor      : {report['skill_floor']}  (minimum this server requires)",
         f"  tools            : {'+%d/-%d vs contract' % (len(report['tool_drift']['unexpected']), len(report['missing'])) if not report['in_sync'] else 'match contract'}",
     ]
     if report["findings"]:
@@ -256,38 +271,60 @@ def target_is_published(version: str, timeout: float = 20.0) -> bool | None:
         return None
 
 
-def _skill_blob_for_version(skill_version: str, entry: dict) -> str | None:
-    """Fetch the skill text whose frontmatter matches a version, from the clone's history."""
-    repo, rel = clone_path(), load_contract()["skill"]["path"]
-    if not (repo / ".git").is_dir():
-        return None
-    found = subprocess.run(
-        ["git", "-C", str(repo), "log", "--all", "--format=%H", "-S", f"version: {skill_version}", "--", rel],
-        capture_output=True, text=True, timeout=120,
-    )
-    shas = [line.strip() for line in found.stdout.splitlines() if line.strip()]
-    for sha in shas:
-        blob = subprocess.run(
-            ["git", "-C", str(repo), "show", f"{sha}:{rel}"], capture_output=True, text=True, timeout=120
-        )
-        if blob.returncode == 0:
-            match = FRONTMATTER_VERSION.search(blob.stdout[:2000])
-            if match and match.group(1) == skill_version:
-                return blob.stdout
-    return None
+def clone_skill_path() -> Path:
+    """Where the skill lives inside the clone (the source `--sync-skill` reads)."""
+    return clone_path() / load_contract()["skill"]["path"]
+
+
+def read_clone_skill() -> tuple[str | None, str | None]:
+    """The clone's CURRENT skill — its working tree, as-is (mirrors ``--from-git``).
+
+    Returns ``(version, text)``; ``(None, None)`` when there is no skill file there.
+    """
+    path = clone_skill_path()
+    if not path.is_file():
+        return None, None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    match = FRONTMATTER_VERSION.search(text[:2000])
+    return (match.group(1) if match else None), text
 
 
 def _sync_skill(entry: dict) -> dict:
+    """Install the clone's newest skill, provided it meets the floor the server requires.
+
+    A skill-only update is legitimate: an existing tool can get a better description without an MCP
+    release, so this installs whatever the clone currently holds (>= floor) rather than the exact
+    version a release happened to record. Below the floor it refuses and writes nothing — a skill that
+    is older than the server it documents is the one case worth stopping for.
+    """
+    floor = entry["skill"]
+    version, text = read_clone_skill()
+    source = clone_skill_path()
+    if text is None:
+        return {"ok": False, "reason": f"no skill at {source} (clone {clone_path()})"}
+    if version is None:
+        return {"ok": False, "reason": f"{source} has no 'version:' in its frontmatter"}
+    if _vkey(version) < _vkey(floor):
+        return {
+            "ok": False,
+            "reason": (
+                f"the clone's skill is {version} but server {entry['mcp']} requires at least {floor} — "
+                f"update the skill in {clone_path()} first"
+            ),
+        }
     target = installed_skill_path()
-    blob = _skill_blob_for_version(entry["skill"], entry)
-    if blob is None:
-        return {"ok": False, "reason": f"no commit in {clone_path()} carries skill version {entry['skill']}"}
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_file():
         backup = target.with_suffix(".md.bak")
         backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
-    target.write_text(blob, encoding="utf-8")
-    return {"ok": True, "path": str(target), "version": read_skill_version(target)}
+    target.write_text(text, encoding="utf-8")
+    return {
+        "ok": True,
+        "path": str(target),
+        "version": read_skill_version(target),
+        "floor": floor,
+        "source_version": version,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -308,6 +345,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="with --from-git: stash local changes, pull --ff-only origin main, restore, then install",
     )
+    parser.add_argument(
+        "--sync-skill",
+        action="store_true",
+        help="install the clone's newest skill without touching the MCP (skill-only update)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--installed-version", default=None, help="override the detected version (diagnostics)")
     parser.add_argument("--skill-path", default=None, help="override the installed skill path (diagnostics)")
@@ -315,6 +357,22 @@ def main(argv: list[str] | None = None) -> int:
 
     report = check(installed_version=args.installed_version, skill_path=args.skill_path)
     print(json.dumps(report, indent=2) if args.json else render(report))
+
+    if args.sync_skill:
+        # A skill-only update: the MCP is deliberately untouched, so MCP drift is not a precondition.
+        entry = release_for(report["effective_release"]) or latest_release()
+        backup = safety.snapshot_skill(installed_skill_path())
+        print(f"snapshot: skill backed up to {backup}" if backup
+              else "snapshot: no installed skill to back up")
+        synced = _sync_skill(entry)
+        print(f"skill -> {synced.get('version') or synced.get('reason')}: "
+              f"{'ok' if synced['ok'] else 'FAILED'} ({synced})")
+        if not synced["ok"]:
+            return 3
+        after = check(installed_version=report["installed_mcp"],
+                      skill_version=read_skill_version(args.skill_path))
+        print(render(after))
+        return after["exit_code"]
 
     if not args.apply:
         return report["exit_code"]

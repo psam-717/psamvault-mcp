@@ -498,13 +498,35 @@ the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MC
 version that documents it, plus the expected tool fingerprint).
 
 ```bash
-psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed: target not on the index
+psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed / below-floor skill
 psamvault-compat --check --json             # machine-readable
-psamvault-compat --apply                    # install the target release + pull the pinned skill
+psamvault-compat --apply                    # install the target release and bring the skill up to date
 psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
+psamvault-compat --sync-skill               # skill-only update: install the clone's newest skill, MCP untouched
 psamvault-compat --apply --from-git         # install the local repo (merged but not yet released)
 psamvault-compat --apply --from-git --pull  # ...after stashing local changes and pulling origin/main
 ```
+
+**The recorded skill version is a floor, not a pin.** Each release says the *minimum* skill version that
+documents it, and any skill at or above that floor is healthy:
+
+| State | Meaning |
+|---|---|
+| skill ≥ floor | ✅ fine — the skill may legitimately move **ahead** of the MCP |
+| skill < floor | drift — the skill is older than the server it documents; `--sync-skill` repairs it |
+| skill missing | drift (same remedy) |
+
+That is what makes a **skill-only update** possible: improving the description of an existing tool is a
+skill change with no MCP release behind it. Edit the skill in the clone, then:
+
+```bash
+psamvault-compat --sync-skill     # installs the clone's working-tree skill, if it meets the floor
+```
+
+`--sync-skill` reads the clone **as-is** (mirrors `--from-git`: uncommitted skill work is installable),
+snapshots the current skill first, and refuses — writing nothing — when the clone's skill is *below* the
+floor the installed server requires. `--apply` installs `max(newest available, floor)`, so installing an
+MCP release also brings the skill current.
 
 A contract entry exists the moment a release is **merged**, before it ships. The index pre-check is
 deliberately **advisory**: PyPI's JSON API lags an upload (CDN cache), so it never blocks an install

@@ -16,8 +16,14 @@
 
 ## Added
 
+- feat(compat): **`--sync-skill`** — a skill-only update path. Installs the clone's newest skill without touching the MCP, so an improved description of an existing tool no longer needs a release. Reads the clone's working tree as-is (like `--from-git`), snapshots the current skill first, and refuses without writing when the clone's skill is below the floor.
+- feat(compat): **the recorded skill version is a floor, not a pin.** Any skill at or above it is healthy (`skill_ahead`), so the skill can move ahead of the MCP; only a skill *below* the floor is drift, and its remedy is `--sync-skill` (never an MCP install, which would downgrade a runtime carrying unreleased work). `--apply` installs `max(newest available, floor)` so an MCP install also brings the skill current.
 - feat(apply): **upgrade safety** for `psamvault-compat --apply`, ported from the CLI's upgrade path — the installed skill is snapshotted before it is overwritten (newest 5 kept); `--pull` stashes uncommitted work (untracked included), pulls `--ff-only origin main` and restores it, stopping with the work restored if the pull fails and parking it in a labelled stash if the restore conflicts; `--from-git` reports branch/HEAD/dirtiness/position vs origin (and flags an editable install); a **smoke test** imports the freshly installed server in a fresh interpreter from a neutral cwd; and a failed install or smoke test **rolls back** to the previously installed release.
 - feat(apply): `--pull` — bring the repo-sourced install up to date as part of the same command.
+
+## Changed
+
+- changed(compat): the cron detector's drift report now names **both** remedies (`--sync-skill` for a skill below its floor, `--apply` for an MCP update) and exports `skill_floor`/`skill_ahead`, falling back to `expected_skill` for older compat builds.
 
 ## Fixed
 
