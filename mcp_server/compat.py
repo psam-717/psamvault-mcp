@@ -23,9 +23,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from mcp_server import upgrade_safety as safety
+
 CONTRACT_FILENAME = "compatibility.json"
 FRONTMATTER_VERSION = re.compile(r"^version:\s*([0-9][0-9A-Za-z.\-+]*)\s*$", re.MULTILINE)
 DEFAULT_CLONE = Path("D:/Projects/py-projects/private-skills")
+DEFAULT_REPO = Path("D:/Projects/py-projects/psamvault-mcp")
 
 
 # ── the contract ───────────────────────────────────────────────────────────────
@@ -209,6 +212,11 @@ def clone_path() -> Path:
     return Path(os.environ.get("PSAMVAULT_SKILL_CLONE") or DEFAULT_CLONE)
 
 
+def repo_path() -> Path:
+    """The clone `--from-git` installs from (and whose git state `--apply` reports)."""
+    return Path(os.environ.get("PSAMVAULT_MCP_REPO") or DEFAULT_REPO)
+
+
 def _install(target_version: str) -> dict:
     """Install the target release into the pipx venv (uv, WITH deps — --no-deps drops tools).
 
@@ -225,8 +233,7 @@ def _install(target_version: str) -> dict:
 
 def _install_from_git() -> dict:
     """Install the repo's current code — the normal path for a merged-but-unreleased version."""
-    repo = os.environ.get("PSAMVAULT_MCP_REPO") or "D:/Projects/py-projects/psamvault-mcp"
-    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), repo]
+    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), str(repo_path())]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
 
@@ -296,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="install the local repo instead of PyPI (for a merged-but-unreleased target)",
     )
+    parser.add_argument(
+        "--pull",
+        action="store_true",
+        help="with --from-git: stash local changes, pull --ff-only origin main, restore, then install",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--installed-version", default=None, help="override the detected version (diagnostics)")
     parser.add_argument("--skill-path", default=None, help="override the installed skill path (diagnostics)")
@@ -317,8 +329,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     entry = latest_release()
+    previous = report["installed_mcp"]  # what to put back if the new install does not work
+    from_git = args.from_git or args.pull
+
+    backup = safety.snapshot_skill(installed_skill_path())
+    print(f"snapshot: skill backed up to {backup}" if backup else "snapshot: no installed skill to back up")
+
+    if args.pull:
+        # Upgrade safety (psamvault-cli's model): never pull over uncommitted work, never lose it.
+        pulled = safety.stash_and_pull(repo_path())
+        print(f"repo: {pulled['message'] or f'pulled {repo_path().name} to origin/main'}")
+        if not pulled["ok"]:
+            return 1
+    if from_git:
+        state = safety.git_repo_state(repo_path(), fetch=not args.pull)
+        print(f"repo: installing {safety.render_repo_state(state)}")
+        if safety.is_pipx_editable():
+            print(
+                "note: the installed server is an editable/source install — a released wheel replaces "
+                "that repo link (--from-git keeps tracking it)"
+            )
+
     published: bool | None = None
-    if args.from_git:
+    if from_git:
         installed = _install_from_git()
         print(f"install psamvault-mcp from the local repo: {'ok' if installed['ok'] else 'FAILED'}")
     else:
@@ -331,6 +364,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"install psamvault-mcp=={entry['mcp']}: {'ok' if installed['ok'] else 'FAILED'}")
     if not installed["ok"]:
         print(installed["stderr"] or installed["stdout"])
+        if safety.smoke_test(pipx_python())["ok"]:
+            print("the installed server still imports — the previous version is intact")
+        else:
+            print("no working server in the venv — " + safety.rollback(previous, pipx_python())["message"])
         if published is False:
             print(
                 f"refusing: {entry['mcp']} is not listed on PyPI, so applying failed in the resolver "
@@ -339,8 +376,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 3
         return 1
-    if published is None and not args.from_git:
+    if published is None and not from_git:
         print("note: could not reach PyPI to confirm the target is published (install succeeded regardless)")
+
+    smoke = safety.smoke_test(pipx_python())
+    if not smoke["ok"]:
+        print(f"smoke test FAILED — the installed server does not import: {smoke['detail']}")
+        print(safety.rollback(previous, pipx_python())["message"])
+        return 1
+    print(f"smoke test: {smoke['version']} exposes {len(smoke['tools'])} tools")
+
     synced = _sync_skill(entry)
     print(f"skill -> {entry['skill']}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
 
