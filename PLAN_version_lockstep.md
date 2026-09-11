@@ -75,7 +75,7 @@ Exit codes: `0` in sync, `1` drift found (a cron detector can branch on this wit
 1. Resolve the target release (contract's latest).
 2. If the target is marked `breaking` and the installed version differs → **refuse and print what
    changed**, unless `--allow-breaking` is passed.
-3. Confirm the target exists **on the index** — a contract entry is created when a release is merged,
+3. Consult the index **as advice only** (its JSON API lags an upload, so it must never refuse on its own) — a contract entry is created when a release is merged,
    which is before it ships, so applying early otherwise fails deep in the resolver with an opaque
    `no version of psamvault-mcp==X`. Refuse with exit `3` and name the fix (publish first, or
    `--from-git` for a merged-but-unreleased target).
