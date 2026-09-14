@@ -19,6 +19,17 @@ Three problems, stated by psam, must no longer exist after 0.5.3:
 
 **Root defect driving P2/P3:** the package declares two entry points (`psamvault-mcp`, `psamvault-compat`), but pipx links apps **only when pipx itself installs the package**. Every upgrade performed by `uv pip install --python <pipx venv python>` — including compat's own `_install()` — adds entry points inside the venv that are never linked on PATH, and leaves pipx's records stale (`pipx list` still said 0.4.4). The defect is self-perpetuating: the upgrade command is what creates it, for every user, on every release that adds a command.
 
+**Correction to an earlier claim in this plan's drafts.** It is *not* true that nothing can see a newer release. `mcp_server/version_check.py` already queries PyPI on every server start (`check_for_update()`, called from `main()`). The problem is that the signal is unusable in practice:
+
+| Why the existing check doesn't help | Detail |
+|---|---|
+| It writes to **stderr through the logger** | in MCP stdio mode that lands in the client's logs, never in front of the user |
+| It fires **once per version, ever** | `~/.psamvault/last_seen_version` suppresses every repeat |
+| Its advice can fail | it says `pipx upgrade psamvault-mcp` — the command that hits the Windows lock and whose metadata is stale |
+| Its comparator is weaker than the contract's | `version_tuple()` splits on `.` and `int()`s it, so any suffix (`0.5.3rc1`) collapses to `(0,)` |
+
+So D1 is **not "add detection"** — it is "surface the detection that already exists, where people actually look, with the contract's comparator and correct advice", and collapse the two PyPI probes into one helper.
+
 ---
 
 ## 2. Decisions locked (psam, 2026-09-14)
@@ -119,7 +130,7 @@ Findings, each with a concrete fix:
 | Step | Work | Pillar | Verify with |
 |---|---|---|---|
 | 1 | `main()` subcommand dispatch (no-arg path untouched) | P1·P3 | L3 probe: 13 tools over real stdio, unchanged |
-| 2 | `latest_published()` + `--check` keys/rendering + `--no-index` | P3 | stubbed tests (newer / equal / offline) + live E2E |
+| 2 | **Unify + surface the PyPI probe**: one shared helper (refactor `version_check.py`), the contract's `_vkey` comparator everywhere, correct advice text; `--check` reports it; `--no-index` skips | P3 | stubbed tests (newer / equal / offline / `rc` suffix) + live E2E |
 | 3 | `--apply --latest` targeting + breaking gate + skill sync (D2, D3, D7) | P3 | stubbed tests + live E2E on the sandbox |
 | 4 | Process probe (D10) + installer choice (D9) + `relink_pending` | P2 | live: free-venv run leaves pipx metadata current |
 | 5 | `selfcheck` (D11) | P1·P3 | live: exit 1 stale, exit 0 fresh |
@@ -142,6 +153,9 @@ Findings, each with a concrete fix:
 - [ ] Every documented command runs on Windows **and** macOS/Linux, or is explicitly marked platform-specific
 
 **P3 — verification always works**
+- [ ] One PyPI probe implementation: `compat --check` and the startup notice cannot disagree
+- [ ] `version_check.py` uses the contract's comparator (a `0.5.3rc1`-style fixture orders correctly)
+- [ ] The startup notice's advice matches the documented upgrade command (no more `pipx upgrade` under a locked venv)
 - [ ] `--check` reports `update_available` against real PyPI; offline degrades to a note, exit code unchanged
 - [ ] `--apply --latest` installs the newest published release; refuses without `--allow-breaking` when unknown-newer
 - [ ] `selfcheck` distinguishes installed from served and exits 1 on mismatch
@@ -182,6 +196,8 @@ Findings, each with a concrete fix:
 | Process probe false negative → pipx attempts a locked venv | the attempt fails loudly with the OS error; the same run falls back to uv + relink-pending |
 | Process probe false positive → unnecessary uv install | `relink_pending` is reported and `doctor --fix` repairs at the next safe moment |
 | PyPI probe slows every `--check` | 5s timeout, skipped entirely with `--no-index` |
+| Two PyPI probes (startup notice + compat) drifting apart | **one helper serves both**; a test asserts `compat` and `version_check` resolve the same version for the same fixture |
+| The naive `version_tuple()` mis-orders a suffix release (`0.5.3rc1`) | replace with the contract's `_vkey`; explicit test case with a pre-release suffix |
 | Users on very old versions cannot reach the new subcommands until they upgrade once | the skills keep the venv-path/module fallback documented for that first hop |
 
 ## 10. Reference sweep checklist (no `psamvault-compat` command may survive)
