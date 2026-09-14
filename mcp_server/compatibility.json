@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-10",
+  "updated": "2026-09-12",
   "skill": {
     "name": "psamvault-mcp",
     "repo": "psam-717/private-skills",
@@ -8,6 +8,29 @@
     "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
   },
   "releases": [
+    {
+      "mcp": "0.5.2",
+      "skill": "1.8.0",
+      "breaking": false,
+      "added": [],
+      "removed": [],
+      "notes": "Verify recipes for Tavily and GitHub; --sync-skill (skill-only updates); the recorded skill version is a floor (skill_ahead is healthy); upgrade safety for --apply (snapshot, --pull stash/pull/restore, smoke test, rollback) and a no-downgrade guard shared by --apply and --sync-skill.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
     {
       "mcp": "0.5.1",
       "skill": "1.6.0",
