@@ -33,7 +33,7 @@ Three problems, stated by psam, must no longer exist after 0.5.3:
 | D5 | How it is proven | **stubbed unit tests + one live E2E against real PyPI** |
 | D6 | Bookkeeping | **README + usage skill + contract entry + floor bump in the same release** |
 | D7 | `--apply --latest` and the skill | **also syncs the skill when the newer release raises the floor** |
-| D8 | Where compat/diagnostics live | **subcommands on `psamvault-mcp`; `psamvault-compat` kept as an alias** |
+| D8 | Where compat live | **REMOVED as a console script — `psamvault-mcp compat …` is the only command** (`psamvault-compat` deleted, every reference swept) |
 | D9 | Which installer performs an upgrade | **pipx when the venv is free; uv when processes hold it (+ relink-pending note)** |
 | D10 | Process detection | **stdlib per-OS (Windows CIM, POSIX `pgrep -f <venv>/bin/python`)** |
 | D11 | Where the "what actually runs" probe lives | **in the package: `psamvault-mcp selfcheck`** |
@@ -50,7 +50,7 @@ Three problems, stated by psam, must no longer exist after 0.5.3:
 | `psamvault-mcp compat …` | **NEW** | canonical path; identical flags to today's `psamvault-compat` |
 | `psamvault-mcp selfcheck` | **NEW** | installed vs served (+ PyPI-latest when reachable); exit 0/1 |
 | `psamvault-mcp doctor [--fix]` | **NEW** | entry-point/PATH drift, stale pipx metadata, lock holders, floor state, latest-published |
-| `psamvault-compat …` | **kept as an alias** | same implementation; no breakage for docs, cron, or scripts |
+| `psamvault-compat …` | **REMOVED in 0.5.3** | entry point deleted from `[project.scripts]`; all references swept. The internal module `mcp_server.compat` is **kept** (the cron detector calls it directly and it is not a user-facing name) |
 
 **Dispatch rule:** `main()` inspects `sys.argv[1]` **before** the existing `-h/-V` scan and before any server startup. `compat`, `selfcheck`, `doctor` → delegate to their implementation and exit with its code. Anything else (including no arguments) → current stdio server path, untouched.
 
@@ -148,7 +148,8 @@ Findings, each with a concrete fix:
 - [ ] The cron detector can finally say "a newer release exists"
 
 **Release hygiene**
-- [ ] Docs gate green; contract entry added; skill floor bumped; changelog rolled
+- [ ] Docs gate green; contract entry added (**`breaking: true`** — the console-script removal); skill floor bumped; changelog rolled
+- [ ] `psamvault-compat` is gone: entry point deleted, a test asserts `entry_points()` no longer exposes it, and the reference sweep is clean (only historical changelog lines and the cron script filename remain)
 - [ ] TestPyPI → sandbox L1/L2/L3 → user gate → PyPI → GitHub release → PR
 
 ## 7. Test matrix
@@ -169,7 +170,8 @@ Findings, each with a concrete fix:
 
 - No changes to the 13 MCP tools, their schemas, or the vault/credential flows
 - No change to the contract/floor semantics themselves
-- `psamvault-compat.exe` is **kept** (deprecation, if ever, is a later release)
+- `psamvault-compat.exe` is **removed** (console script). The internal module `mcp_server.compat` stays — it is not user-facing, and the cron detector imports it
+- **This removal is a breaking surface change** → the 0.5.3 contract entry carries `breaking: true`, and the changelog names it. No external users are known (evidence in §11), so the practical impact is limited to psam's own machine
 - No gbrain/Hermes-side changes beyond the cron detector's one condition
 
 ## 9. Risks
@@ -182,7 +184,40 @@ Findings, each with a concrete fix:
 | PyPI probe slows every `--check` | 5s timeout, skipped entirely with `--no-index` |
 | Users on very old versions cannot reach the new subcommands until they upgrade once | the skills keep the venv-path/module fallback documented for that first hop |
 
-## 10. Open questions (defaults set)
+## 10. Reference sweep checklist (no `psamvault-compat` command may survive)
+
+Counts measured on 2026-09-14:
+
+| Target | Hits | Action |
+|---|---|---|
+| `pyproject.toml` `[project.scripts]` | 1 | delete the entry point |
+| `README.md` | 8 | rewrite every example to `psamvault-mcp compat …` |
+| `AGENTS.md` | 2 | same |
+| `SKILL.md` (repo) | 3 | same |
+| `CHANGELOG.md` / `CHANGELOG.unreleased.md` | 3 | keep historical entries; add the removal to the 0.5.3 section |
+| `mcp_server/compat.py` | 3 | docstrings/help text only (module name unchanged) |
+| `mcp_server/main.py` | 1 | help text lists subcommands |
+| `mcp_server/upgrade_safety.py` | 1 | messages reference the new command |
+| `tests/test_compat.py`, `tests/test_compat_detector.py` | 1 + 3 | update invocations; add a test asserting the entry point is gone |
+| `psam-custom/psamvault-mcp-release` (skill) | many | canonical command in the playbook |
+| `psam-custom/psamvault-release`, `release-sandbox-verification`, `psamvault-mcp` (usage), `pypi-release-verification` (skills) | several | sweep to the subcommand |
+| `HERMES_HOME/scripts/psamvault-compat-check.py` | prose | update the docstring; **filename unchanged** (avoid cron-job churn) — renaming is a separate, optional cleanup |
+| `PLAN_*.md` (repo) | several | update the plans themselves so docs don't contradict the code |
+
+**Verification of the sweep:** after edits, `grep -rn "psamvault-compat" <repo> <skills>` returns only historical changelog lines and the cron script's filename/docstring. A test asserts `importlib.metadata.entry_points()` no longer exposes the old name.
+
+## 11. Evidence behind "no external users" (2026-09-14)
+
+| Signal | Value | Interpretation |
+|---|---|---|
+| PyPI non-mirror downloads | 1416 all-time | **not user evidence** — daily shape spikes on our publish days (09-03: 96, 09-10: 144) and sits at 1–6/day otherwise: mirrors, scanners, and our own installs |
+| GitHub release assets | v0.5.2 0/0 · v0.5.1 1/1 · v0.4.6 2/8 | single digits — psam and the agent |
+| Stars / forks / watchers | 2 / 0 / 0 | no community |
+| Third-party issues | none | — |
+
+**Residual risk, stated plainly:** if a pipx-installed user does exist, removing the entry point leaves their shim dangling; the cure is one `pipx install --force psamvault-mcp==0.5.3`, which the release notes will name explicitly. PyPI exposes no per-file install attribution, so "zero users" cannot be proven — only strongly indicated.
+
+## 12. Open questions (defaults set)
 
 - [ ] `doctor --fix` automatic? *Default: report-only unless `--fix`.*
 - [ ] `selfcheck` also compares PyPI-latest? *Default: yes when reachable.*
