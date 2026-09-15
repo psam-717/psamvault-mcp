@@ -43,7 +43,7 @@ def fake_machine(monkeypatch):
     )
     monkeypatch.setattr(
         doctor, "_pipx_records",
-        lambda: {"version": state["pipx_version"], "apps_by_venv": state["pipx_records"]},
+        lambda: {"version": state["pipx_version"], "apps_by_venv": state["pipx_records"], "ok": state.get("pipx_ok", True)},
     )
     monkeypatch.setattr(doctor, "_pipx_venv_version", lambda: state.get("pipx_venv_version"))
     monkeypatch.setattr(
@@ -147,6 +147,33 @@ class TestFix:
         assert calls == [("0.5.2", False, True)]
         assert "reinstall psamvault-mcp==0.5.2 via pipx: ok" in out
         assert rc in (0, 1)  # re-diagnoses afterwards; the fixture keeps the drift
+
+
+class TestPipxUnavailableOnPath:
+    """No pipx means ownership of an unclaimed bin-dir app is UNKNOWN — not "ours, therefore stale".
+
+    Independent verification reproduced the false positive: with pipx removed from PATH, the CLI's own
+    `psamvault` app was reported as a leftover of this package.
+    """
+
+    def test_no_stale_links_claimed_when_pipx_cannot_be_asked(self, fake_machine):
+        fake_machine["pipx_ok"] = False
+        fake_machine["pipx_version"] = None
+        report = doctor.diagnose(probe_index=False)
+        assert report["stale_links"] == []
+        assert not any("no longer declares" in f for f in report["findings"]), report["findings"]
+
+    def test_render_says_pipx_is_unavailable_instead_of_stale(self, fake_machine):
+        fake_machine["pipx_ok"] = False
+        fake_machine["pipx_version"] = None
+        rendered = doctor.render(doctor.diagnose(probe_index=False))
+        assert "unknown (pipx not available on PATH)" in rendered
+        assert "[stale]" not in rendered
+
+    def test_a_genuine_leftover_is_still_caught_when_pipx_answers(self, fake_machine):
+        fake_machine["linked"] = ["psamvault", "psamvault-mcp", "psamvault-old"]
+        report = doctor.diagnose(probe_index=False)
+        assert report["stale_links"] == ["psamvault-old"]
 
 
 class TestNotRunningInsideThePipxVenv:
