@@ -73,8 +73,12 @@ def _pipx_records() -> dict:
 
     The app ownership matters: the psamvault CLI lives in the same bin directory and exposes
     ``psamvault``/``pv``, so "not declared by psamvault-mcp" is not the same as "stale".
+
+    ``ok`` distinguishes "pipx says there are no other owners" from "pipx could not be asked". Without
+    it, a host with no pipx on PATH looks like a host where every unclaimed app belongs to this
+    package — and the CLI's own ``psamvault`` gets reported as our leftover.
     """
-    records: dict = {"version": None, "apps_by_venv": {}}
+    records: dict = {"version": None, "apps_by_venv": {}, "ok": False}
     try:
         proc = subprocess.run(["pipx", "list", "--json"], capture_output=True, text=True, timeout=120)
         if proc.returncode != 0 or not proc.stdout.strip():
@@ -88,6 +92,7 @@ def _pipx_records() -> dict:
                 records["version"] = main_package.get("package_version")
     except Exception:
         return records
+    records["ok"] = True
     return records
 
 
@@ -95,8 +100,16 @@ def _pipx_metadata_version() -> str | None:
     return _pipx_records().get("version")
 
 
-def _apps_owned_by_other_packages() -> set[str]:
-    records = _pipx_records()
+def _apps_owned_by_other_packages(records: dict | None = None) -> set[str] | None:
+    """Apps that other pipx packages own — or ``None`` when pipx could not be asked.
+
+    ``None`` is not the same as "nobody else owns anything": with no pipx on PATH the ownership of an
+    unclaimed app in the bin dir is simply unknown, and guessing "ours, therefore stale" blames this
+    package for the CLI's own ``psamvault``.
+    """
+    records = _pipx_records() if records is None else records
+    if not records.get("ok"):
+        return None
     owned: set[str] = set()
     for venv, apps in records.get("apps_by_venv", {}).items():
         if venv.replace("_", "-") != DIST:
@@ -170,8 +183,13 @@ def diagnose(probe_index: bool = True) -> dict:
     missing = [name for name in declared if name not in linked]
     # An app in the bin dir that another pipx package owns (the psamvault CLI, for instance) is not
     # this package's leftover — only flag names nothing else claims.
-    others = _apps_owned_by_other_packages()
-    stale_linked = [name for name in linked if name not in declared and _stem(name) not in others]
+    pipx_records = _pipx_records()
+    others = _apps_owned_by_other_packages(pipx_records)
+    stale_linked = (
+        [name for name in linked if name not in declared and _stem(name) not in others]
+        if others is not None
+        else []  # pipx could not be asked, so ownership is unknown — do not guess "ours"
+    )
 
     holders: list[dict] = []
     venv_free = False  # fails busy: a probe that cannot answer must never read as "free"
@@ -189,8 +207,9 @@ def diagnose(probe_index: bool = True) -> dict:
     # and doing that under a live server is the one failure this module exists to prevent.
     probe_uncertain = bool(env) and not holders and not venv_free
 
-    pipx_version = _pipx_metadata_version()
+    pipx_version = pipx_records.get("version")
     pipx_reality = _pipx_venv_version()
+    pipx_known = bool(pipx_records.get("ok"))
     imports_ok, imports_detail = _fresh_import()
 
     skill: dict = {}
@@ -259,6 +278,7 @@ def diagnose(probe_index: bool = True) -> dict:
         "interpreter": _interpreter(),
         "installed_version": installed,
         "pipx_metadata_version": pipx_version,
+        "pipx_records_ok": pipx_known,
         "pipx_venv_version": pipx_reality,
         "declared_entry_points": declared,
         "linked_apps": linked,
@@ -280,11 +300,17 @@ def render(report: dict) -> str:
         "psamvault-mcp doctor",
         f"  interpreter      : {report['interpreter']}",
         f"  installed        : {report['installed_version'] or 'not installed here'}",
-        f"  pipx records     : {report['pipx_metadata_version'] or 'unknown'}"
+        f"  pipx records     : "
         + (
-            ""
-            if report["pipx_metadata_version"] == (report.get("pipx_venv_version") or report["installed_version"])
-            else "   [stale]"
+            "unknown (pipx not available on PATH)"
+            if not report.get("pipx_records_ok", report["pipx_metadata_version"] is not None)
+            else (report["pipx_metadata_version"] or "unknown")
+            + (
+                ""
+                if report["pipx_metadata_version"]
+                == (report.get("pipx_venv_version") or report["installed_version"])
+                else "   [stale]"
+            )
         ),
     ] + (
         # Only when we are NOT running inside the pipx venv: otherwise the line above is about this
