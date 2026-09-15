@@ -38,6 +38,7 @@ def fake_machine(monkeypatch):
         lambda: SimpleNamespace(
             linked_apps=lambda: set(state["linked"]),
             holders=lambda: list(state["holders"]),
+            is_free=lambda: state.get("free", not state["holders"]),
         ),
     )
     monkeypatch.setattr(
@@ -145,6 +146,32 @@ class TestFix:
         assert calls == [("0.5.2", False, True)]
         assert "reinstall psamvault-mcp==0.5.2 via pipx: ok" in out
         assert rc in (0, 1)  # re-diagnoses afterwards; the fixture keeps the drift
+
+
+class TestFailedProbeIsNotFree:
+    """A probe that cannot answer must read as BUSY — the safe direction.
+
+    `holders()` returns [] both for "nothing is running" and "the probe failed" (no powershell/pgrep,
+    timeout, unparseable output). Deciding `--fix` on `not holders` would let pipx recreate the venv
+    underneath a live server — the exact failure this module exists to prevent.
+    """
+
+    def test_probe_failure_reports_unknown_not_free(self, fake_machine):
+        fake_machine["holders"] = []
+        fake_machine["free"] = False  # probe failed, despite naming no holder
+        report = doctor.diagnose(probe_index=False)
+        assert report["venv_free"] is False
+        assert report["venv_probe_uncertain"] is True
+        assert any("could not confirm" in f for f in report["findings"])
+        assert "unknown (probe failed)" in doctor.render(report)
+
+    def test_fix_refuses_when_the_probe_failed(self, fake_machine, capsys):
+        fake_machine["holders"] = []
+        fake_machine["free"] = False
+        report = doctor.diagnose(probe_index=False)
+        rc = doctor._fix(report)
+        assert rc == 2
+        assert "refusing to repair" in capsys.readouterr().out
 
 
 class TestRender:
