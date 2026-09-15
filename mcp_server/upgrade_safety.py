@@ -1,4 +1,4 @@
-"""Upgrade safety for `psamvault-compat --apply` — the psamvault-cli lesson, applied to the MCP.
+"""Upgrade safety for `psamvault-mcp compat --apply` — the psamvault-cli lesson, applied to the MCP.
 
 An install that replaces the running server can break in ways the install itself cannot see:
 

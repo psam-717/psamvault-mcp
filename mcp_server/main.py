@@ -774,7 +774,7 @@ def _version_payload() -> dict:
             "tool_surface_matches_newest": matches_newest,
             "breaking_pending": bool(latest.get("breaking")) and _VERSION != latest["mcp"],
             "expected_tool_count": len(effective["tools"]),
-            "check_command": "psamvault-compat --check",
+            "check_command": "psamvault-mcp compat --check",
         }
     except Exception as exc:  # a broken contract must never break get_version
         payload["compatibility"] = {"error": f"{type(exc).__name__}: {exc}"}

@@ -54,8 +54,22 @@ def main() -> int:
             print(json.dumps({"psamvault_compat": "unparseable output", "stdout": proc.stdout[-500:]}))
             return 0
 
-        if report.get("exit_code") == 0:
+        # A newer PUBLISHED release is not drift — but it is news the user needs. The check asks PyPI
+        # directly (0.5.3+), so the installed contract no longer limits what it can see.
+        published_newer = report.get("published_newer")
+        if report.get("exit_code") == 0 and not published_newer:
             return 0  # in sync — print nothing, so the monitor sees no change
+
+        if report.get("exit_code") == 0 and published_newer:
+            print(json.dumps({
+                "psamvault_compat": "UPDATE AVAILABLE",
+                "installed_mcp": report.get("installed_mcp"),
+                "latest_published": report.get("latest_published"),
+                "installed_skill": report.get("installed_skill"),
+                "skill_floor": report.get("skill_floor"),
+                "apply_command": "psamvault-mcp compat --apply --latest",
+            }, indent=2))
+            return 0
 
         print(json.dumps({
             "psamvault_compat": "DRIFT",
@@ -70,8 +84,8 @@ def main() -> int:
             # A skill that is merely AHEAD of the floor is healthy and never reaches this branch; a
             # skill BELOW it is repaired by --sync-skill, which must never be answered with an MCP
             # install (that would downgrade a runtime carrying unreleased work).
-            "sync_skill_command": "psamvault-compat --sync-skill",
-            "apply_command": "psamvault-compat --apply"
+            "sync_skill_command": "psamvault-mcp compat --sync-skill",
+            "apply_command": "psamvault-mcp compat --apply"
             + (" --allow-breaking" if report.get("breaking_pending") else ""),
         }, indent=2))
         return 0

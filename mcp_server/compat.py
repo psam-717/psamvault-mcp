@@ -14,8 +14,10 @@ it; any skill at or above that floor is healthy. This lets the skill move ahead 
 improved description of an existing tool is a legitimate skill-only update that needs no release —
 while still catching a skill that has fallen behind the server it documents.
 
-CLI: ``psamvault-compat`` (``--check`` default, ``--json``, ``--apply``, ``--sync-skill``,
-``--allow-breaking``, ``--from-git``, ``--pull``).
+CLI: ``psamvault-mcp compat`` (``--check`` default, ``--json``, ``--apply``, ``--apply --latest``,
+``--sync-skill``, ``--from-git``, ``--pull``, ``--allow-breaking``). The standalone ``psamvault-compat``
+console script was removed in 0.5.3: pipx links console scripts only for packages it installed itself,
+so a script added by a later release never reaches PATH while the file sits in the venv.
 Exit codes: 0 in sync, 1 drift found, 2 refused (breaking without the flag), 3 install failed.
 """
 
@@ -161,7 +163,7 @@ def check(
     if skill_below_floor:
         findings.append(
             f"skill version {skill_current!r} is BELOW the floor {skill_floor} required by server "
-            f"{effective['mcp']} ({skill_location}) — run: psamvault-compat --sync-skill"
+            f"{effective['mcp']} ({skill_location}) — run: psamvault-mcp compat --sync-skill"
         )
     # Where the skill WOULD come from, so a clone parked on an older branch is visible before anyone
     # runs --sync-skill (which refuses to downgrade, but silence is what let this go unnoticed).
@@ -478,7 +480,7 @@ def _sync_skill(entry: dict, allow_downgrade: bool = False) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="psamvault-compat",
+        prog="psamvault-mcp compat",
         description="Check (and optionally repair) the psamvault-mcp ↔ skill version pairing.",
     )
     parser.add_argument("--check", action="store_true", help="report drift (default)")
