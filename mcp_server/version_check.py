@@ -127,13 +127,34 @@ def check_for_update(silent: bool = True) -> None:
     _print_update_notice(installed, latest)
 
 
+def _upgrade_command(latest: str) -> str:
+    """The apply command the flag gate will actually accept, for a release newer than this contract.
+
+    The gate refuses a target the installed contract has never seen unless ``--allow-breaking`` is
+    present, and "installed == contract, PyPI is newer" is exactly that case — so recommending plain
+    ``--apply --latest`` here would print a command that exits 2 every time it is copied.
+    """
+    newest_known = None
+    try:
+        data = json.loads(Path(__file__).with_name("compatibility.json").read_text(encoding="utf-8"))
+        versions = [r.get("mcp") for r in (data.get("releases") or []) if r.get("mcp")]
+        if versions:
+            newest_known = max(versions, key=vkey)
+    except Exception:  # noqa: BLE001 - advice only; never break the notice chain
+        newest_known = None
+    parts = ["psamvault-mcp", "compat", "--apply", "--latest"]
+    if newest_known and is_newer(latest, newest_known):
+        parts.append("--allow-breaking")
+    return " ".join(parts)
+
+
 def _print_update_notice(installed: str, latest: str) -> None:
     """Print the update notification to stderr."""
     from mcp_server.log import get_logger
 
     logger = get_logger()
     logger.info("Update available: %s -> %s", installed, latest)
-    logger.info("Run  psamvault-mcp compat --apply --latest  to update.")
+    logger.info("Run  %s  to update.", _upgrade_command(latest))
     logger.info(
         "(`pipx upgrade psamvault-mcp` can fail on Windows while MCP servers are running; "
         "see `psamvault-mcp doctor`.)"
