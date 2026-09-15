@@ -103,17 +103,31 @@ def _probe(python: Path) -> list[dict]:
 
 
 def _run_powershell(script: str) -> subprocess.CompletedProcess:
-    """Run a PowerShell script, falling back to ``pwsh`` on a host that only has PowerShell 7."""
+    """Run a PowerShell script, falling back to ``pwsh`` on a host that only has PowerShell 7.
+
+    Two encoding details, both learned the hard way: the child's console output codepage on Windows is
+    the OEM one (437 on this host) while Python 3.11 decodes as UTF-8, so a *single* non-ASCII byte in
+    any matched command line — a stray '\xb5', an accented username — makes the implicit decode fail in
+    the reader thread, leaving stdout empty. The script therefore forces UTF-8 output, and the decode
+    is explicit and lossy-but-loud (`errors="replace"`), so a surprise byte yields unparseable JSON
+    that fails the probe loudly instead of an empty string that reads as "nothing is running".
+    """
     missing: Exception | None = None
     for exe in ("powershell", "pwsh"):
         try:
             return subprocess.run(
-                [exe, "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True, text=True, timeout=PROBE_TIMEOUT,
+                [exe, "-NoProfile", "-NonInteractive", "-Command", _PS_FORCE_UTF8 + script],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=PROBE_TIMEOUT,
             )
         except FileNotFoundError as exc:  # try the next shell; re-raise if there is none
             missing = exc
     raise missing or FileNotFoundError("powershell")
+
+
+#: Prepended to every probe script. Without it PowerShell writes the console codepage and the parent's
+#: UTF-8 decode of a non-ASCII command line silently produces nothing (see _run_powershell).
+_PS_FORCE_UTF8 = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
 
 
 def _ps_like_literal(value: str) -> str:
@@ -135,25 +149,33 @@ def _probe_windows(python: Path) -> list[dict]:
     belongs to :func:`_parse_windows`, which requires the venv path followed by a real separator.
 
     One match comes back as a bare JSON object and several as a list — ``ConvertTo-Json`` decides
-    that at runtime, so both are handled. No match at all prints nothing, not ``null``.
+    that at runtime, so both are handled. The array wrapper (and ``-InputObject``) is deliberate: a
+    plain ``| ConvertTo-Json`` prints NOTHING when the pipeline is empty, which made "no process
+    matched" indistinguishable from "the probe died" — see :func:`is_free`'s fail-busy contract.
+    Now the script always prints JSON, so empty output means exactly one thing: the probe failed.
     """
     venv = _venv_root(python)
     spelled = str(venv)
     forms = [spelled] + ([spelled.replace("\\", "/")] if "\\" in spelled else [])
     like = " -or ".join(f"$_.CommandLine -like '*{_ps_like_literal(form)}*'" for form in forms)
     script = (
-        "Get-CimInstance Win32_Process | "
+        "$hits = @(Get-CimInstance Win32_Process | "
         # $PID is this very PowerShell process: it holds the pattern text on its own command line
         # and would otherwise always match itself.
         f"Where-Object {{ $_.ProcessId -ne $PID -and ({like}) }} | "
-        "Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+        "Select-Object ProcessId,Name,CommandLine); "
+        "ConvertTo-Json -InputObject $hits -Compress"
     )
     proc = _run_powershell(script)
     if proc.returncode != 0:
         raise RuntimeError(f"powershell exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
     raw = (proc.stdout or "").strip()
     if not raw:
-        return []  # no matches
+        # The script ALWAYS prints JSON (`[]` when nothing matched), so empty output can only mean the
+        # probe failed — a decode error, a killed child, a swallowed write. Returning [] would read as
+        # "no process holds the venv": the dangerous direction, because it sends `--apply` down the
+        # `pipx install --force` path that recreates the venv while a live server still has it open.
+        raise RuntimeError("powershell produced no output — cannot tell whether the venv is held")
     payload = json.loads(raw)  # ValueError/JSONDecodeError propagates on purpose
     if not isinstance(payload, (dict, list, type(None))):
         # Parseable but the wrong shape: this probe cannot be trusted, so it fails loudly rather
@@ -205,6 +227,10 @@ def _probe_posix(python: Path) -> list[dict]:
         return []  # pgrep exits 1 for "no process matched" — a result, not a failure
     if proc.returncode != 0:
         raise RuntimeError(f"pgrep exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+    if not (proc.stdout or "").strip():
+        # Exit 0 means pgrep DID match, so stdout cannot legitimately be empty — same decode failure
+        # as on Windows, and it must not be read as "nothing holds the venv".
+        raise RuntimeError("pgrep matched but produced no output — cannot tell whether the venv is held")
     needle = str(python)
     found: list[dict] = []
     for line in (proc.stdout or "").splitlines():
