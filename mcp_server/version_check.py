@@ -6,6 +6,9 @@ to stderr if one is available. Suppresses repeat notices for the same
 latest version by persisting the last-seen version to ~/.psamvault/last_seen_version
 (shared with the CLI).
 
+The same probe backs `psamvault-mcp compat --check`, so the two surfaces cannot
+disagree, and version ordering lives in mcp_server.versions.
+
 All errors are silently swallowed so a network failure never prevents the
 server from starting.
 """
@@ -15,17 +18,40 @@ from pathlib import Path
 
 import httpx
 
+from mcp_server.versions import is_newer, vkey
+
 
 PYPI_URL = "https://pypi.org/pypi/psamvault-mcp/json"
+
+#: A version check must never delay a server start or a CLI check for long.
+DEFAULT_TIMEOUT = 5.0
+
 _VERSION_FILE = Path.home() / ".psamvault" / "last_seen_version"
 
 
 def version_tuple(v: str) -> tuple[int, ...]:
-    """Convert a version string like '1.2.3' into a comparable tuple."""
+    """Comparable key for a version string (implementation: mcp_server.versions.vkey).
+
+    Kept under this name because callers and tests already import it; the single comparator lives
+    in mcp_server.versions so this module and compat can never disagree.
+    """
+    return vkey(v)
+
+
+def latest_published(timeout: float = DEFAULT_TIMEOUT) -> str | None:
+    """The newest version on PyPI, or None when it cannot be determined.
+
+    The ONLY PyPI probe in the package — the startup notice and `compat --check` both call it.
+    Never raises: an unreachable or malformed index is reported as None so callers degrade to
+    "unknown" instead of failing.
+    """
     try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except ValueError:
-        return (0,)
+        response = httpx.get(PYPI_URL, timeout=timeout)
+        response.raise_for_status()
+        version = response.json()["info"]["version"]
+        return str(version) if version else None
+    except Exception:
+        return None
 
 
 def _get_installed_version() -> str | None:
@@ -36,12 +62,24 @@ def _get_installed_version() -> str | None:
 
 
 def _get_latest_version() -> str | None:
-    try:
-        response = httpx.get(PYPI_URL, timeout=3)
-        response.raise_for_status()
-        return response.json()["info"]["version"]
-    except Exception:
+    """Internal seam kept for the existing tests; delegates to the public probe."""
+    return latest_published()
+
+
+def update_available(installed: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> str | None:
+    """Return the published version when it is newer than the installed one, else None.
+
+    Used by `compat --check` to report `update_available`. Returns None both when the install is
+    current and when PyPI cannot be reached; callers that must tell those apart call
+    latest_published() directly.
+    """
+    current = installed or _get_installed_version()
+    if not current:
         return None
+    latest = latest_published(timeout=timeout)
+    if not latest:
+        return None
+    return latest if is_newer(latest, current) else None
 
 
 def _get_last_seen_version() -> str | None:
@@ -77,7 +115,7 @@ def check_for_update(silent: bool = True) -> None:
     if not latest:
         return
 
-    if version_tuple(latest) <= version_tuple(installed):
+    if not is_newer(latest, installed):
         return
 
     # Suppress if we already notified for this latest version
@@ -95,4 +133,8 @@ def _print_update_notice(installed: str, latest: str) -> None:
 
     logger = get_logger()
     logger.info("Update available: %s -> %s", installed, latest)
-    logger.info("Run  pipx upgrade psamvault-mcp  to update.")
+    logger.info("Run  psamvault-mcp compat --apply --latest  to update.")
+    logger.info(
+        "(`pipx upgrade psamvault-mcp` can fail on Windows while MCP servers are running; "
+        "see `psamvault-mcp doctor`.)"
+    )
