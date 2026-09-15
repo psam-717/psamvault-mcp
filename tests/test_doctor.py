@@ -45,6 +45,7 @@ def fake_machine(monkeypatch):
         doctor, "_pipx_records",
         lambda: {"version": state["pipx_version"], "apps_by_venv": state["pipx_records"]},
     )
+    monkeypatch.setattr(doctor, "_pipx_venv_version", lambda: state.get("pipx_venv_version"))
     monkeypatch.setattr(
         "mcp_server.compat.check",
         lambda **k: {
@@ -146,6 +147,26 @@ class TestFix:
         assert calls == [("0.5.2", False, True)]
         assert "reinstall psamvault-mcp==0.5.2 via pipx: ok" in out
         assert rc in (0, 1)  # re-diagnoses afterwards; the fixture keeps the drift
+
+
+class TestNotRunningInsideThePipxVenv:
+    """Doctor run from a sandbox/other venv must not compare pipx's records with ITS OWN version."""
+
+    def test_records_are_compared_against_the_pipx_venv_not_this_interpreter(self, fake_machine):
+        fake_machine["installed"] = "0.5.3"        # the interpreter running doctor (a sandbox)
+        fake_machine["pipx_version"] = "0.5.3"     # pipx's records, for the pipx venv
+        fake_machine["pipx_venv_version"] = "0.5.2"  # what the pipx venv actually has
+        report = doctor.diagnose(probe_index=False)
+        assert report["pipx_venv_version"] == "0.5.2"
+        assert any("pipx records say 0.5.3 but 0.5.2 is installed" in f for f in report["findings"]), report["findings"]
+        assert "this interpreter is a different install" in doctor.render(report)
+
+    def test_no_finding_when_records_match_the_pipx_venv(self, fake_machine):
+        fake_machine["installed"] = "0.5.3"
+        fake_machine["pipx_version"] = "0.5.2"
+        fake_machine["pipx_venv_version"] = "0.5.2"
+        report = doctor.diagnose(probe_index=False)
+        assert not any("pipx records say" in f for f in report["findings"]), report["findings"]
 
 
 class TestFailedProbeIsNotFree:
