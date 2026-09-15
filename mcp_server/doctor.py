@@ -113,6 +113,36 @@ def _stem(app_name: str) -> str:
     return name.lower() if os.name == "nt" else name
 
 
+def _version_installed_in(python: str) -> str | None:
+    """The psamvault-mcp version installed in ``python``'s environment, or None. Never raises."""
+    code = f"import importlib.metadata as m; print(m.version('{DIST}'))"
+    try:
+        proc = subprocess.run(
+            [python, "-c", code], capture_output=True, text=True, timeout=60,
+            cwd=str(Path.home()), env={**os.environ, "PYTHONPATH": ""},
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return (proc.stdout or "").strip() if proc.returncode == 0 else None
+
+
+def _pipx_venv_version() -> str | None:
+    """What is really installed in the PIPX venv — which is not always the interpreter running us.
+
+    Run `doctor` from a sandbox (or any other venv) and `importlib.metadata` describes THAT
+    environment, while the bin dir and pipx's records describe the pipx one. Comparing the two
+    directly invents drift; the honest comparison is pipx's records against pipx's own venv.
+    """
+    try:
+        env = _install_env()
+        python = str(env.venv_python())
+    except Exception:  # noqa: BLE001
+        return None
+    if not python or os.path.normcase(python) == os.path.normcase(_interpreter()):
+        return None  # same interpreter: the running version already IS the pipx version
+    return _version_installed_in(python)
+
+
 def _fresh_import() -> tuple[bool, str]:
     """Import the installed package in a fresh interpreter from a neutral cwd."""
     code = f"import importlib.metadata as m; print(m.version('{DIST}'))"
@@ -160,6 +190,7 @@ def diagnose(probe_index: bool = True) -> dict:
     probe_uncertain = bool(env) and not holders and not venv_free
 
     pipx_version = _pipx_metadata_version()
+    pipx_reality = _pipx_venv_version()
     imports_ok, imports_detail = _fresh_import()
 
     skill: dict = {}
@@ -193,9 +224,13 @@ def diagnose(probe_index: bool = True) -> dict:
             f"app(s) linked on PATH that this version no longer declares: {', '.join(stale_linked)} "
             "— a leftover from a previous release"
         )
-    if pipx_version and installed and pipx_version != installed:
+    # pipx's records describe the PIPX venv, so compare them against that venv's own version —
+    # `installed` only when doctor is run the normal way (through the pipx shim), else it describes
+    # whatever interpreter happens to be running us and the comparison would invent drift.
+    pipx_actual = pipx_reality or installed
+    if pipx_version and pipx_actual and pipx_version != pipx_actual:
         findings.append(
-            f"pipx records say {pipx_version} but {installed} is installed "
+            f"pipx records say {pipx_version} but {pipx_actual} is installed "
             "(an upgrade was performed outside pipx)"
         )
     if holders:
@@ -224,6 +259,7 @@ def diagnose(probe_index: bool = True) -> dict:
         "interpreter": _interpreter(),
         "installed_version": installed,
         "pipx_metadata_version": pipx_version,
+        "pipx_venv_version": pipx_reality,
         "declared_entry_points": declared,
         "linked_apps": linked,
         "missing_links": missing,
@@ -245,7 +281,18 @@ def render(report: dict) -> str:
         f"  interpreter      : {report['interpreter']}",
         f"  installed        : {report['installed_version'] or 'not installed here'}",
         f"  pipx records     : {report['pipx_metadata_version'] or 'unknown'}"
-        + ("" if report["pipx_metadata_version"] == report["installed_version"] else "   [stale]"),
+        + (
+            ""
+            if report["pipx_metadata_version"] == (report.get("pipx_venv_version") or report["installed_version"])
+            else "   [stale]"
+        ),
+    ] + (
+        # Only when we are NOT running inside the pipx venv: otherwise the line above is about this
+        # interpreter and the reader would not know which install the numbers describe.
+        [f"  pipx venv        : {report['pipx_venv_version']}  (this interpreter is a different install)"]
+        if report.get("pipx_venv_version") and report["pipx_venv_version"] != report["installed_version"]
+        else []
+    ) + [
         f"  entry points     : {', '.join(report['declared_entry_points']) or 'none declared'}",
         f"  linked on PATH   : {', '.join(report['linked_apps']) or 'none'}",
         f"  venv             : {'free' if report['venv_free'] else (str(len(report['venv_holders'])) + ' process(es) holding it' if report['venv_holders'] else 'unknown (probe failed) — treated as busy')}",
