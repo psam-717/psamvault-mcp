@@ -67,7 +67,7 @@ def main() -> int:
                 "latest_published": report.get("latest_published"),
                 "installed_skill": report.get("installed_skill"),
                 "skill_floor": report.get("skill_floor"),
-                "apply_command": "psamvault-mcp compat --apply --latest",
+                "apply_command": "psamvault-mcp compat --apply --latest --allow-breaking",
             }, indent=2))
             return 0
 
