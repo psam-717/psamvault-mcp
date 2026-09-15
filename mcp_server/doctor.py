@@ -223,6 +223,10 @@ def diagnose(probe_index: bool = True) -> dict:
             "skill_drift": report.get("skill_drift"),
             "latest_published": report.get("latest_published"),
             "published_newer": report.get("published_newer"),
+            # The command compat already worked out, --allow-breaking included when the target is newer
+            # than the installed contract. Building the text here is how the advice drifts out of sync
+            # with the gate that must accept it.
+            "apply_command": report.get("apply_command"),
         }
     except Exception as exc:  # noqa: BLE001
         skill = {"error": f"{type(exc).__name__}: {exc}"}
@@ -271,7 +275,7 @@ def diagnose(probe_index: bool = True) -> dict:
     if skill.get("published_newer"):
         findings.append(
             f"{skill['published_newer']} is published and newer — run: "
-            "psamvault-mcp compat --apply --latest"
+            + (skill.get("apply_command") or "psamvault-mcp compat --apply --latest --allow-breaking")
         )
 
     return {
@@ -360,9 +364,14 @@ def _fix(report: dict) -> int:
             "not replace a running python.exe.\nstop the gateway first, then re-run: psamvault-mcp doctor --fix"
         )
         return 2
-    version = report["installed_version"]
+    # Repair the version PIPX has — never the interpreter that happens to be running doctor. Diagnose
+    # already separates the two (`pipx_venv_version` vs `installed_version`, see
+    # TestNotRunningInsideThePipxVenv, which exists because a sandbox CAN be running older code): the
+    # naive choice would `pipx install --force` that older version over a working install, silently
+    # downgrading it, and `assume_free=True` would skip the second opinion.
+    version = report.get("pipx_venv_version") or report["installed_version"]
     if not version:
-        print("cannot repair: the installed version could not be determined")
+        print("cannot repair: the version pipx has installed could not be determined")
         return 2
     result = compat._install(version, force_uv=False, assume_free=True)
     print(f"reinstall {DIST}=={version} via {result.get('installer')}: {'ok' if result['ok'] else 'FAILED'}")
