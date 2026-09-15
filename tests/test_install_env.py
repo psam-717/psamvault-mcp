@@ -164,7 +164,11 @@ def test_windows_probe_command_asks_cim_for_json_and_excludes_itself(monkeypatch
     assert "Get-CimInstance Win32_Process" in fake.script
     assert "$_.ProcessId -ne $PID" in fake.script
     assert "$_.CommandLine -like" in fake.script
-    assert "ConvertTo-Json -Compress" in fake.script
+    assert "ConvertTo-Json -InputObject $hits -Compress" in fake.script
+    # The @() wrapper is what guarantees JSON output even when NOTHING matched. Without it an empty
+    # pipeline prints nothing at all, and "no process is running" becomes indistinguishable from
+    # "the probe died" — the ambiguity that let a held venv read as free.
+    assert "$hits = @(" in fake.script
     assert str(ie.venv_dir()) in fake.script, "the venv must be the match, not every process"
     # coarse on purpose: a command line launched with forward slashes has no backslash to match,
     # so the clause asks for both spellings (the precise filter runs on the parse side)
@@ -236,10 +240,16 @@ def test_windows_holders_parse_a_bare_object_for_a_single_match(monkeypatch, tmp
 
 
 def test_windows_no_matches_is_an_empty_list_and_a_free_venv(monkeypatch, tmp_path):
-    """No match prints NOTHING (not 'null') — that is a successful probe, so the venv is free."""
+    """No match prints `[]` — a successful probe, so the venv is free.
+
+    The script wraps the pipeline in ``@(...)`` and uses ``-InputObject`` specifically so that an empty
+    result is still JSON. A bare ``| ConvertTo-Json`` prints nothing at all when nothing matched, which
+    made "no process holds the venv" indistinguishable from "the probe died" (see
+    TestAnUnreadableProbeIsNeverFree).
+    """
     _as_windows(monkeypatch)
     _use_venv(monkeypatch, _venv(tmp_path))
-    _patch(monkeypatch, _Run(stdout=""))
+    _patch(monkeypatch, _Run(stdout="[]"))
 
     assert ie.holders() == []
     assert ie.is_free() is True
@@ -519,3 +529,50 @@ def test_linked_apps_is_empty_when_the_bin_dir_is_unknown_or_missing(monkeypatch
 
     monkeypatch.setattr(ie, "bin_dir", lambda: tmp_path / "never-created")
     assert ie.linked_apps() == set()
+
+
+# ── a probe that cannot answer must never read as "free" ──────────────────────
+class TestAnUnreadableProbeIsNeverFree:
+    """Independent verification found the dangerous direction of a decode failure.
+
+    On Windows the probe child writes the OEM console codepage (437 here) while the parent decodes
+    UTF-8, so ONE non-ASCII byte anywhere in a matched command line empties ``stdout``. ``[]`` ("nothing
+    is running") and ``""`` ("the probe died") were then indistinguishable, and ``is_free()`` — whose
+    entire contract is *fails busy* — returned True. That flips ``--apply`` onto
+    ``pipx install --force``, which recreates the venv while a live server holds it: the one failure
+    this module exists to prevent. Same shape on POSIX: ``pgrep`` exit 0 with empty stdout.
+    """
+
+    def test_powershell_with_no_output_is_a_failure_not_an_empty_venv(self, monkeypatch):
+        fake = _patch(monkeypatch, _Run(stdout="", returncode=0))
+        with pytest.raises(RuntimeError, match="no output"):
+            ie._probe_windows(Path(ie.venv_python()))
+        assert fake.calls, "the probe must have actually run"
+
+    def test_that_failure_makes_is_free_fail_busy(self, monkeypatch):
+        _patch(monkeypatch, _Run(stdout="", returncode=0))
+        monkeypatch.setattr(ie, "_is_windows", lambda: True)
+        assert ie.is_free() is False
+        monkeypatch.setattr(ie, "_is_windows", lambda: False)
+        assert ie.is_free() is False
+
+    def test_an_empty_list_is_still_a_real_no_matches_answer(self, monkeypatch):
+        """`[]` is what the script prints when nothing matched — that must stay a result, not a failure."""
+        _patch(monkeypatch, _Run(stdout="[]", returncode=0))
+        assert ie._probe_windows(Path(ie.venv_python())) == []
+
+    def test_powershell_is_told_to_emit_utf8_and_decoded_leniently(self, monkeypatch):
+        fake = _patch(monkeypatch, _Run(stdout="[]", returncode=0))
+        ie._probe_windows(Path(ie.venv_python()))
+        assert fake.kwargs[-1].get("encoding") == "utf-8"
+        assert fake.kwargs[-1].get("errors") == "replace"
+        assert fake.script.startswith(ie._PS_FORCE_UTF8), "the child must be forced to emit UTF-8"
+
+    def test_pgrep_exit_0_with_no_output_is_a_failure(self, monkeypatch):
+        _patch(monkeypatch, _Run(stdout="", returncode=0))
+        with pytest.raises(RuntimeError, match="produced no output"):
+            ie._probe_posix(Path("/x/venv/bin/python"))
+
+    def test_pgrep_exit_1_is_still_no_match(self, monkeypatch):
+        _patch(monkeypatch, _Run(stdout="", returncode=1))
+        assert ie._probe_posix(Path("/x/venv/bin/python")) == []
