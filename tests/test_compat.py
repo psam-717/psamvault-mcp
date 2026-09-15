@@ -125,11 +125,13 @@ def test_check_reports_a_clone_that_is_behind_the_installed_skill(tmp_path, monk
     clone = tmp_path / "clone"
     (clone / "psamvault-mcp").mkdir(parents=True)
     (clone / "psamvault-mcp" / "SKILL.md").write_text("---\nversion: 1.7.0\n---\n", encoding="utf-8")
+    latest = compat.latest_release()
     monkeypatch.setattr(compat, "clone_path", lambda: clone)
-    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.8.0")
-    monkeypatch.setattr(compat, "installed_tools", lambda: list(compat.latest_release()["tools"]))
+    # the installed skill sits exactly at the shipped floor, so this stays true across releases
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: latest["skill"])
+    monkeypatch.setattr(compat, "installed_tools", lambda: list(latest["tools"]))
 
-    report = compat.check(installed_version=compat.latest_release()["mcp"])
+    report = compat.check(installed_version=latest["mcp"])
 
     assert report["skill_source"] == "1.7.0" and report["skill_source_stale"] is True
     assert report["in_sync"] is True, "an older clone must not be reported as drift"
@@ -223,10 +225,11 @@ def test_sync_skill_refuses_a_clone_below_the_floor(tmp_path, monkeypatch):
 
 def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
     """`--sync-skill` must work with no MCP release and no MCP install at all."""
+    floor = compat.latest_release()["skill"]
     clone = tmp_path / "clone"
     (clone / "psamvault-mcp").mkdir(parents=True)
     (clone / "psamvault-mcp" / "SKILL.md").write_text(
-        "---\nname: psamvault\nversion: 1.8.0\n---\nnew\n", encoding="utf-8"
+        f"---\nname: psamvault\nversion: {floor}\n---\nnew\n", encoding="utf-8"
     )
     installed = tmp_path / "installed" / "SKILL.md"
     monkeypatch.setattr(compat, "clone_path", lambda: clone)
@@ -250,7 +253,7 @@ def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
     rc = compat.main(["--sync-skill", "--installed-version", compat.latest_release()["mcp"]])
     out = capsys.readouterr().out
 
-    assert "skill -> 1.8.0" in out, out
+    assert f"skill -> {compat.latest_release()['skill']}" in out, out
     assert rc == 0, out
 
 
