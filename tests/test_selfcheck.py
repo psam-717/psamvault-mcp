@@ -203,6 +203,15 @@ class TestDeadlines:
 
 # ── (e) no interpreter ─────────────────────────────────────────────────────────
 class TestInterpreterResolution:
+    def test_the_running_interpreter_wins_when_it_has_psamvault_mcp(self, monkeypatch, tmp_path):
+        """Run inside a sandbox/venv and the answer must be about THAT install, not the pipx one."""
+        monkeypatch.setattr(selfcheck, "_installed_version_of", lambda python: "0.5.3")
+        monkeypatch.setattr(selfcheck, "candidate_pythons", lambda: pytest.fail(
+            "the pipx venv must not be consulted when the running env is itself an install"))
+        path, why = selfcheck.resolve_python()
+        assert path == sys.executable
+        assert "this interpreter" in why and "0.5.3" in why
+
     def test_missing_venv_python_exits_2(self, monkeypatch, capsys):
         monkeypatch.setattr(selfcheck, "resolve_python", lambda explicit=None: (
             None, "no psamvault-mcp venv python found (tried: C:/nope/python.exe)"))
@@ -222,6 +231,7 @@ class TestInterpreterResolution:
         assert "does not exist" in capsys.readouterr().err
 
     def test_resolve_prefers_install_env_when_it_exists(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(selfcheck, "_installed_version_of", lambda python: None)
         fake = tmp_path / "python.exe"
         fake.write_text("")
         monkeypatch.setattr(selfcheck, "_from_install_env", lambda: str(fake))
@@ -230,6 +240,7 @@ class TestInterpreterResolution:
         assert path == str(fake) and why == "mcp_server.install_env.venv_python"
 
     def test_install_env_absent_falls_back(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(selfcheck, "_installed_version_of", lambda python: None)
         """mcp_server/install_env.py does not exist yet — resolution must still work."""
         fake = tmp_path / "python.exe"
         fake.write_text("")
@@ -259,6 +270,7 @@ class TestInterpreterResolution:
         assert selfcheck._from_install_env() == str(fake)
 
     def test_install_env_pointing_at_missing_venv_falls_through(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(selfcheck, "_installed_version_of", lambda python: None)
         """venv_python() may name a venv that has not been created yet — keep looking."""
         real = tmp_path / "python.exe"
         real.write_text("")
