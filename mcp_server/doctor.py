@@ -144,11 +144,20 @@ def diagnose(probe_index: bool = True) -> dict:
     stale_linked = [name for name in linked if name not in declared and _stem(name) not in others]
 
     holders: list[dict] = []
+    venv_free = False  # fails busy: a probe that cannot answer must never read as "free"
     if env:
         try:
             holders = env.holders()
         except Exception:
             holders = []
+        try:
+            venv_free = bool(env.is_free())
+        except Exception:
+            venv_free = False
+    # No named holder AND not provably free => the probe itself failed (no powershell/pgrep, timeout,
+    # unparseable output). Say so instead of implying the venv is idle: `--fix` recreates the venv,
+    # and doing that under a live server is the one failure this module exists to prevent.
+    probe_uncertain = bool(env) and not holders and not venv_free
 
     pipx_version = _pipx_metadata_version()
     imports_ok, imports_detail = _fresh_import()
@@ -193,6 +202,11 @@ def diagnose(probe_index: bool = True) -> dict:
         findings.append(
             f"{len(holders)} process(es) hold the venv — pipx cannot recreate it until they stop"
         )
+    if probe_uncertain:
+        findings.append(
+            "could not confirm whether any process holds the venv (the process probe failed) — "
+            "assuming it is BUSY; repair will use the in-venv path"
+        )
     if not imports_ok:
         findings.append(f"the installed package does not import cleanly: {imports_detail}")
     if skill.get("skill_drift"):
@@ -215,7 +229,8 @@ def diagnose(probe_index: bool = True) -> dict:
         "missing_links": missing,
         "stale_links": stale_linked,
         "venv_holders": holders,
-        "venv_free": not holders,
+        "venv_free": venv_free,
+        "venv_probe_uncertain": probe_uncertain,
         "fresh_import_ok": imports_ok,
         "fresh_import_detail": imports_detail,
         "skill": skill,
@@ -233,7 +248,7 @@ def render(report: dict) -> str:
         + ("" if report["pipx_metadata_version"] == report["installed_version"] else "   [stale]"),
         f"  entry points     : {', '.join(report['declared_entry_points']) or 'none declared'}",
         f"  linked on PATH   : {', '.join(report['linked_apps']) or 'none'}",
-        f"  venv             : {'free' if report['venv_free'] else str(len(report['venv_holders'])) + ' process(es) holding it'}",
+        f"  venv             : {'free' if report['venv_free'] else (str(len(report['venv_holders'])) + ' process(es) holding it' if report['venv_holders'] else 'unknown (probe failed) — treated as busy')}",
         f"  fresh import     : {'ok' if report['fresh_import_ok'] else 'FAILED — ' + report['fresh_import_detail']}",
     ]
     skill = report.get("skill") or {}
