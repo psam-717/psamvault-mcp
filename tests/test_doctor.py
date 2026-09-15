@@ -222,6 +222,52 @@ class TestFailedProbeIsNotFree:
         assert "refusing to repair" in capsys.readouterr().out
 
 
+class TestFixRepairsPipxsVersion:
+    """`--fix` must repair what PIPX has, never the interpreter that happens to run doctor.
+
+    Run doctor from an older sandbox — the usage this PR documents — and the naive choice would
+    `pipx install --force` that older version over a working install: a silent downgrade, with
+    `assume_free=True` skipping the second opinion.
+    """
+
+    def test_repairs_the_pipx_version_not_the_running_one(self, fake_machine, capsys, monkeypatch):
+        fake_machine.update({"installed": "0.5.2", "pipx_venv_version": "0.5.3", "holders": []})
+        calls: list[str] = []
+        import mcp_server.compat as compat
+
+        monkeypatch.setattr(
+            compat, "_install",
+            lambda v, force_uv=False, assume_free=False: (
+                calls.append(v), {"ok": True, "installer": "pipx"})[1],
+        )
+        report = doctor.diagnose(probe_index=False)
+        doctor._fix(report)
+        assert calls == ["0.5.3"], "never downgrade the live install to the sandbox's version"
+
+    def test_refuses_when_no_version_can_be_determined(self, fake_machine, capsys):
+        fake_machine["installed"] = None
+        fake_machine["pipx_venv_version"] = None
+        fake_machine["holders"] = []
+        report = doctor.diagnose(probe_index=False)
+        assert doctor._fix(report) == 2
+        assert "could not be determined" in capsys.readouterr().out
+
+
+class TestTheAdvertisedUpgradeCommandCarriesTheFlag:
+    """doctor's advice must be the same command compat's gate will accept."""
+
+    def test_finding_uses_the_command_compat_decided_on(self, fake_machine, monkeypatch):
+        import mcp_server.compat as compat
+
+        monkeypatch.setattr(compat, "check", lambda **k: {
+            "installed_skill": "1.9.0", "skill_floor": "1.9.0", "skill_drift": False,
+            "latest_published": "0.6.0", "published_newer": "0.6.0",
+            "apply_command": "psamvault-mcp compat --apply --latest --allow-breaking",
+        })
+        report = doctor.diagnose(probe_index=True)
+        assert any("--apply --latest --allow-breaking" in f for f in report["findings"]), report["findings"]
+
+
 class TestRender:
     def test_shows_the_manual_fix_when_the_venv_is_busy(self, fake_machine):
         report = doctor.diagnose(probe_index=False)

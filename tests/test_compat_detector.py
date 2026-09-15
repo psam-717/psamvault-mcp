@@ -43,7 +43,10 @@ def test_reports_a_newer_published_release(monkeypatch, capsys):
     assert detector.main() == 0
     out = capsys.readouterr().out
     assert "UPDATE AVAILABLE" in out and "0.6.0" in out
-    assert "psamvault-mcp compat --apply --latest" in out
+    # The branch means "in sync with this wheel's contract, but PyPI has something newer" — exactly the
+    # case the apply gate refuses without --allow-breaking, so the advertised command must carry it or
+    # the woken agent runs a command that exits 2.
+    assert "psamvault-mcp compat --apply --latest --allow-breaking" in out
 
 
 def test_silent_when_in_sync_and_nothing_newer_is_published(monkeypatch, capsys):
