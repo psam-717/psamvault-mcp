@@ -290,7 +290,7 @@ def test_get_version_payload_exposes_the_pairing():
     assert block["paired_skill_version"]
     assert block["newest_release"]
     assert isinstance(block["expected_tool_count"], int) and block["expected_tool_count"] > 0
-    assert block["check_command"].startswith("psamvault-compat")
+    assert block["check_command"].startswith("psamvault-mcp compat")
     assert block["expected_tool_count"] == len(main.TOOL_DEFINITIONS), (
         "the reported tool count must describe the code that is running"
     )
