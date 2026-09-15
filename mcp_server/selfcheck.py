@@ -169,11 +169,20 @@ def candidate_pythons() -> list[tuple[str, str]]:
 
 
 def resolve_python(explicit: str | None = None) -> tuple[str | None, str]:
-    """(interpreter, where it came from). The interpreter is ``None`` when none can be found."""
+    """(interpreter, where it came from). The interpreter is ``None`` when none can be found.
+
+    The RUNNING interpreter wins when it is itself a psamvault-mcp install — asking "what version am
+    I?" from inside a sandbox or a venv must answer about *that* install, not about the pipx one on the
+    same machine. Only when the running environment has no psamvault-mcp do we go looking for the pipx
+    venv, and the returned label always says which of the two answered.
+    """
     if explicit:
         if os.path.isfile(explicit):
             return os.path.normpath(explicit), "--python"
         return None, f"--python {explicit} does not exist"
+    running = _installed_version_of(sys.executable)
+    if running:
+        return sys.executable, f"this interpreter (has psamvault-mcp {running} installed)"
     tried: list[str] = []
     for path, why in candidate_pythons():
         if os.path.isfile(path):
@@ -181,6 +190,20 @@ def resolve_python(explicit: str | None = None) -> tuple[str | None, str]:
         tried.append(path)
     detail = "; ".join(tried) if tried else "no candidate locations"
     return None, f"no psamvault-mcp venv python found (tried: {detail})"
+
+
+def _installed_version_of(python: str) -> str | None:
+    """The psamvault-mcp version installed in ``python``'s environment, or None. Never raises."""
+    code = (
+        "import importlib.metadata as m\n"
+        "try: print(m.version('psamvault-mcp'))\n"
+        "except Exception: pass\n"
+    )
+    try:
+        proc = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=30, env=_child_env())
+    except Exception:
+        return None
+    return (proc.stdout or "").strip() or None
 
 
 # ── probes ─────────────────────────────────────────────────────────────────────
