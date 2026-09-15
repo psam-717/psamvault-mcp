@@ -241,7 +241,7 @@ def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
         return match.group(1) if match else None
 
     monkeypatch.setattr(compat, "read_skill_version", _version_of)
-    monkeypatch.setattr(compat, "_install", lambda v: pytest.fail("--sync-skill must not install the MCP"))
+    monkeypatch.setattr(compat, "_install", lambda v, **k: pytest.fail("--sync-skill must not install the MCP"))
     monkeypatch.setattr(compat, "_install_from_git",
                         lambda: pytest.fail("--sync-skill must not install the MCP"))
 
@@ -373,7 +373,7 @@ def test_apply_explains_a_target_missing_from_the_index(monkeypatch, capsys):
     after a release (seen live with 0.5.1).
     """
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (
         calls.append(("install", v)), {"ok": False, "stdout": "resolver said no", "stderr": ""})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda *a, **k: calls.append("skill"))
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)
@@ -392,13 +392,15 @@ def test_apply_explains_a_target_missing_from_the_index(monkeypatch, capsys):
 def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeypatch, capsys):
     """Regression for the live 0.5.1 bug: JSON API lagging must not block the repair."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append(("install", v)), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)  # index has not caught up
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)
     monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.5.0")
+    # The install is stubbed, so the venv contract cannot change: pin the post-install entry.
+    monkeypatch.setattr(compat, "_installed_contract_entry", lambda: contract["releases"][0])
 
     rc = compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
@@ -408,7 +410,7 @@ def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeyp
 
 def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append("pypi"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append("pypi"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("git"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
 
@@ -428,7 +430,7 @@ def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
 def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
     """An older pair + a newer non-breaking release → install it and pull the pinned skill."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append(("install", v)), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)  # keep the suite offline
     monkeypatch.setattr(compat, "installed_tools", lambda: ["browser_login"])
@@ -441,6 +443,10 @@ def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
             {"mcp": "0.6.0", "skill": "1.5.0", "breaking": False, "added": ["browser_login"], "removed": [], "tools": ["browser_login"]},
             {"mcp": "0.5.0", "skill": "1.4.0", "breaking": False, "added": [], "removed": [], "tools": ["browser_login"]},
         ],
+    })
+    monkeypatch.setattr(compat, "_installed_contract_entry", lambda: {
+        "mcp": "0.6.0", "skill": "1.5.0", "breaking": False, "added": ["browser_login"],
+        "removed": [], "tools": ["browser_login"],
     })
     compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
@@ -468,7 +474,7 @@ def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
     """The skill file is overwritten by --apply, so it must be backed up first."""
     order = []
     monkeypatch.setattr(compat.safety, "snapshot_skill", lambda *a, **k: order.append("snapshot") or Path("b"))
-    monkeypatch.setattr(compat, "_install", lambda v: (order.append("install"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (order.append("install"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: {"ok": True, "version": e["skill"]})
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     contract = _fake_contract()
@@ -483,7 +489,7 @@ def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
 def test_apply_rolls_back_when_the_smoke_test_fails(monkeypatch, capsys):
     """A half-finished install must not be left installed."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: {"ok": True})
+    monkeypatch.setattr(compat, "_install", lambda v, **k: {"ok": True})
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     monkeypatch.setattr(compat.safety, "smoke_test",
