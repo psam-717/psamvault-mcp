@@ -203,11 +203,20 @@ def check(
         if published and is_newer(published, mcp):
             published_newer = published
 
+    # The upgrade advice this report will carry. Reaching a release the installed contract has never
+    # seen is breaking-eligible by definition, so that command MUST carry --allow-breaking — the same
+    # process refuses it otherwise, which would make every advertised one-liner a dead end.
+    if published_newer:
+        advice = apply_command(latest=True, breaking=True)
+    else:
+        advice = apply_command(breaking=bool(breaking_pending))
+
     return {
         "installed_mcp": mcp,
         "latest_published": published,
         "published_newer": published_newer,
         "pypi_checked": probe_index,
+        "apply_command": advice,
         "target_mcp": latest["mcp"],
         "version_drift": version_drift,
         "update_available": version_drift,
@@ -246,7 +255,7 @@ def render(report: dict) -> str:
         ),
         "  update available : "
         + (
-            "yes — run: psamvault-mcp compat --apply --latest"
+            f"yes — run: {report.get('apply_command') or apply_command(latest=True, breaking=True)}"
             if report.get("published_newer")
             else "no"
         ),
@@ -273,10 +282,40 @@ def render(report: dict) -> str:
 
 # ── apply ──────────────────────────────────────────────────────────────────────
 def pipx_python() -> Path:
+    """The venv interpreter pipx owns — the one both the probe and the uv write must agree on.
+
+    Delegates to :func:`install_env.venv_python` on purpose. The busy/free decision comes from that
+    module (it also honours ``PSAMVAULT_MCP_VENV`` and, on Windows without ``LOCALAPPDATA``, resolves
+    ``Scripts/python.exe``); if the two disagreed, the probe could correctly report "busy" — skipping
+    the pipx path — while uv wrote the wheel into a *different* interpreter, leaving the live server
+    on the old build. The duplicated join below only runs where install_env cannot answer at all.
+    """
+    if install_env is not None:
+        try:
+            return Path(install_env.venv_python())
+        except Exception:  # pragma: no cover - defensive; mirrors install_env's own fallbacks
+            pass
     local = os.environ.get("LOCALAPPDATA")
     if local:
         return Path(local) / "pipx" / "pipx" / "venvs" / "psamvault-mcp" / "Scripts" / "python.exe"
     return Path.home() / ".local" / "pipx" / "venvs" / "psamvault-mcp" / "bin" / "python"
+
+
+def apply_command(latest: bool = False, breaking: bool = False) -> str:
+    """The ``--apply`` invocation the flag gate will ACCEPT — one helper, so advice cannot drift.
+
+    Printing ``--apply --latest`` for a release newer than the installed contract is a dead end: the
+    same process refuses it with exit 2 unless ``--allow-breaking`` is present, so a user — or an
+    agent woken by the cron detector — copies a command that can never work. Every surface that
+    advertises an upgrade (``--check``, ``doctor``, the startup notice, the detector JSON) builds its
+    text here.
+    """
+    parts = ["psamvault-mcp", "compat", "--apply"]
+    if latest:
+        parts.append("--latest")
+    if breaking:
+        parts.append("--allow-breaking")
+    return " ".join(parts)
 
 
 def clone_path() -> Path:
@@ -344,17 +383,34 @@ def _venv_is_free(assume_free: bool = False) -> bool:
         return False
 
 
-def _installed_contract_entry() -> dict:
+def _select_entry(releases: list[dict], target: str | None = None) -> dict:
+    """The entry for ``target``, else the newest one by the shared comparator — never ``releases[0]``.
+
+    The contract file happens to be newest-first today; selecting positionally would silently pair a
+    successful install with the skill floor and tool fingerprint of a *different* MCP version the first
+    time the file is appended to or reordered.
+    """
+    if target:
+        for entry in releases:
+            if str(entry.get("mcp")) == str(target):
+                return entry
+    return max(releases, key=lambda entry: vkey(str(entry.get("mcp", ""))))
+
+
+def _installed_contract_entry(target: str | None = None) -> dict:
     """Read the release entry from the contract INSIDE the venv (the just-installed version).
 
     The running process still holds the old contract, so after installing a release newer than this
     build knows about, the skill floor and tool fingerprint must be read from the new code — via a
     fresh interpreter with a neutral cwd.
+
+    The child stays dumb (it prints the whole release list) and the selection happens here, so the
+    "which entry" rule lives in exactly one testable place.
     """
     code = (
         "import json, pathlib, mcp_server\n"
         "c = pathlib.Path(mcp_server.__file__).with_name('compatibility.json')\n"
-        "print(json.dumps(json.loads(c.read_text(encoding='utf-8'))['releases'][0]))\n"
+        "print(json.dumps(json.loads(c.read_text(encoding='utf-8'))['releases']))\n"
     )
     try:
         proc = subprocess.run(
@@ -362,7 +418,9 @@ def _installed_contract_entry() -> dict:
             capture_output=True, text=True, timeout=120, cwd=str(Path.home()), env={**os.environ, "PYTHONPATH": ""},
         )
         if proc.returncode == 0 and proc.stdout.strip():
-            return json.loads(proc.stdout.strip())
+            releases = json.loads(proc.stdout.strip())
+            if isinstance(releases, list) and releases:
+                return _select_entry(releases, target)
     except Exception:
         pass
     # Fall back to the entry this build already knows about
@@ -657,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Read the contract from the version just installed: its skill floor and tool fingerprint are
     # what the pair must now satisfy (the running process still holds the previous contract).
-    entry = _installed_contract_entry()
+    entry = _installed_contract_entry(target)
     synced = _sync_skill(entry, allow_downgrade=args.allow_downgrade)
     print(f"skill -> {entry.get('skill')}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
 
