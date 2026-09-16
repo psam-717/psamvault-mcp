@@ -626,8 +626,10 @@ class TestInstallTargetsTheSameInterpreterTheProbeJudged:
         result = compat._install("0.5.3", force_uv=True)
 
         assert result["installer"] == "uv"
-        assert calls[0][:4] == ["uv", "pip", "install", "--python"]
-        assert calls[0][4] == str(target), "uv must write to the interpreter the probe judged"
+        # the probe may run first (it shares subprocess.run), so pick the uv invocation out
+        uv_call = next(c for c in calls if c and c[0] == "uv")
+        assert uv_call[:4] == ["uv", "pip", "install", "--python"]
+        assert uv_call[4] == str(target), "uv must write to the interpreter the probe judged"
 
 
 class TestContractEntrySelection:
@@ -647,3 +649,52 @@ class TestContractEntrySelection:
             cmd, 0, json.dumps(payload), ""))
         entry = compat._installed_contract_entry("0.5.3")
         assert entry["mcp"] == "0.5.3" and entry["skill"] == "1.9.0"
+
+
+class TestTheUvNoteNamesTheRealReason:
+    """Three causes, three different next steps — one sentence for all of them misleads operators.
+
+    `relink_pending` is `not use_pipx`, which is also true for `--force-uv` and for "pipx is not on
+    PATH" on a free venv, so the note used to send people off to stop sessions that were never the
+    reason.
+    """
+
+    def test_forced_uv_on_a_free_venv_does_not_claim_busy(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3", force_uv=True)["uv_reason"] == "forced with --force-uv"
+
+    def test_missing_pipx_is_named(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: False)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3")["uv_reason"] == "pipx is not on PATH"
+
+    def test_a_held_venv_says_so(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: False)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3")["uv_reason"] == "the venv is in use"
+
+    def test_a_pipx_install_reports_no_uv_reason(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        result = compat._install("0.5.3")
+        assert result["installer"] == "pipx" and result["uv_reason"] is None
+
+    def test_the_printed_note_distinguishes_the_causes(self, monkeypatch, capsys):
+        for reason in ("forced with --force-uv", "pipx is not on PATH", "the venv is in use"):
+            capsys.readouterr()
+            monkeypatch.setattr(compat, "_install", lambda v, _r=reason, **k: {
+                "ok": True, "installer": "uv", "relink_pending": True, "uv_reason": _r})
+            monkeypatch.setattr(compat, "target_is_published", lambda v: True)
+            monkeypatch.setattr(compat.safety, "smoke_test", lambda py: {"ok": True, "version": "x", "tools": []})
+            monkeypatch.setattr(compat, "_installed_contract_entry",
+                                lambda target=None: {"mcp": "0.5.3", "skill": "1.9.0"})
+            monkeypatch.setattr(compat, "_sync_skill", lambda entry, allow_downgrade=False: {"ok": True})
+            # installed 0.5.2 vs contract 0.5.3 => there IS something to apply, so the flow reaches
+            # the note (an in-sync install correctly stops at "nothing to apply")
+            compat.main(["--apply", "--allow-breaking", "--installed-version", "0.5.2"])
+            assert reason in capsys.readouterr().out

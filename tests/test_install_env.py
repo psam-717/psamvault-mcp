@@ -103,6 +103,7 @@ def test_venv_dir_honours_the_env_override(monkeypatch, tmp_path):
 
 
 def test_venv_dir_windows_default_is_the_pipx_venvs_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(ie, "_pipx_env_path", lambda name: None)  # exercise the fallback
     _as_windows(monkeypatch)
     monkeypatch.delenv(ie.VENV_ENV, raising=False)
     local = tmp_path / "AppData" / "Local"
@@ -112,6 +113,7 @@ def test_venv_dir_windows_default_is_the_pipx_venvs_root(monkeypatch, tmp_path):
 
 
 def test_venv_dir_posix_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(ie, "_pipx_env_path", lambda name: None)  # exercise the fallback
     _as_posix(monkeypatch)
     monkeypatch.delenv(ie.VENV_ENV, raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -119,6 +121,7 @@ def test_venv_dir_posix_default(monkeypatch, tmp_path):
 
 
 def test_venv_dir_windows_without_localappdata_keeps_compat_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(ie, "_pipx_env_path", lambda name: None)  # exercise the fallback
     """compat.pipx_python() falls back to ~/.local when LOCALAPPDATA is unset; so do we, rather
     than inventing a third location for the same install."""
     _as_windows(monkeypatch)
@@ -576,3 +579,37 @@ class TestAnUnreadableProbeIsNeverFree:
     def test_pgrep_exit_1_is_still_no_match(self, monkeypatch):
         _patch(monkeypatch, _Run(stdout="", returncode=1))
         assert ie._probe_posix(Path("/x/venv/bin/python")) == []
+
+
+class TestVenvDiscoveryAsksPipx:
+    """`venv_dir()` must ask pipx where its venvs live, the way `bin_dir()` asks for PIPX_BIN_DIR.
+
+    A relocated pipx home otherwise leaves the holder probe watching a ghost venv (usually "free"),
+    uv writing the wheel into that ghost, and `pipx install --force` hitting the real one — three
+    components, three different interpreters.
+    """
+
+    def test_relocated_venvs_root_is_used(self, monkeypatch, tmp_path):
+        custom = tmp_path / "custom-venvs"
+        _patch(monkeypatch, _Run(stdout=str(custom) + "\n"))
+        monkeypatch.delenv(ie.VENV_ENV, raising=False)
+        assert ie.venv_dir() == custom / ie.PACKAGE
+        assert str(ie.venv_python()).startswith(str(custom / ie.PACKAGE))
+
+    def test_env_override_still_wins(self, monkeypatch, tmp_path):
+        _patch(monkeypatch, _Run(stdout="D:/should/not/be/used\n"))
+        explicit = tmp_path / "explicit"
+        monkeypatch.setenv(ie.VENV_ENV, str(explicit))
+        assert ie.venv_dir() == explicit
+
+    def test_pipx_absent_falls_back_to_the_documented_default(self, monkeypatch):
+        _patch(monkeypatch, _Run(raises=FileNotFoundError("no pipx")))
+        monkeypatch.delenv(ie.VENV_ENV, raising=False)
+        assert ie.PACKAGE in str(ie.venv_dir())
+
+    def test_an_empty_answer_is_not_a_path(self, monkeypatch):
+        """`none`/NULL/blank from pipx must fall through, never become a directory named 'none'."""
+        _patch(monkeypatch, _Run(stdout="none\n"))
+        monkeypatch.delenv(ie.VENV_ENV, raising=False)
+        assert ie.venv_dir().name == ie.PACKAGE
+        assert "none" not in ie.venv_dir().parts

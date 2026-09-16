@@ -273,7 +273,10 @@ class TestRender:
         report = doctor.diagnose(probe_index=False)
         text = doctor.render(report)
         assert "stop the gateway" in text
-        assert "pipx install --force psamvault-mcp==0.5.2" in text
+        assert "doctor --fix" in text
+        assert "pipx install --force" not in text, (
+            "the busy path must not advertise a raw recreate that bypasses doctor's own checks"
+        )
 
     def test_shows_the_fix_command_when_free(self, fake_machine):
         fake_machine["holders"] = []
@@ -287,3 +290,31 @@ class TestMain:
         payload = json.loads(capsys.readouterr().out)
         assert payload["exit_code"] == rc
         assert payload["missing_links"] == ["psamvault-compat"]
+
+
+class TestBusyPathAdviceMatchesTheRepairTarget:
+    """The busy path is the one users copy — `--fix` refuses while holders exist.
+
+    Round 1 fixed the *automated* downgrade; the printed one-liner still said
+    `pipx install --force psamvault-mcp==<running version>`, which is the sandbox's version when
+    doctor runs from a sandbox, and recommends a raw recreate even when the probe could not be trusted.
+    """
+
+    def test_never_pins_the_running_interpreters_version(self, fake_machine):
+        fake_machine.update({"installed": "0.5.2", "pipx_venv_version": "0.5.3"})
+        text = doctor.render(doctor.diagnose(probe_index=False))
+        assert "==0.5.2" not in text, "the sandbox's version must never be the advertised pin"
+        assert "psamvault-mcp doctor --fix" in text
+
+    def test_uncertain_probe_does_not_recommend_recreating_the_venv(self, fake_machine):
+        fake_machine.update({"holders": [], "free": False})  # probe failed -> treated as busy
+        report = doctor.diagnose(probe_index=False)
+        text = doctor.render(report)
+        assert report["venv_probe_uncertain"] is True
+        assert "pipx install --force" not in text
+        assert "could not be trusted" in text
+
+    def test_free_venv_still_points_at_fix(self, fake_machine):
+        fake_machine["holders"] = []
+        text = doctor.render(doctor.diagnose(probe_index=False))
+        assert "doctor --fix" in text

@@ -192,3 +192,42 @@ class TestCheckForUpdate:
             lambda: None,
         )
         check_for_update()  # should not raise
+
+
+class TestTheNoticeNamesACommandTheGateAccepts:
+    """The one notice every live server prints on startup must be a command that can upgrade.
+
+    It previously re-derived the string and, through a swallowed `NameError` (no `import json`),
+    silently dropped `--allow-breaking` — so the printed line exited 2 whenever PyPI was newer than
+    the wheel's contract. There is one builder now (`compat.apply_command`).
+    """
+
+    def test_newer_than_the_contract_gets_the_flag(self):
+        from mcp_server.version_check import _upgrade_command
+
+        # 9.9.9 is past anything the shipped contract knows about -> the gate requires the flag
+        assert _upgrade_command("9.9.9") == "psamvault-mcp compat --apply --latest --allow-breaking"
+
+    def test_within_the_contract_keeps_the_short_form(self, monkeypatch):
+        from mcp_server import version_check as vc
+
+        monkeypatch.setattr(vc, "_contract_newest", lambda: "0.5.3")
+        assert vc._upgrade_command("0.5.3") == "psamvault-mcp compat --apply --latest"
+
+    def test_an_unreadable_contract_still_offers_a_working_command(self, monkeypatch):
+        """No contract to compare against: err on the side the gate accepts."""
+        from mcp_server import version_check as vc
+
+        monkeypatch.setattr(vc, "_contract_newest", lambda: None)
+        assert vc._upgrade_command("9.9.9").endswith("--latest --allow-breaking")
+
+    def test_the_printed_notice_carries_the_flag(self, monkeypatch, capsys):
+        from mcp_server import version_check as vc
+
+        monkeypatch.setattr(vc, "_get_installed_version", lambda: "0.5.3")
+        monkeypatch.setattr(vc, "_get_latest_version", lambda: "9.9.9")
+        monkeypatch.setattr(vc, "_get_last_seen_version", lambda: None)
+        monkeypatch.setattr(vc, "_set_last_seen_version", lambda v: None)
+        vc.check_for_update()
+        err = capsys.readouterr().err
+        assert "psamvault-mcp compat --apply --latest --allow-breaking" in err, err
