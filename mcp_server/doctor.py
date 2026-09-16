@@ -96,10 +96,6 @@ def _pipx_records() -> dict:
     return records
 
 
-def _pipx_metadata_version() -> str | None:
-    return _pipx_records().get("version")
-
-
 def _apps_owned_by_other_packages(records: dict | None = None) -> set[str] | None:
     """Apps that other pipx packages own — or ``None`` when pipx could not be asked.
 
@@ -278,12 +274,23 @@ def diagnose(probe_index: bool = True) -> dict:
             + (skill.get("apply_command") or "psamvault-mcp compat --apply --latest --allow-breaking")
         )
 
+    # What `--fix` can actually repair: entry points/records/import health. An available update or a
+    # stale usage skill is reported with the command that fixes it, and `--fix` must not advertise
+    # itself for those — reinstalling the same wheel would be a wasted step that leaves the finding.
+    fixable = bool(
+        missing
+        or stale_linked
+        or not imports_ok
+        or (pipx_known and pipx_version and pipx_actual and pipx_version != pipx_actual)
+    )
+
     return {
         "interpreter": _interpreter(),
         "installed_version": installed,
         "pipx_metadata_version": pipx_version,
         "pipx_records_ok": pipx_known,
         "pipx_venv_version": pipx_reality,
+        "fixable": fixable,
         "declared_entry_points": declared,
         "linked_apps": linked,
         "missing_links": missing,
@@ -339,7 +346,11 @@ def render(report: dict) -> str:
     if report["findings"]:
         lines.append("findings:")
         lines.extend(f"  - {f}" for f in report["findings"])
-        if not report["venv_free"]:
+        if not report.get("fixable", True):
+            # Nothing here is an entry-point/records problem: reinstalling the same wheel would be a
+            # wasted step that leaves the finding, and the command that DOES fix it is already named.
+            lines.append("nothing to relink — run the command named in the finding above")
+        elif not report["venv_free"]:
             # Advise the SAME target and the SAME tool `_fix` uses. A raw `pipx install --force
             # psamvault-mcp==<installed>` line prints the running interpreter's version (wrong when
             # doctor is run from a sandbox) and bypasses doctor's own busy/uncertain checks — and this
@@ -367,17 +378,24 @@ def _fix(report: dict) -> int:
     if env is None:
         print("cannot repair: install_env is unavailable in this build")
         return 2
+    if not report.get("fixable", True):
+        skill = report.get("skill") or {}
+        if skill.get("skill_drift"):
+            advice = "psamvault-mcp compat --sync-skill"
+        else:
+            advice = skill.get("apply_command") or "psamvault-mcp compat --apply"
+        print(f"nothing to relink — this install's entry points and records are fine. "
+              f"The repair named in the finding is: {advice}")
+        return 0
     if not report["venv_free"]:
         print(
             "refusing to repair while the venv is in use — pipx recreates the venv, and Windows will "
             "not replace a running python.exe.\nstop the gateway first, then re-run: psamvault-mcp doctor --fix"
         )
         return 2
-    # Repair the version PIPX has — never the interpreter that happens to be running doctor. Diagnose
-    # already separates the two (`pipx_venv_version` vs `installed_version`, see
-    # TestNotRunningInsideThePipxVenv, which exists because a sandbox CAN be running older code): the
-    # naive choice would `pipx install --force` that older version over a working install, silently
-    # downgrading it, and `assume_free=True` would skip the second opinion.
+    # Repair the version PIPX has — never the interpreter that happens to be running doctor: a sandbox
+    # can be running older code, and `pipx install --force` of that version would silently downgrade a
+    # working install (and `assume_free=True` would skip the second opinion).
     version = report.get("pipx_venv_version") or report["installed_version"]
     if not version:
         print("cannot repair: the version pipx has installed could not be determined")
