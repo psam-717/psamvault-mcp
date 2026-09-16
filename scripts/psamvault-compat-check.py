@@ -5,8 +5,8 @@ where the engine hashes stdout to decide whether to wake the agent — a non-zer
 script FAILURE, not as "something changed". Empty stdout = in sync (the agent is not woken). A drift
 report or an error report = changed output (the agent is woken with the diff).
 
-The `psamvault-compat` CLI keeps real exit codes (0/1/2) for humans and other tooling; this wrapper
-deliberately does not. Cron-env safe: .py only, absolute interpreter, cleared PYTHONPATH.
+The `psamvault-mcp compat` CLI keeps real exit codes (0/1/2) for humans and other tooling; this
+wrapper deliberately does not. Cron-env safe: .py only, absolute interpreter, cleared PYTHONPATH.
 
 Installed copy: ``$HERMES_HOME/scripts/psamvault-compat-check.py`` (this file is the source of truth).
 """
