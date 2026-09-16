@@ -452,7 +452,14 @@ def target_is_published(version: str, timeout: float = 20.0) -> bool | None:
     Without this check, applying a contract entry for a not-yet-published release fails deep inside
     the resolver with an opaque "no version of psamvault-mcp==X" error — which is exactly the state a
     contract entry creates between "merged" and "released".
+
+    Reads the payload `--check` already fetched when there is one: one `--apply` run then costs a
+    single index round-trip instead of two, and a slow index cannot stack this call's timeout on top
+    of the check's probe.
     """
+    cached = version_check.published_releases()
+    if cached is not None:
+        return version in cached
     try:
         import httpx
 
