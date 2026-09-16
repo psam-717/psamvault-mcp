@@ -152,3 +152,17 @@ run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="
 scan_and_protect("/home/user/my-project")
 → "Install pv-dotenv and your app resolves secrets at runtime"
 ```
+
+### "Am I up to date, or is my install broken?"
+
+```bash
+psamvault-mcp selfcheck        # installed vs what a NEW session actually serves (exit 1 on mismatch)
+psamvault-mcp doctor           # entry points pipx never linked, stale pipx records, processes holding the venv
+psamvault-mcp doctor --fix     # repair the above (run when no session is holding the venv)
+psamvault-mcp compat --check   # the MCP <-> usage-skill pairing
+psamvault-mcp compat --apply --latest   # upgrade to the newest release on PyPI (add --allow-breaking
+                                        # when it is newer than the installed contract, or removes a tool)
+```
+
+`selfcheck` is the one that catches a long-lived session still serving an older build; `doctor` covers the
+half-linked install where `pipx` never put the console script on `PATH`.
