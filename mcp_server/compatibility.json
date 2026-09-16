@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-12",
+  "updated": "2026-09-14",
   "skill": {
     "name": "psamvault-mcp",
     "repo": "psam-717/private-skills",
@@ -8,6 +8,29 @@
     "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
   },
   "releases": [
+    {
+      "mcp": "0.5.3",
+      "skill": "1.9.0",
+      "breaking": true,
+      "added": [],
+      "removed": [],
+      "notes": "BREAKING (CLI surface, not tools): the `psamvault-compat` console script is removed — use `psamvault-mcp compat`; new `selfcheck` and `doctor` subcommands. `compat --check` now asks PyPI and reports update_available; `--apply --latest` installs the newest published release (requires --allow-breaking when it is newer than the installed contract); upgrades prefer pipx when the venv is free so entry points stay linked. The 13 MCP tools are unchanged — set breaking=false if you only care about the tool surface.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
     {
       "mcp": "0.5.2",
       "skill": "1.8.0",

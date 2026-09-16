@@ -207,13 +207,14 @@ When the user asks "What credentials do I have?":
 ## Version lockstep
 
 `mcp_server/compatibility.json` ships in the wheel and pins the skill version per MCP release plus the
-expected tool fingerprint. Verify with `psamvault-compat --check`; repair with
-`psamvault-compat --apply` (a release marked `breaking` needs `--allow-breaking`; `--from-git` installs
+expected tool fingerprint. Verify with `psamvault-mcp compat --check`; repair with
+`psamvault-mcp compat --apply` (a release marked `breaking` needs `--allow-breaking`; `--from-git` installs
 the local repo, `--from-git --pull` stashes uncommitted work, pulls `--ff-only origin main` and restores
 it first). `--apply` snapshots the installed skill, smoke-tests the fresh install in a new interpreter
 from a neutral cwd, and rolls back to the previous release if the install or the smoke test fails. The
 skill version recorded per release is a **floor**: a newer skill is healthy, and a skill-only improvement
-ships with `psamvault-compat --sync-skill` (the clone's working tree, as-is) with no MCP release. The installed
+ships with `psamvault-mcp compat --sync-skill` (the clone's working tree, as-is) with no MCP release. On
+Windows the shim is `psamvault-mcp.exe`. The installed
 server is authoritative — pull the skill to match it, never the reverse. See PLAN_version_lockstep.md.
 
 ## Common Agent Prompts (for the user)

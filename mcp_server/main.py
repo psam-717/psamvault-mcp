@@ -774,7 +774,7 @@ def _version_payload() -> dict:
             "tool_surface_matches_newest": matches_newest,
             "breaking_pending": bool(latest.get("breaking")) and _VERSION != latest["mcp"],
             "expected_tool_count": len(effective["tools"]),
-            "check_command": "psamvault-compat --check",
+            "check_command": "psamvault-mcp compat --check",
         }
     except Exception as exc:  # a broken contract must never break get_version
         payload["compatibility"] = {"error": f"{type(exc).__name__}: {exc}"}
@@ -948,6 +948,11 @@ def _print_cli_help() -> None:
         "  psamvault-mcp --version    Print version and exit\n"
         "  psamvault-mcp --help       Show this help and exit\n"
         "\n"
+        "Maintenance subcommands (do not start the server):\n"
+        "  psamvault-mcp compat       Server <-> skill version lockstep (--check, --apply, --apply --latest)\n"
+        "  psamvault-mcp selfcheck    Prove which version is installed AND which one a new session gets\n"
+        "  psamvault-mcp doctor       Diagnose PATH/entry-point and pipx drift (--fix to repair)\n"
+        "\n"
         "Install:  pipx install psamvault-mcp\n"
         "Login:    psamvault login\n"
         "\n"
@@ -960,9 +965,60 @@ def _print_cli_help() -> None:
     )
 
 
+#: First-argument subcommands. Anything NOT in this tuple keeps the historical behaviour
+#: (no arguments = serve stdio; unknown flags are ignored), so no existing launch breaks.
+SUBCOMMANDS = ("compat", "selfcheck", "doctor")
+
+
+def _run_subcommand(name: str, argv: list[str]) -> int:
+    """Run a maintenance subcommand. Imports lazily so the stdio server path stays lean."""
+    import sys as _sys
+
+    try:
+        if name == "compat":
+            from mcp_server.compat import main as sub_main
+        elif name == "selfcheck":
+            from mcp_server.selfcheck import main as sub_main
+        elif name == "doctor":
+            from mcp_server.doctor import main as sub_main
+        else:  # pragma: no cover - guarded by SUBCOMMANDS
+            print(f"unknown subcommand: {name}", file=_sys.stderr)
+            return 2
+    except ImportError as exc:
+        # Recovery for a half-linked install. Two mistakes to avoid here: printing a bare
+        # `--apply --latest` (refused with exit 2 when the target is newer than this install's
+        # contract, or a no-op when already current) and offering only an upgrade when a same-version
+        # relink is what actually repairs a missing submodule. ImportError, not just
+        # ModuleNotFoundError: a half-linked install can also fail as "import of X halted".
+        print(f"{name}: not available in this build ({exc}).", file=_sys.stderr)
+        print("  relink this install:  psamvault-mcp doctor --fix", file=_sys.stderr)
+        try:
+            from mcp_server.compat import apply_command
+
+            print(
+                f"  or upgrade:           {apply_command(latest=True, breaking=True)}",
+                file=_sys.stderr,
+            )
+        except Exception:
+            print(
+                "  or upgrade:           psamvault-mcp compat --check  "
+                "(prints the exact command for this install)",
+                file=_sys.stderr,
+            )
+        return 2
+    return int(sub_main(argv) or 0)
+
+
 def main() -> None:
-    """Start the psamvault MCP server over stdio, or handle --version / --help."""
+    """Start the psamvault MCP server over stdio, or handle --version / --help / a subcommand."""
     import sys
+
+    argv = sys.argv[1:]
+
+    # Subcommands are checked BEFORE the -h/-V scan: `psamvault-mcp compat -h` must show compat's
+    # help, not the server's. No arguments at all still means "serve stdio", unchanged.
+    if argv and argv[0] in SUBCOMMANDS:
+        raise SystemExit(_run_subcommand(argv[0], argv[1:]))
 
     # Early CLI flags so agents can smoke-test without hanging on stdio MCP.
     if any(a in ("-h", "--help") for a in sys.argv[1:]):

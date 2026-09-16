@@ -498,14 +498,19 @@ the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MC
 version that documents it, plus the expected tool fingerprint).
 
 ```bash
-psamvault-compat --check                    # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed / below-floor skill
-psamvault-compat --check --json             # machine-readable
-psamvault-compat --apply                    # install the target release and bring the skill up to date
-psamvault-compat --apply --allow-breaking   # only after approving a release that REMOVES a tool
-psamvault-compat --sync-skill               # skill-only update: install the clone's newest skill, MCP untouched
-psamvault-compat --apply --from-git         # install the local repo (merged but not yet released)
-psamvault-compat --apply --from-git --pull  # ...after stashing local changes and pulling origin/main
+psamvault-mcp compat --check                     # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed / below-floor skill
+psamvault-mcp compat --check --json              # machine-readable
+psamvault-mcp compat --apply                     # install the target release and bring the skill up to date
+psamvault-mcp compat --apply --allow-breaking    # only after approving a release that REMOVES a tool
+psamvault-mcp compat --sync-skill                # skill-only update: install the clone's newest skill, MCP untouched
+psamvault-mcp compat --apply --from-git          # install the local repo (merged but not yet released)
+psamvault-mcp compat --apply --from-git --pull   # ...after stashing local changes and pulling origin/main
 ```
+
+The check runs as a **subcommand of the server's own entry point**, so it needs no separate install and no
+venv path. On Windows the shim is `psamvault-mcp.exe` (the same one your MCP host config already calls);
+the pre-0.5.3 standalone compat console script was **removed** in 0.5.3 because `pipx` never linked it onto
+`PATH` — it answered `command not found`.
 
 **The recorded skill version is a floor, not a pin.** Each release says the *minimum* skill version that
 documents it, and any skill at or above that floor is healthy:
@@ -520,7 +525,7 @@ That is what makes a **skill-only update** possible: improving the description o
 skill change with no MCP release behind it. Edit the skill in the clone, then:
 
 ```bash
-psamvault-compat --sync-skill     # installs the clone's working-tree skill, if it meets the floor
+psamvault-mcp compat --sync-skill     # installs the clone's working-tree skill, if it meets the floor
 ```
 
 `--sync-skill` reads the clone **as-is** (mirrors `--from-git`: uncommitted skill work is installable),

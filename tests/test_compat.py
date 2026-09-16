@@ -125,11 +125,13 @@ def test_check_reports_a_clone_that_is_behind_the_installed_skill(tmp_path, monk
     clone = tmp_path / "clone"
     (clone / "psamvault-mcp").mkdir(parents=True)
     (clone / "psamvault-mcp" / "SKILL.md").write_text("---\nversion: 1.7.0\n---\n", encoding="utf-8")
+    latest = compat.latest_release()
     monkeypatch.setattr(compat, "clone_path", lambda: clone)
-    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.8.0")
-    monkeypatch.setattr(compat, "installed_tools", lambda: list(compat.latest_release()["tools"]))
+    # the installed skill sits exactly at the shipped floor, so this stays true across releases
+    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: latest["skill"])
+    monkeypatch.setattr(compat, "installed_tools", lambda: list(latest["tools"]))
 
-    report = compat.check(installed_version=compat.latest_release()["mcp"])
+    report = compat.check(installed_version=latest["mcp"])
 
     assert report["skill_source"] == "1.7.0" and report["skill_source_stale"] is True
     assert report["in_sync"] is True, "an older clone must not be reported as drift"
@@ -223,10 +225,11 @@ def test_sync_skill_refuses_a_clone_below_the_floor(tmp_path, monkeypatch):
 
 def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
     """`--sync-skill` must work with no MCP release and no MCP install at all."""
+    floor = compat.latest_release()["skill"]
     clone = tmp_path / "clone"
     (clone / "psamvault-mcp").mkdir(parents=True)
     (clone / "psamvault-mcp" / "SKILL.md").write_text(
-        "---\nname: psamvault\nversion: 1.8.0\n---\nnew\n", encoding="utf-8"
+        f"---\nname: psamvault\nversion: {floor}\n---\nnew\n", encoding="utf-8"
     )
     installed = tmp_path / "installed" / "SKILL.md"
     monkeypatch.setattr(compat, "clone_path", lambda: clone)
@@ -241,7 +244,7 @@ def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
         return match.group(1) if match else None
 
     monkeypatch.setattr(compat, "read_skill_version", _version_of)
-    monkeypatch.setattr(compat, "_install", lambda v: pytest.fail("--sync-skill must not install the MCP"))
+    monkeypatch.setattr(compat, "_install", lambda v, **k: pytest.fail("--sync-skill must not install the MCP"))
     monkeypatch.setattr(compat, "_install_from_git",
                         lambda: pytest.fail("--sync-skill must not install the MCP"))
 
@@ -250,7 +253,7 @@ def test_sync_skill_flag_updates_only_the_skill(tmp_path, monkeypatch, capsys):
     rc = compat.main(["--sync-skill", "--installed-version", compat.latest_release()["mcp"]])
     out = capsys.readouterr().out
 
-    assert "skill -> 1.8.0" in out, out
+    assert f"skill -> {compat.latest_release()['skill']}" in out, out
     assert rc == 0, out
 
 
@@ -287,7 +290,7 @@ def test_get_version_payload_exposes_the_pairing():
     assert block["paired_skill_version"]
     assert block["newest_release"]
     assert isinstance(block["expected_tool_count"], int) and block["expected_tool_count"] > 0
-    assert block["check_command"].startswith("psamvault-compat")
+    assert block["check_command"].startswith("psamvault-mcp compat")
     assert block["expected_tool_count"] == len(main.TOOL_DEFINITIONS), (
         "the reported tool count must describe the code that is running"
     )
@@ -373,7 +376,7 @@ def test_apply_explains_a_target_missing_from_the_index(monkeypatch, capsys):
     after a release (seen live with 0.5.1).
     """
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (
         calls.append(("install", v)), {"ok": False, "stdout": "resolver said no", "stderr": ""})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda *a, **k: calls.append("skill"))
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)
@@ -392,13 +395,15 @@ def test_apply_explains_a_target_missing_from_the_index(monkeypatch, capsys):
 def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeypatch, capsys):
     """Regression for the live 0.5.1 bug: JSON API lagging must not block the repair."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append(("install", v)), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: False)  # index has not caught up
     contract = _fake_contract()
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)
     monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "1.5.0")
+    # The install is stubbed, so the venv contract cannot change: pin the post-install entry.
+    monkeypatch.setattr(compat, "_installed_contract_entry", lambda target=None: contract["releases"][0])
 
     rc = compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
@@ -408,7 +413,7 @@ def test_apply_does_not_refuse_when_the_index_lags_but_the_install_works(monkeyp
 
 def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append("pypi"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append("pypi"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_install_from_git", lambda: (calls.append("git"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
 
@@ -428,7 +433,7 @@ def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
 def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
     """An older pair + a newer non-breaking release → install it and pull the pinned skill."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: (calls.append(("install", v)), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (calls.append(("install", v)), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append(("skill", e["skill"])), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)  # keep the suite offline
     monkeypatch.setattr(compat, "installed_tools", lambda: ["browser_login"])
@@ -441,6 +446,10 @@ def test_apply_installs_a_non_breaking_target(monkeypatch, capsys):
             {"mcp": "0.6.0", "skill": "1.5.0", "breaking": False, "added": ["browser_login"], "removed": [], "tools": ["browser_login"]},
             {"mcp": "0.5.0", "skill": "1.4.0", "breaking": False, "added": [], "removed": [], "tools": ["browser_login"]},
         ],
+    })
+    monkeypatch.setattr(compat, "_installed_contract_entry", lambda target=None: {
+        "mcp": "0.6.0", "skill": "1.5.0", "breaking": False, "added": ["browser_login"],
+        "removed": [], "tools": ["browser_login"],
     })
     compat.main(["--apply", "--installed-version", "0.5.0"])
     out = capsys.readouterr().out
@@ -468,7 +477,7 @@ def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
     """The skill file is overwritten by --apply, so it must be backed up first."""
     order = []
     monkeypatch.setattr(compat.safety, "snapshot_skill", lambda *a, **k: order.append("snapshot") or Path("b"))
-    monkeypatch.setattr(compat, "_install", lambda v: (order.append("install"), {"ok": True})[1])
+    monkeypatch.setattr(compat, "_install", lambda v, **k: (order.append("install"), {"ok": True})[1])
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: {"ok": True, "version": e["skill"]})
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     contract = _fake_contract()
@@ -483,7 +492,7 @@ def test_apply_snapshots_the_skill_before_installing(monkeypatch, capsys):
 def test_apply_rolls_back_when_the_smoke_test_fails(monkeypatch, capsys):
     """A half-finished install must not be left installed."""
     calls = []
-    monkeypatch.setattr(compat, "_install", lambda v: {"ok": True})
+    monkeypatch.setattr(compat, "_install", lambda v, **k: {"ok": True})
     monkeypatch.setattr(compat, "_sync_skill", lambda e, **k: (calls.append("skill"), {"ok": True})[1])
     monkeypatch.setattr(compat, "target_is_published", lambda v: True)
     monkeypatch.setattr(compat.safety, "smoke_test",
@@ -543,3 +552,149 @@ def test_apply_from_git_reports_what_will_be_installed(monkeypatch, capsys):
     assert "2 ahead / 1 behind" in out, out
     assert "editable/source install" in out, "an editable install must be flagged before it is replaced"
     assert "smoke test" in out
+
+
+# ── master review round 1 ─────────────────────────────────────────────────────
+class TestTheAdvertisedCommandIsOneTheGateAccepts:
+    """`--apply --latest` is refused (exit 2) for a target newer than the installed contract.
+
+    That is exactly the case `published_newer` describes — installed matches the contract, PyPI has a
+    newer release — so advice built without `--allow-breaking` is a dead end: users and agents copy it,
+    get exit 2, and never upgrade. One helper builds the text for every surface.
+    """
+
+    def test_check_advertises_the_command_with_the_flag(self, monkeypatch):
+        monkeypatch.setattr(compat.version_check, "latest_published", lambda *a, **k: "9.9.9")
+        # pin the installed version: this environment's own install is older than the shipped contract,
+        # which would add breaking_pending and make the assertion depend on the ambient venv
+        report = compat.check(installed_version=compat.latest_release()["mcp"], probe_index=True)
+        assert report["published_newer"] == "9.9.9"
+        assert report["apply_command"] == "psamvault-mcp compat --apply --latest --allow-breaking"
+        assert "--allow-breaking" in compat.render(report)
+
+    def test_drift_without_a_newer_release_keeps_the_short_form(self, monkeypatch):
+        monkeypatch.setattr(compat.version_check, "latest_published", lambda *a, **k: None)
+        report = compat.check(installed_version=compat.latest_release()["mcp"], probe_index=True)
+        assert report["apply_command"] == "psamvault-mcp compat --apply"
+
+    def test_the_copied_command_actually_starts_an_install(self, monkeypatch, capsys):
+        """The reviewer's bar: copying the printed command must not bounce off the flag gate."""
+        monkeypatch.setattr(compat.version_check, "latest_published", lambda *a, **k: "9.9.9")
+        report = compat.check(probe_index=True)
+        line = next(l for l in compat.render(report).splitlines() if "--apply" in l)
+        argv = line.split("— run: ")[1].split()
+        assert argv[:2] == ["psamvault-mcp", "compat"]
+
+        installed: list[str] = []
+        monkeypatch.setattr(compat, "_install", lambda v, **k: (
+            installed.append(v), {"ok": True, "installer": "uv", "relink_pending": False})[1])
+        monkeypatch.setattr(compat, "target_is_published", lambda v: True)
+        monkeypatch.setattr(compat.safety, "snapshot_skill", lambda path: {"ok": True})
+        monkeypatch.setattr(compat.safety, "smoke_test", lambda py: {"ok": True, "version": "9.9.9", "tools": []})
+        monkeypatch.setattr(compat, "_installed_contract_entry",
+                            lambda target=None: {"mcp": target, "skill": "9.9.9", "tools": []})
+        monkeypatch.setattr(compat, "_sync_skill", lambda entry, allow_downgrade=False: {"ok": True})
+        monkeypatch.setattr(compat, "read_skill_version", lambda path=None: "9.9.9")
+
+        rc = compat.main(argv[2:])  # strip "psamvault-mcp compat"
+        out = capsys.readouterr().out
+        assert rc != 2, f"the advertised command was refused by its own gate:\n{out}"
+        assert installed == ["9.9.9"], f"expected the published release to be installed:\n{out}"
+
+
+class TestInstallTargetsTheSameInterpreterTheProbeJudged:
+    """The busy/free decision and the uv write must name the same interpreter.
+
+    `install_env` honours PSAMVAULT_MCP_VENV (and Windows-without-LOCALAPPDATA spells Scripts/python.exe)
+    while compat's own join did not, so a relocated venv could be judged busy — skipping pipx — and uv
+    would then write the wheel into a different or nonexistent python.
+    """
+
+    def test_pipx_python_defers_to_install_env(self, monkeypatch, tmp_path):
+        from mcp_server import install_env as ie
+
+        monkeypatch.setenv(ie.VENV_ENV, str(tmp_path / "relocated-venv"))
+        assert compat.pipx_python() == ie.venv_python()
+
+    def test_uv_install_uses_that_interpreter(self, monkeypatch):
+        target = Path("C:/relocated/Scripts/python.exe")
+        monkeypatch.setattr(compat, "pipx_python", lambda: target)
+        calls: list[list[str]] = []
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: (
+            calls.append(list(cmd)), subprocess.CompletedProcess(cmd, 0, "", ""))[1])
+
+        result = compat._install("0.5.3", force_uv=True)
+
+        assert result["installer"] == "uv"
+        # the probe may run first (it shares subprocess.run), so pick the uv invocation out
+        uv_call = next(c for c in calls if c and c[0] == "uv")
+        assert uv_call[:4] == ["uv", "pip", "install", "--python"]
+        assert uv_call[4] == str(target), "uv must write to the interpreter the probe judged"
+
+
+class TestContractEntrySelection:
+    """`releases[0]` is only correct while the file happens to be newest-first."""
+
+    def test_selects_the_target_even_when_it_is_last(self):
+        releases = [{"mcp": "0.6.0", "skill": "2.0.0"}, {"mcp": "0.5.3", "skill": "1.9.0"}]
+        assert compat._select_entry(releases, "0.5.3")["skill"] == "1.9.0"
+
+    def test_without_a_target_the_newest_wins_not_position_zero(self):
+        releases = [{"mcp": "0.5.3", "skill": "1.9.0"}, {"mcp": "0.6.0", "skill": "2.0.0"}]
+        assert compat._select_entry(releases)["mcp"] == "0.6.0"
+
+    def test_installed_contract_entry_returns_the_installed_version(self, monkeypatch):
+        payload = [{"mcp": "0.6.0", "skill": "2.0.0", "tools": []}, {"mcp": "0.5.3", "skill": "1.9.0", "tools": []}]
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(
+            cmd, 0, json.dumps(payload), ""))
+        entry = compat._installed_contract_entry("0.5.3")
+        assert entry["mcp"] == "0.5.3" and entry["skill"] == "1.9.0"
+
+
+class TestTheUvNoteNamesTheRealReason:
+    """Three causes, three different next steps — one sentence for all of them misleads operators.
+
+    `relink_pending` is `not use_pipx`, which is also true for `--force-uv` and for "pipx is not on
+    PATH" on a free venv, so the note used to send people off to stop sessions that were never the
+    reason.
+    """
+
+    def test_forced_uv_on_a_free_venv_does_not_claim_busy(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3", force_uv=True)["uv_reason"] == "forced with --force-uv"
+
+    def test_missing_pipx_is_named(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: False)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3")["uv_reason"] == "pipx is not on PATH"
+
+    def test_a_held_venv_says_so(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: False)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        assert compat._install("0.5.3")["uv_reason"] == "the venv is in use"
+
+    def test_a_pipx_install_reports_no_uv_reason(self, monkeypatch):
+        monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: True)
+        monkeypatch.setattr(compat, "_pipx_available", lambda: True)
+        monkeypatch.setattr(compat.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+        result = compat._install("0.5.3")
+        assert result["installer"] == "pipx" and result["uv_reason"] is None
+
+    def test_the_printed_note_distinguishes_the_causes(self, monkeypatch, capsys):
+        for reason in ("forced with --force-uv", "pipx is not on PATH", "the venv is in use"):
+            capsys.readouterr()
+            monkeypatch.setattr(compat, "_install", lambda v, _r=reason, **k: {
+                "ok": True, "installer": "uv", "relink_pending": True, "uv_reason": _r})
+            monkeypatch.setattr(compat, "target_is_published", lambda v: True)
+            monkeypatch.setattr(compat.safety, "smoke_test", lambda py: {"ok": True, "version": "x", "tools": []})
+            monkeypatch.setattr(compat, "_installed_contract_entry",
+                                lambda target=None: {"mcp": "0.5.3", "skill": "1.9.0"})
+            monkeypatch.setattr(compat, "_sync_skill", lambda entry, allow_downgrade=False: {"ok": True})
+            # installed 0.5.2 vs contract 0.5.3 => there IS something to apply, so the flow reaches
+            # the note (an in-sync install correctly stops at "nothing to apply")
+            compat.main(["--apply", "--allow-breaking", "--installed-version", "0.5.2"])
+            assert reason in capsys.readouterr().out

@@ -98,10 +98,10 @@ host session so its tools pick the variable up, then verify with the consumer (e
 `web_extract` call), not by reading the file.
 
 **Version lockstep:** `get_version()` returns a `compatibility` block (skill floor, newest release,
-`breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-compat --check` — never
+`breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-mcp compat --check` — never
 hand-edit `compatibility.json` or the skill frontmatter to make a check pass. The recorded skill version
 is a **floor**: a newer skill is fine, and a skill-only improvement ships with
-`psamvault-compat --sync-skill` (no MCP release needed).
+`psamvault-mcp compat --sync-skill` (no MCP release needed). On Windows the shim is `psamvault-mcp.exe`.
 
 **Protect secrets:** `scan_and_protect(project_dir="/path")` → recommend `pip install pv-dotenv` for runtime resolution.
 

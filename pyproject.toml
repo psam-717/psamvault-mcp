@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "psamvault-mcp"
-version = "0.5.2"
+version = "0.5.3"
 description = "MCP server for psamvault — lets AI agents use stored credentials without seeing them."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,10 +38,11 @@ dependencies = [
 ]
 
 [project.scripts]
-# Registers  psamvault-mcp  as a terminal command after pip/pipx install
+# Registers  psamvault-mcp  as a terminal command after pip/pipx install.
+# Maintenance subcommands (compat / selfcheck / doctor) hang off THIS entry point on purpose:
+# pipx only links apps when pipx itself installs the package, so a second console script added in a
+# later release stays invisible on PATH (that is exactly how `psamvault-compat` became unreachable).
 psamvault-mcp = "mcp_server.main:main"
-# MCP ↔ skill version lockstep: psamvault-compat --check | --apply
-psamvault-compat = "mcp_server.compat:main"
 
 [project.urls]
 Homepage = "https://github.com/psam-717/psamvault-mcp"
