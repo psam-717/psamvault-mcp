@@ -29,6 +29,12 @@ DEFAULT_TIMEOUT = 5.0
 
 _VERSION_FILE = Path.home() / ".psamvault" / "last_seen_version"
 
+#: Set in the environment of a diagnostic child so it serves stdio WITHOUT the startup update check.
+#: `psamvault-mcp selfcheck` spawns a real server to ask it its version; that child must not write
+#: `last_seen_version` (the one-shot notice aimed at the next REAL session) or reach PyPI, which is
+#: also what makes `selfcheck --no-network` honest.
+SKIP_UPDATE_CHECK_ENV = "PSAMVAULT_MCP_SKIP_UPDATE_CHECK"
+
 
 def version_tuple(v: str) -> tuple[int, ...]:
     """Comparable key for a version string (implementation: mcp_server.versions.vkey).
@@ -39,20 +45,52 @@ def version_tuple(v: str) -> tuple[int, ...]:
     return vkey(v)
 
 
-def latest_published(timeout: float = DEFAULT_TIMEOUT) -> str | None:
-    """The newest version on PyPI, or None when it cannot be determined.
+#: PyPI's JSON payload for this package, once something has fetched it this process. Shared so
+#: `compat --apply` does not spend a second round-trip on a fact `compat --check` already fetched.
+_INDEX_CACHE: dict | None = None
 
-    The ONLY PyPI probe in the package — the startup notice and `compat --check` both call it.
-    Never raises: an unreachable or malformed index is reported as None so callers degrade to
-    "unknown" instead of failing.
-    """
+
+def _pypi_payload(timeout: float) -> dict | None:
+    """The PyPI JSON document, cached for the process. None when it cannot be fetched."""
+    global _INDEX_CACHE
+    if _INDEX_CACHE is not None:
+        return _INDEX_CACHE
     try:
         response = httpx.get(PYPI_URL, timeout=timeout)
         response.raise_for_status()
-        version = response.json()["info"]["version"]
-        return str(version) if version else None
-    except Exception:
+        data = response.json()
+    except Exception:  # noqa: BLE001 - an unreachable index is reported as unknown, never fatal
         return None
+    if isinstance(data, dict):
+        _INDEX_CACHE = data
+        return data
+    return None
+
+
+def published_releases() -> set[str] | None:
+    """Release filenames from the payload already fetched this process, or None if none was fetched.
+
+    Deliberately never fetches: an advisory check stays free of surprise network calls, while a
+    caller that needs a definitive answer can make its own request.
+    """
+    if _INDEX_CACHE is None:
+        return None
+    releases = _INDEX_CACHE.get("releases")
+    return set(releases) if isinstance(releases, dict) else None
+
+
+def latest_published(timeout: float = DEFAULT_TIMEOUT) -> str | None:
+    """The newest version on PyPI, or None when it cannot be determined.
+
+    The ONLY PyPI probe in the package — the startup notice, `compat --check` and the apply-time
+    publish check all read the payload it caches. Never raises: an unreachable or malformed index is
+    reported as None so callers degrade to "unknown" instead of failing.
+    """
+    data = _pypi_payload(timeout)
+    if not data:
+        return None
+    version = (data.get("info") or {}).get("version")
+    return str(version) if version else None
 
 
 def _get_installed_version() -> str | None:
@@ -139,19 +177,16 @@ def _contract_newest() -> str | None:
 
 
 def _upgrade_command(latest: str) -> str:
-    """The apply command the flag gate will actually accept — built by compat, never re-derived.
+    """The apply command the flag gate will actually accept, for a release newer than this contract.
 
-    The gate refuses a target the installed contract has never seen unless ``--allow-breaking`` is
-    present, and "installed == contract, PyPI is newer" is exactly that case — so a notice that names
-    plain ``--apply --latest`` prints a command that exits 2 every time it is copied. This used to
-    re-implement the string and, through a swallowed NameError, silently dropped the flag; there is
-    now one builder (``compat.apply_command``), imported lazily because compat imports this module.
+    One builder for every surface (`compat.apply_command`), imported lazily because compat imports
+    this module. `--allow-breaking` is required whenever the target is beyond what this wheel's
+    contract knows about; an unreadable contract counts as "cannot prove otherwise", and the flag is
+    a no-op when it is not needed.
     """
     from mcp_server.compat import apply_command
 
     newest_known = _contract_newest()
-    # An unreadable/empty contract cannot PROVE the target is within it, so err toward the form the
-    # gate accepts: --allow-breaking is a no-op when it is not required.
     breaking = newest_known is None or is_newer(latest, newest_known)
     return apply_command(latest=True, breaking=breaking)
 
