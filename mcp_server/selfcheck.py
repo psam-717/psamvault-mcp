@@ -89,10 +89,20 @@ def neutral_cwd() -> str:
 
 
 def _child_env() -> dict[str, str]:
-    """Environment for the child processes: the caller's venv must not leak in via PYTHONPATH."""
+    """Environment for the child processes.
+
+    Two things: the caller's venv must not leak in via PYTHONPATH, and the spawned server must skip
+    the startup update check — selfcheck is a probe, so it must not write `last_seen_version` (which
+    would silence the next real session's notice) or hit PyPI (which is what makes --no-network true).
+    """
     env = dict(os.environ)
     env["PYTHONPATH"] = ""
     env.pop("PYTHONSTARTUP", None)
+    try:
+        from mcp_server.version_check import SKIP_UPDATE_CHECK_ENV
+    except Exception:  # pragma: no cover - older installed wheel without the constant
+        SKIP_UPDATE_CHECK_ENV = "PSAMVAULT_MCP_SKIP_UPDATE_CHECK"
+    env[SKIP_UPDATE_CHECK_ENV] = "1"
     return env
 
 
