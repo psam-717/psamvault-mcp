@@ -61,17 +61,42 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _pipx_env_path(value_name: str) -> Path | None:
+    """Ask pipx for one of its own directories (``PIPX_BIN_DIR``, ``PIPX_LOCAL_VENVS``). None if it
+    cannot answer — absent, unhappy, or an empty/NULL value."""
+    try:
+        proc = subprocess.run(
+            ["pipx", "environment", "--value", value_name],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT,
+        )
+        if proc.returncode == 0:
+            value = (proc.stdout or "").strip().strip("\"'")
+            if value and value.lower() not in {"none", "null"}:
+                return Path(value)
+    except Exception:  # noqa: BLE001 - the documented default still answers the question
+        pass
+    return None
+
+
 def venv_dir() -> Path:
     """The pipx venv directory that holds psamvault-mcp.
 
-    Order: ``PSAMVAULT_MCP_VENV`` → pipx's default for this platform. The defaults are the ones
-    ``mcp_server.compat.pipx_python()`` installs into, so the two modules can never disagree about
-    which venv "the install" means. When ``LOCALAPPDATA`` is unset on Windows we keep compat's
-    ``~/.local`` fallback rather than inventing a third location.
+    Order: ``PSAMVAULT_MCP_VENV`` → **pipx's own answer** (``PIPX_LOCAL_VENVS``) → this platform's
+    default. Asking pipx matters: a relocated pipx home (``PIPX_HOME``) otherwise leaves the holder
+    probe watching a ghost venv (usually "free"), uv writing the wheel into that ghost, and
+    ``pipx install --force`` hitting the real one — three components, three different interpreters.
+    ``bin_dir()`` already asks pipx for ``PIPX_BIN_DIR``; this is the same question about venvs.
+
+    The defaults are the ones ``compat.pipx_python()`` installs into, so the modules cannot disagree.
+    When ``LOCALAPPDATA`` is unset on Windows we keep compat's ``~/.local`` fallback rather than
+    inventing a third location.
     """
     override = os.environ.get(VENV_ENV)
     if override:
         return Path(override)
+    root = _pipx_env_path("PIPX_LOCAL_VENVS")
+    if root is not None:
+        return root / PACKAGE
     if _is_windows():
         local = os.environ.get("LOCALAPPDATA")
         if local:
@@ -308,17 +333,9 @@ def bin_dir() -> Path | None:
     Falls back to pipx's default (``%USERPROFILE%\\.local\\bin`` on Windows, ``~/.local/bin``
     elsewhere). ``None`` only when neither source can produce a directory (no pipx, no home).
     """
-    try:
-        proc = subprocess.run(
-            ["pipx", "environment", "--value", "PIPX_BIN_DIR"],
-            capture_output=True, text=True, timeout=PROBE_TIMEOUT,
-        )
-        if proc.returncode == 0:
-            value = (proc.stdout or "").strip().strip("\"'")
-            if value and value.lower() not in {"none", "null"}:
-                return Path(value)
-    except Exception:
-        pass  # pipx absent or unhappy: the documented default still answers the question
+    asked = _pipx_env_path("PIPX_BIN_DIR")
+    if asked is not None:
+        return asked
     try:
         if _is_windows():
             profile = os.environ.get("USERPROFILE")
