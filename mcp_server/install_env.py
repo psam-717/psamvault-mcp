@@ -1,6 +1,6 @@
 """Which venv is the psamvault-mcp MCP installed in, and is anything using it right now?
 
-``psamvault-compat --apply`` has two install paths and must pick between them:
+``psamvault-mcp compat --apply`` has two install paths and must pick between them:
 
 * ``pipx install --force ...`` — replaces the whole venv. Only safe when nothing holds the venv's
   ``python.exe``: on Windows a running executable cannot be replaced, so the install fails
@@ -28,8 +28,8 @@ Two rules the callers depend on:
 PowerShell child carries the *pattern text* (the venv path) on its own command line, so the naive
 where-clause matches itself — verified on Windows 11 — which would make every venv look busy
 forever; ``$PID`` is filtered inside the script. On both platforms ``os.getpid()`` is filtered while
-parsing, since the process asking the question (a ``psamvault-compat`` entry point lives *in* the
-venv under test) must not count itself.
+parsing, since the process asking the question (an entry point invoked *from* the venv under test)
+must not count itself.
 
 **Known limit.** Matching is on the venv path *as spelled in a command line*, in either separator
 form (Windows keeps the separators a process was launched with — a forward-slashed path is invisible
@@ -348,9 +348,10 @@ def bin_dir() -> Path | None:
 def linked_apps(prefix: str = "psamvault") -> set[str]:
     """Names of the entry points pipx linked into :func:`bin_dir`, ``.exe`` suffix stripped.
 
-    pipx links one shim per console script (``psamvault-mcp``, ``psamvault-compat``). Drift shows
-    up here: ``pipx install --force`` relinks the app set, while a plain ``uv pip install`` into the
-    venv leaves an old shim pointing at a script the new wheel no longer defines.
+    pipx links one shim per console script (today: ``psamvault-mcp``; the ``psamvault-compat`` shim
+    existed until 0.5.3 removed it). Drift shows up here: ``pipx install --force`` relinks the app
+    set, while a plain ``uv pip install`` into the venv leaves an old shim pointing at a script the
+    new wheel no longer defines.
     """
     directory = bin_dir()
     if directory is None:
