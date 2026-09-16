@@ -698,3 +698,45 @@ class TestTheUvNoteNamesTheRealReason:
             # the note (an in-sync install correctly stops at "nothing to apply")
             compat.main(["--apply", "--allow-breaking", "--installed-version", "0.5.2"])
             assert reason in capsys.readouterr().out
+
+
+# ── Round 3: one index round-trip per apply ───────────────────────────────────
+class TestApplyFetchesTheIndexOnce:
+    """`--apply` ran check() (a PyPI GET) and then its own publish probe (another GET, 20s timeout).
+
+    On the publish-then-apply path this doubles the latency window this command exists for.
+    """
+
+    def _fake_get(self, monkeypatch, payload):
+        import mcp_server.version_check as vc
+
+        calls: list[tuple] = []
+
+        class Response:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return payload
+
+        monkeypatch.setattr(vc.httpx, "get", lambda *a, **k: (calls.append(a), Response())[1])
+        return calls
+
+    def test_check_then_publish_probe_is_one_request(self, monkeypatch):
+        calls = self._fake_get(monkeypatch, {"info": {"version": "0.5.3"}, "releases": {"0.5.3": []}})
+        compat.check(installed_version="0.5.2", probe_index=True)
+        assert compat.target_is_published("0.5.3") is True
+        assert len(calls) == 1, f"the apply-time probe must reuse the check's payload, got {len(calls)} GETs"
+
+    def test_the_cached_answer_is_authoritative_for_missing_versions(self, monkeypatch):
+        self._fake_get(monkeypatch, {"info": {"version": "0.5.3"}, "releases": {"0.5.3": []}})
+        compat.check(installed_version="0.5.2", probe_index=True)
+        assert compat.target_is_published("9.9.9") is False
+
+    def test_without_a_prior_fetch_the_probe_still_works(self, monkeypatch):
+        """No cached payload: the caller makes its own request rather than reporting 'unknown'."""
+        calls = self._fake_get(monkeypatch, {"info": {"version": "0.5.3"}, "releases": {"0.5.3": []}})
+        assert compat.target_is_published("0.5.3") is True
+        assert len(calls) == 1

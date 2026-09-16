@@ -240,8 +240,8 @@ class TestInterpreterResolution:
         assert path == str(fake) and why == "mcp_server.install_env.venv_python"
 
     def test_install_env_absent_falls_back(self, monkeypatch, tmp_path):
+        """An installed wheel without install_env (pre-0.5.3) must still resolve an interpreter."""
         monkeypatch.setattr(selfcheck, "_installed_version_of", lambda python: None)
-        """mcp_server/install_env.py does not exist yet — resolution must still work."""
         fake = tmp_path / "python.exe"
         fake.write_text("")
         monkeypatch.setattr(selfcheck, "_from_install_env", lambda: None)
@@ -389,3 +389,68 @@ class TestOutputHygiene:
         out = capsys.readouterr().out
         assert "skill floor         : 0.5.2" in out
         assert "tools match contract: True" in out
+
+
+# ── Round 3: selfcheck must not consume the one-shot update notice ────────────
+class TestSelfcheckDoesNotTouchTheUpdateNotice:
+    """`selfcheck` spawns a real server to ask its version — that probe must stay a probe.
+
+    The server's startup hook writes ~/.psamvault/last_seen_version (which suppresses the notice for
+    the NEXT real session) and reaches PyPI even under --no-network.
+    """
+
+    def test_the_child_environment_skips_the_startup_check(self):
+        from mcp_server import version_check
+
+        env = selfcheck._child_env()
+        assert env[version_check.SKIP_UPDATE_CHECK_ENV] == "1"
+        assert env["PYTHONPATH"] == "", "the caller's venv must still not leak into the child"
+
+    def test_main_honours_the_flag(self, monkeypatch):
+        """The mechanism the child relies on: main() serves stdio without the update check."""
+        import mcp_server.main as mcp_main
+
+        seen: list[str] = []
+
+        async def fake_server() -> None:
+            return None
+
+        monkeypatch.setattr(mcp_main, "check_for_update", lambda: seen.append("checked"))
+        monkeypatch.setattr(mcp_main, "_run_server", fake_server)
+        monkeypatch.setattr(mcp_main, "is_logged_in", lambda: True)
+        monkeypatch.setenv("PSAMVAULT_MCP_SKIP_UPDATE_CHECK", "1")
+
+        mcp_main.main()
+
+        assert seen == [], "the update check must not run in a diagnostic child"
+
+    def test_main_still_checks_normally(self, monkeypatch):
+        import mcp_server.main as mcp_main
+
+        seen: list[str] = []
+
+        async def fake_server() -> None:
+            return None
+
+        monkeypatch.setattr(mcp_main, "check_for_update", lambda: seen.append("checked"))
+        monkeypatch.setattr(mcp_main, "_run_server", fake_server)
+        monkeypatch.setattr(mcp_main, "is_logged_in", lambda: True)
+        monkeypatch.delenv("PSAMVAULT_MCP_SKIP_UPDATE_CHECK", raising=False)
+
+        mcp_main.main()
+
+        assert seen == ["checked"]
+
+    def test_no_network_makes_zero_lookups(self, monkeypatch, capsys):
+        """--no-network must be true end to end, not just for the parent's own lookup."""
+        monkeypatch.setattr(selfcheck, "resolve_python", lambda explicit=None: ("C:/x/python.exe", "--python"))
+        monkeypatch.setattr(selfcheck, "probe_served", lambda python, timeout=None: {
+            "python": python, "version": "0.5.3", "tool_count": 13, "tools": [], "compatibility": {},
+            "error": None, "stderr": "", "child_cwd": "C:/",
+        })
+        monkeypatch.setattr(selfcheck, "published_version",
+                            lambda: pytest.fail("--no-network must not reach PyPI"))
+        rc = selfcheck.main(["--no-network", "--json"])
+        assert rc in (0, 1)
+        out = capsys.readouterr().out
+        assert "not checked (--no-network)" in out or "no-network" in out

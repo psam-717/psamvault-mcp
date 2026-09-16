@@ -318,3 +318,74 @@ class TestBusyPathAdviceMatchesTheRepairTarget:
         fake_machine["holders"] = []
         text = doctor.render(doctor.diagnose(probe_index=False))
         assert "doctor --fix" in text
+
+
+# ── Round 3: polish & merge-bar ───────────────────────────────────────────────
+class TestDoctorDoesNotAdvertiseFixForWhatItCannotRepair:
+    """`--fix` reinstalls the SAME version to relink apps — it cannot apply an update or a skill fix.
+
+    A report whose only finding is "0.6.0 is published" used to end with `fix: doctor --fix`: a wasted
+    reinstall that leaves the finding, followed by the command the finding already named.
+    """
+
+    @staticmethod
+    def _no_install_drift(fake_machine):
+        fake_machine.update({
+            "declared": ["psamvault-mcp"],
+            "linked": ["psamvault", "psamvault-mcp"],
+            "pipx_version": "0.5.2",
+            "holders": [],
+        })
+
+    def test_update_only_report_is_not_fixable(self, fake_machine, monkeypatch):
+        import mcp_server.compat as compat
+
+        self._no_install_drift(fake_machine)
+        monkeypatch.setattr(compat, "check", lambda **k: {
+            "installed_skill": "1.9.0", "skill_floor": "1.9.0", "skill_drift": False,
+            "latest_published": "0.6.0", "published_newer": "0.6.0",
+            "apply_command": "psamvault-mcp compat --apply --latest --allow-breaking",
+        })
+        report = doctor.diagnose(probe_index=True)
+        assert report["fixable"] is False
+        text = doctor.render(report)
+        assert "doctor --fix" not in text, text
+        assert "nothing to relink" in text
+
+    def test_fix_refuses_and_names_the_real_repair(self, fake_machine, monkeypatch, capsys):
+        import mcp_server.compat as compat
+
+        self._no_install_drift(fake_machine)
+        monkeypatch.setattr(compat, "check", lambda **k: {
+            "installed_skill": "1.9.0", "skill_floor": "1.9.0", "skill_drift": False,
+            "latest_published": "0.6.0", "published_newer": "0.6.0",
+            "apply_command": "psamvault-mcp compat --apply --latest --allow-breaking",
+        })
+        report = doctor.diagnose(probe_index=True)
+        rc = doctor._fix(report)
+        out = capsys.readouterr().out
+        assert rc == 0  # a no-op, not a failure
+        assert "psamvault-mcp compat --apply --latest --allow-breaking" in out
+
+    def test_a_skill_only_gap_points_at_sync_skill(self, fake_machine, monkeypatch, capsys):
+        import mcp_server.compat as compat
+
+        self._no_install_drift(fake_machine)
+        monkeypatch.setattr(compat, "check", lambda **k: {
+            "installed_skill": "1.8.0", "skill_floor": "1.9.0", "skill_drift": True,
+            "latest_published": "0.5.2", "published_newer": None, "apply_command": None,
+        })
+        report = doctor.diagnose(probe_index=True)
+        assert report["fixable"] is False
+        doctor._fix(report)
+        assert "compat --sync-skill" in capsys.readouterr().out
+
+    def test_install_drift_is_still_fixable(self, fake_machine):
+        report = doctor.diagnose(probe_index=False)  # the fixture: unlinked entry point + stale records
+        assert report["fixable"] is True
+        assert "doctor --fix" in doctor.render(report)
+
+
+def test_the_dead_pipx_version_wrapper_is_gone():
+    """It was a second `pipx list --json` waiting to happen; diagnose reads the records it already has."""
+    assert not hasattr(doctor, "_pipx_metadata_version")
