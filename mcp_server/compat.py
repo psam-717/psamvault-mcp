@@ -345,16 +345,27 @@ def _install(target_version: str, force_uv: bool = False, assume_free: bool = Fa
     still claim the version does not exist — the exact "publish, then immediately apply" sequence
     this command exists for.
     """
-    use_pipx = not force_uv and _venv_is_free(assume_free) and _pipx_available()
+    free = _venv_is_free(assume_free)
+    pipx_ok = _pipx_available()
+    use_pipx = not force_uv and free and pipx_ok
     if use_pipx:
         cmd = ["pipx", "install", "--force", f"psamvault-mcp=={target_version}"]
         timeout = 900
+        uv_reason = None
     else:
         cmd = [
             "uv", "pip", "install", "--python", str(pipx_python()), "--refresh",
             f"psamvault-mcp=={target_version}",
         ]
         timeout = 600
+        # WHY uv: three different causes with three different next steps. Reporting them all as
+        # "the venv is in use" sends operators off to stop sessions that were never the problem.
+        if force_uv:
+            uv_reason = "forced with --force-uv"
+        elif not pipx_ok:
+            uv_reason = "pipx is not on PATH"
+        else:
+            uv_reason = "the venv is in use"
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return {
         "ok": proc.returncode == 0,
@@ -362,6 +373,7 @@ def _install(target_version: str, force_uv: bool = False, assume_free: bool = Fa
         "installer": "pipx" if use_pipx else "uv",
         # A uv install cannot relink apps; pipx's metadata is now behind the installed version.
         "relink_pending": not use_pipx,
+        "uv_reason": uv_reason,
         "stdout": proc.stdout[-2000:],
         "stderr": proc.stderr[-2000:],
     }
@@ -683,11 +695,22 @@ def main(argv: list[str] | None = None) -> int:
             f"install psamvault-mcp=={target} via {installed.get('installer', '?')}: "
             f"{'ok' if installed['ok'] else 'FAILED'}"
         )
-        if installed["ok"] and installed.get("relink_pending"):
+        reason = installed.get("uv_reason")
+        if installed["ok"] and reason == "the venv is in use":
             print(
                 "note: installed with uv because the venv is in use, so pipx's records were NOT "
-                "refreshed. Run `psamvault-mcp doctor` (or `--fix`) when no sessions are running "
-                "to relink the entry points and refresh pipx's metadata."
+                "refreshed. Run `psamvault-mcp doctor --fix` when no sessions are running to relink "
+                "the entry points and refresh pipx's metadata."
+            )
+        elif installed["ok"] and reason == "pipx is not on PATH":
+            print(
+                "note: installed with uv because pipx is not on PATH — entry points cannot be "
+                "relinked until pipx is installed. (Keeping the venv free is not the issue here.)"
+            )
+        elif installed["ok"] and reason:
+            print(
+                f"note: installed with uv ({reason}); pipx's records were NOT refreshed. "
+                "Run `psamvault-mcp doctor --fix` if the entry points need relinking."
             )
     if not installed["ok"]:
         print(installed["stderr"] or installed["stdout"])
