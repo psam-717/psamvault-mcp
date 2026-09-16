@@ -340,9 +340,18 @@ def render(report: dict) -> str:
         lines.append("findings:")
         lines.extend(f"  - {f}" for f in report["findings"])
         if not report["venv_free"]:
+            # Advise the SAME target and the SAME tool `_fix` uses. A raw `pipx install --force
+            # psamvault-mcp==<installed>` line prints the running interpreter's version (wrong when
+            # doctor is run from a sandbox) and bypasses doctor's own busy/uncertain checks — and this
+            # is the path users actually copy, because --fix refuses while holders exist.
             lines.append("fix (when no sessions are running):")
             lines.append("  stop the gateway and retire the MCP processes, then:")
-            lines.append(f"  pipx install --force {DIST}=={report['installed_version'] or '<version>'}")
+            lines.append("  psamvault-mcp doctor --fix")
+            if report.get("venv_probe_uncertain"):
+                lines.append(
+                    "  (the process probe could not be trusted, so repair will refuse until it can — "
+                    "do not recreate the venv by hand)"
+                )
         else:
             lines.append("fix: psamvault-mcp doctor --fix")
     else:
