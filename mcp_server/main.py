@@ -984,12 +984,27 @@ def _run_subcommand(name: str, argv: list[str]) -> int:
         else:  # pragma: no cover - guarded by SUBCOMMANDS
             print(f"unknown subcommand: {name}", file=_sys.stderr)
             return 2
-    except ModuleNotFoundError as exc:
-        print(
-            f"{name}: not available in this build ({exc}). "
-            "Upgrade with: psamvault-mcp compat --apply --latest",
-            file=_sys.stderr,
-        )
+    except ImportError as exc:
+        # Recovery for a half-linked install. Two mistakes to avoid here: printing a bare
+        # `--apply --latest` (refused with exit 2 when the target is newer than this install's
+        # contract, or a no-op when already current) and offering only an upgrade when a same-version
+        # relink is what actually repairs a missing submodule. ImportError, not just
+        # ModuleNotFoundError: a half-linked install can also fail as "import of X halted".
+        print(f"{name}: not available in this build ({exc}).", file=_sys.stderr)
+        print("  relink this install:  psamvault-mcp doctor --fix", file=_sys.stderr)
+        try:
+            from mcp_server.compat import apply_command
+
+            print(
+                f"  or upgrade:           {apply_command(latest=True, breaking=True)}",
+                file=_sys.stderr,
+            )
+        except Exception:
+            print(
+                "  or upgrade:           psamvault-mcp compat --check  "
+                "(prints the exact command for this install)",
+                file=_sys.stderr,
+            )
         return 2
     return int(sub_main(argv) or 0)
 
