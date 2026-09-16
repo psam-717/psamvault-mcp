@@ -498,14 +498,23 @@ the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MC
 version that documents it, plus the expected tool fingerprint).
 
 ```bash
-psamvault-mcp compat --check                     # exit 0 in sync, 1 drift, 2 refused (breaking), 3 install failed / below-floor skill
+psamvault-mcp compat --check                     # exit 0 in sync, 1 drift (advisory: a newer published release never changes this)
 psamvault-mcp compat --check --json              # machine-readable
 psamvault-mcp compat --apply                     # install the target release and bring the skill up to date
-psamvault-mcp compat --apply --allow-breaking    # only after approving a release that REMOVES a tool
+psamvault-mcp compat --apply --latest            # ...or the newest release published on PyPI — the only way OUT of an install that is already behind
+psamvault-mcp compat --apply --allow-breaking    # required when the target REMOVES a tool, or is newer than the installed contract
 psamvault-mcp compat --sync-skill                # skill-only update: install the clone's newest skill, MCP untouched
 psamvault-mcp compat --apply --from-git          # install the local repo (merged but not yet released)
 psamvault-mcp compat --apply --from-git --pull   # ...after stashing local changes and pulling origin/main
+
+psamvault-mcp selfcheck                          # installed vs what a NEW session actually serves (exit 1 on mismatch)
+psamvault-mcp doctor                             # why an install looks broken: entry points, pipx records, processes holding the venv
+psamvault-mcp doctor --fix                       # ...and repair it (run when no session is holding the venv)
 ```
+
+`--apply` exit codes: **0** ok, **1** install failed, **2** refused (needs `--allow-breaking`), **3** the
+contract's release is not on PyPI yet (publish it, or use `--from-git`). `--check` only ever returns 0 or 1 —
+an available update is news, not breakage.
 
 The check runs as a **subcommand of the server's own entry point**, so it needs no separate install and no
 venv path. On Windows the shim is `psamvault-mcp.exe` (the same one your MCP host config already calls);
