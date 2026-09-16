@@ -22,6 +22,7 @@ Token-efficiency changes (Anthropic Code Execution with MCP pattern):
 import asyncio
 import importlib.metadata
 import json
+import os
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -34,7 +35,7 @@ load_config()
 
 from mcp_server import tools
 
-from mcp_server.version_check import check_for_update
+from mcp_server.version_check import SKIP_UPDATE_CHECK_ENV, check_for_update
 
 logger = get_logger()
 
@@ -1033,7 +1034,12 @@ def main() -> None:
     if not is_logged_in():
         logger.warning("not logged in — run 'psamvault login' before using vault tools")
 
-    check_for_update()
+    # A diagnostic child (psamvault-mcp selfcheck spawning a server) must not consume the one-shot
+    # "update available" notice aimed at the next real session, nor reach the index at all.
+    if os.environ.get(SKIP_UPDATE_CHECK_ENV):
+        logger.debug("startup update check skipped (%s is set)", SKIP_UPDATE_CHECK_ENV)
+    else:
+        check_for_update()
 
     try:
         asyncio.run(_run_server())
