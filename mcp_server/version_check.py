@@ -14,6 +14,7 @@ server from starting.
 """
 
 import importlib.metadata
+import json
 from pathlib import Path
 
 import httpx
@@ -127,25 +128,32 @@ def check_for_update(silent: bool = True) -> None:
     _print_update_notice(installed, latest)
 
 
-def _upgrade_command(latest: str) -> str:
-    """The apply command the flag gate will actually accept, for a release newer than this contract.
-
-    The gate refuses a target the installed contract has never seen unless ``--allow-breaking`` is
-    present, and "installed == contract, PyPI is newer" is exactly that case — so recommending plain
-    ``--apply --latest`` here would print a command that exits 2 every time it is copied.
-    """
-    newest_known = None
+def _contract_newest() -> str | None:
+    """The newest release this installed wheel's contract knows about (None if unreadable)."""
     try:
         data = json.loads(Path(__file__).with_name("compatibility.json").read_text(encoding="utf-8"))
         versions = [r.get("mcp") for r in (data.get("releases") or []) if r.get("mcp")]
-        if versions:
-            newest_known = max(versions, key=vkey)
+        return max(versions, key=vkey) if versions else None
     except Exception:  # noqa: BLE001 - advice only; never break the notice chain
-        newest_known = None
-    parts = ["psamvault-mcp", "compat", "--apply", "--latest"]
-    if newest_known and is_newer(latest, newest_known):
-        parts.append("--allow-breaking")
-    return " ".join(parts)
+        return None
+
+
+def _upgrade_command(latest: str) -> str:
+    """The apply command the flag gate will actually accept — built by compat, never re-derived.
+
+    The gate refuses a target the installed contract has never seen unless ``--allow-breaking`` is
+    present, and "installed == contract, PyPI is newer" is exactly that case — so a notice that names
+    plain ``--apply --latest`` prints a command that exits 2 every time it is copied. This used to
+    re-implement the string and, through a swallowed NameError, silently dropped the flag; there is
+    now one builder (``compat.apply_command``), imported lazily because compat imports this module.
+    """
+    from mcp_server.compat import apply_command
+
+    newest_known = _contract_newest()
+    # An unreadable/empty contract cannot PROVE the target is within it, so err toward the form the
+    # gate accepts: --allow-breaking is a no-op when it is not required.
+    breaking = newest_known is None or is_newer(latest, newest_known)
+    return apply_command(latest=True, breaking=breaking)
 
 
 def _print_update_notice(installed: str, latest: str) -> None:
