@@ -89,9 +89,16 @@ def _use_venv(monkeypatch, venv: Path) -> Path:
     return venv
 
 
-def _entry(pid, name, cmdline):
-    """One Win32_Process row, as ConvertTo-Json renders it."""
-    return {"ProcessId": pid, "Name": name, "CommandLine": cmdline}
+def _entry(pid, name, cmdline, ppid=None):
+    """One Win32_Process row, as ConvertTo-Json renders it.
+
+    ``ppid`` is omitted unless given: the probe always asks for ParentProcessId, but the callers that
+    do not care exercise the documented degradation (a table without links ends every ancestor walk).
+    """
+    row = {"ProcessId": pid, "Name": name, "CommandLine": cmdline}
+    if ppid is not None:
+        row["ParentProcessId"] = ppid
+    return row
 
 
 # ── discovery ──────────────────────────────────────────────────────────────────
@@ -154,8 +161,8 @@ def test_venv_python_agrees_with_compat_pipx_python(monkeypatch, tmp_path):
 
 # ── Windows holder probe ───────────────────────────────────────────────────────
 def test_windows_probe_command_asks_cim_for_json_and_excludes_itself(monkeypatch, tmp_path):
-    """The probe's OWN command line carries the venv path (it is the where-clause), so a naive
-    query matches itself — verified on Windows 11. $PID must stay in the filter."""
+    """The probe's OWN command line carries the venv path (it is the pattern), so a naive query
+    matches itself — verified on Windows 11. $PID must stay in the filter."""
     _as_windows(monkeypatch)
     _use_venv(monkeypatch, _venv(tmp_path))
     fake = _patch(monkeypatch, _Run(stdout=""))
@@ -166,17 +173,18 @@ def test_windows_probe_command_asks_cim_for_json_and_excludes_itself(monkeypatch
     assert "-NoProfile" in fake.calls[-1] and "-NonInteractive" in fake.calls[-1]
     assert "Get-CimInstance Win32_Process" in fake.script
     assert "$_.ProcessId -ne $PID" in fake.script
-    assert "$_.CommandLine -like" in fake.script
     assert "ConvertTo-Json -InputObject $hits -Compress" in fake.script
+    # The script enumerates ONLY — there is no '-like' clause, so exactly one rule decides what
+    # counts (the Python _venv_matcher). A PowerShell clause had to be told both separator spellings
+    # by hand, and a backslash-only one silently missed real holders.
+    assert "-like" not in fake.script
+    # Parent links ride along: they are what lets the caller drop this command's own launcher chain
+    # (the entry-point shim), which otherwise counted as a holder of the venv it was asking about.
+    assert "ParentProcessId" in fake.script
     # The @() wrapper is what guarantees JSON output even when NOTHING matched. Without it an empty
     # pipeline prints nothing at all, and "no process is running" becomes indistinguishable from
     # "the probe died" — the ambiguity that let a held venv read as free.
     assert "$hits = @(" in fake.script
-    assert str(ie.venv_dir()) in fake.script, "the venv must be the match, not every process"
-    # coarse on purpose: a command line launched with forward slashes has no backslash to match,
-    # so the clause asks for both spellings (the precise filter runs on the parse side)
-    assert f"'*{ie.venv_dir()}*'" in fake.script
-    assert f"'*{str(ie.venv_dir()).replace(chr(92), '/')}*'" in fake.script
     assert 5 <= fake.kwargs[-1]["timeout"] <= 30, "PowerShell cold start is slow but bounded"
 
 
@@ -293,24 +301,73 @@ def test_windows_holders_never_report_the_process_asking(monkeypatch, tmp_path):
     assert [holder["pid"] for holder in ie.holders()] == [1680]
 
 
-def test_windows_awkward_path_is_escaped_for_the_like_clause(monkeypatch, tmp_path):
-    """A quote or a bracket in the path must not break the query, and an unescaped '[' would start
-    a PowerShell character class and silently stop matching (i.e. report a busy venv as free)."""
+def test_windows_awkward_path_still_matches(monkeypatch, tmp_path):
+    """A quote or a bracket in the path must not break matching. This used to be the PowerShell
+    clause's problem — an unescaped ``[`` starts a character class and silently stops matching, i.e.
+    reports a busy venv as free. The escaping burden moved with the match: it now happens in
+    :func:`_venv_matcher` via ``re.escape``."""
     _as_windows(monkeypatch)
     _use_venv(monkeypatch, tmp_path / "we'ird [x86]" / "psamvault-mcp")
-    fake = _patch(monkeypatch, _Run(stdout=""))
+    py = ie.venv_python()
+    _patch(monkeypatch, _Run(stdout=json.dumps([
+        _entry(1680, "python.exe", f'"{py}" -m mcp_server.main'),
+    ])))
 
-    ie.holders()
-
-    assert "we''ird" in fake.script, "'' is a literal quote inside a PowerShell single-quoted string"
-    assert "[[]x86]" in fake.script, "a bare '[' would be read as a character class"
-    assert fake.script.count("'*") == 2 and fake.script.count("*'") == 2, "both spellings, once each"
+    assert [holder["pid"] for holder in ie.holders()] == [1680]
 
 
-def test_ps_like_literal_escapes_quotes_and_brackets():
-    assert ie._ps_like_literal("a'b") == "a''b"
-    assert ie._ps_like_literal("C:\\Program Files [x86]") == "C:\\Program Files [[]x86]"
-    assert ie._ps_like_literal("no specials") == "no specials"
+# ── this command is not a holder ───────────────────────────────────────────────
+def test_windows_own_launcher_shim_is_not_a_holder(monkeypatch, tmp_path):
+    """``psamvault-mcp doctor --fix`` runs as entry-point shim -> python -> probe, and the SHIM is a
+    process of its own whose command line carries the venv path.
+
+    Found live on 0.5.3: the shim was counted, so the total could never reach zero and ``--fix``
+    refused on every machine — including one whose venv nothing else touched. Excluding the running
+    interpreter is not enough; the launcher above it has to go too.
+    """
+    _as_windows(monkeypatch)
+    _use_venv(monkeypatch, _venv(tmp_path))
+    py = ie.venv_python()
+    shim = str(ie.venv_dir() / "Scripts" / "psamvault-mcp.exe")
+    monkeypatch.setattr(ie.os, "getpid", lambda: 5000)
+    _patch(monkeypatch, _Run(stdout=json.dumps([
+        _entry(5000, "python.exe", f'"{py}" -c "doctor"', ppid=1000),
+        _entry(1000, "psamvault-mcp.exe", f'"{shim}" doctor --fix', ppid=900),
+        _entry(2000, "python.exe", f'"{py}" -c "from mcp_server.main import main; main()"', ppid=1),
+    ])))
+
+    assert [holder["pid"] for holder in ie.holders()] == [2000], "the shim is us, not a holder"
+
+
+def test_windows_launcher_chain_drops_every_contiguous_wrapper(monkeypatch, tmp_path):
+    """A shell that inlined the command keeps the venv path in ITS command line too, so the walk must
+    keep going up — and stop at the first ancestor that does not carry the venv, so an unrelated
+    process is never hidden. (A genuine holder further down the tree must survive both.)"""
+    _as_windows(monkeypatch)
+    _use_venv(monkeypatch, _venv(tmp_path))
+    py = ie.venv_python()
+    shim = str(ie.venv_dir() / "Scripts" / "psamvault-mcp.exe")
+    bash = f'bash -c \'source /c/…; "{shim}" doctor --fix\''
+    monkeypatch.setattr(ie.os, "getpid", lambda: 5000)
+    _patch(monkeypatch, _Run(stdout=json.dumps([
+        _entry(5000, "python.exe", f'"{py}" -c "doctor"', ppid=1000),
+        _entry(1000, "psamvault-mcp.exe", f'"{shim}" doctor --fix', ppid=900),
+        _entry(900, "bash.exe", bash, ppid=800),
+        _entry(800, "explorer.exe", "C:\\Windows\\explorer.exe", ppid=1),  # no venv -> walk stops
+        _entry(2000, "python.exe", f'"{py}" -c "from mcp_server.main import main; main()"', ppid=1),
+    ])))
+
+    assert [holder["pid"] for holder in ie.holders()] == [2000]
+
+
+def test_windows_launcher_drop_degrades_without_parent_links(tmp_path):
+    """A listing with no ParentProcessId cannot be walked. That degrades to the old behaviour (self
+    excluded, launcher kept) instead of to a wrong answer — a missed exclusion is a repair that
+    refuses, never a venv replaced under a live server."""
+    venv = _venv(tmp_path)
+    payload = [_entry(1000, "psamvault-mcp.exe", f'"{venv}\\Scripts\\psamvault-mcp.exe" doctor --fix')]
+
+    assert [holder["pid"] for holder in ie._parse_windows(payload, venv, parent_of=None)] == [1000]
 
 
 def test_windows_powershell_falls_back_to_pwsh(monkeypatch, tmp_path):
@@ -421,15 +478,20 @@ def test_posix_probe_failures_degrade_to_no_holders_and_a_busy_venv(
 
 
 def test_holders_accepts_an_explicit_interpreter(monkeypatch, tmp_path):
-    """The compat path can ask about a venv other than the default one."""
+    """The compat path can ask about a venv other than the default one.
+
+    The pattern used to travel INSIDE the script (the where-clause), which is what pinned this; now
+    the script only enumerates and the match happens in :func:`_parse_windows`, so the behaviour is
+    what gets pinned: rows from another venv are not holders of this interpreter.
+    """
     _as_windows(monkeypatch)
     elsewhere = tmp_path / "other" / "bin" / "python"
-    fake = _patch(monkeypatch, _Run(stdout=json.dumps(
-        _entry(7, "python", f'"{elsewhere}" -m mcp_server.main')
-    )))
+    _patch(monkeypatch, _Run(stdout=json.dumps([
+        _entry(7, "python", f'"{elsewhere}" -m mcp_server.main'),
+        _entry(9, "python", f'"{ie.venv_python()}" -m mcp_server.main'),
+    ])))
 
     assert [holder["pid"] for holder in ie.holders(elsewhere)] == [7]
-    assert str(elsewhere.parent.parent) in fake.script
 
 
 # ── describe ───────────────────────────────────────────────────────────────────
