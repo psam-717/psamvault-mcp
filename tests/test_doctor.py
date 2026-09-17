@@ -389,3 +389,52 @@ class TestDoctorDoesNotAdvertiseFixForWhatItCannotRepair:
 def test_the_dead_pipx_version_wrapper_is_gone():
     """It was a second `pipx list --json` waiting to happen; diagnose reads the records it already has."""
     assert not hasattr(doctor, "_pipx_metadata_version")
+
+
+class TestHolderReporting:
+    """The refusal must say WHAT holds the venv, and the advice must fit the situation.
+
+    Reported from a real run on 0.5.3: the gateways were already stopped, the venv was held anyway,
+    and the message said "2 process(es) holding it ... stop the gateway first" — an instruction to
+    repeat what had just been done, naming nothing. The holders were the desktop app's MCP server
+    and a shell's wrapper, neither of which the text mentioned.
+    """
+
+    def test_refusal_names_every_holder(self, fake_machine, capsys):
+        fake_machine["holders"] = [
+            {"pid": 6492, "name": "python.exe", "cmdline": 'python.exe -c "from mcp_server.main import main; main()"'},
+            {"pid": 7812, "name": "bash.exe", "cmdline": "source /c/… "},
+        ]
+
+        doctor._fix(doctor.diagnose(probe_index=False))
+
+        out = capsys.readouterr().out
+        assert "pid 6492 python.exe" in out and "pid 7812 bash.exe" in out
+
+    def test_advice_points_at_the_desktop_app_for_mcp_servers(self, fake_machine, capsys):
+        """ "stop the gateway" is not enough: every open desktop session holds an MCP server, and the
+        app spawns a new one the moment you kill it."""
+        fake_machine["holders"] = [
+            {"pid": 1, "name": "python.exe", "cmdline": 'python.exe -c "from mcp_server.main import main; main()"'},
+        ]
+
+        doctor._fix(doctor.diagnose(probe_index=False))
+
+        out = capsys.readouterr().out
+        assert "gateway stop --all" in out and "desktop app" in out
+        assert "stop the gateway first" not in out
+
+    def test_render_names_the_holders_in_the_venv_row(self, fake_machine):
+        fake_machine["holders"] = [{"pid": 42, "name": "python.exe", "cmdline": "…"}]
+
+        text = doctor.render(doctor.diagnose(probe_index=False))
+
+        assert "1 process(es) holding it: python.exe(42)" in text
+
+    def test_render_still_marks_a_failed_probe_as_unknown(self, fake_machine):
+        fake_machine["holders"] = []
+        fake_machine["free"] = False
+
+        text = doctor.render(doctor.diagnose(probe_index=False))
+
+        assert "unknown (probe failed)" in text

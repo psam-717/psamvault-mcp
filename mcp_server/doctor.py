@@ -253,8 +253,9 @@ def diagnose(probe_index: bool = True) -> dict:
             "(an upgrade was performed outside pipx)"
         )
     if holders:
+        named = ", ".join(f"{h.get('name') or '?'}({h['pid']})" for h in holders)
         findings.append(
-            f"{len(holders)} process(es) hold the venv — pipx cannot recreate it until they stop"
+            f"{len(holders)} process(es) hold the venv ({named}) — pipx cannot recreate it until they stop"
         )
     if probe_uncertain:
         findings.append(
@@ -306,6 +307,47 @@ def diagnose(probe_index: bool = True) -> dict:
     }
 
 
+def _venv_line(report: dict) -> str:
+    """The ``venv`` row: WHO holds it, not just how many.
+
+    A bare count left the reader stuck — the reported repair is "stop whatever holds it", and a
+    number cannot be acted on.
+    """
+    if report["venv_free"]:
+        return "free"
+    holders = report.get("venv_holders") or []
+    if not holders:
+        return "unknown (probe failed) — treated as busy"
+    named = ", ".join(f"{h.get('name') or '?'}({h['pid']})" for h in holders)
+    return f"{len(holders)} process(es) holding it: {named}"
+
+
+def _holder_kind(holder: dict) -> str:
+    line = holder.get("cmdline") or ""
+    if "mcp_server.main" in line:
+        return "a running MCP server"
+    return "an unrelated process carrying the venv path"
+
+
+def _holder_advice(holders: list) -> str:
+    """What to actually stop, derived from the holders themselves.
+
+    The old text said "stop the gateway first" unconditionally. That is wrong whenever the gateway is
+    already stopped — the common case, since a stopped-gateway install is exactly when someone tries
+    to repair — and it never mentioned the desktop app, whose every open session holds an MCP server
+    and which respawns one the moment you kill it.
+    """
+    if any("mcp_server.main" in (h.get("cmdline") or "") for h in holders):
+        return (
+            "held by running MCP servers: stop the gateways (`hermes gateway stop --all`) and QUIT the "
+            "Hermes desktop app — each open session holds one, and killing the process alone just makes "
+            "the app spawn a new one"
+        )
+    if holders:
+        return "held by the processes above — stop them"
+    return "the process probe could not confirm the venv is idle — close Hermes sessions and gateways"
+
+
 def render(report: dict) -> str:
     lines = [
         "psamvault-mcp doctor",
@@ -332,7 +374,7 @@ def render(report: dict) -> str:
     ) + [
         f"  entry points     : {', '.join(report['declared_entry_points']) or 'none declared'}",
         f"  linked on PATH   : {', '.join(report['linked_apps']) or 'none'}",
-        f"  venv             : {'free' if report['venv_free'] else (str(len(report['venv_holders'])) + ' process(es) holding it' if report['venv_holders'] else 'unknown (probe failed) — treated as busy')}",
+        f"  venv             : {_venv_line(report)}",
         f"  fresh import     : {'ok' if report['fresh_import_ok'] else 'FAILED — ' + report['fresh_import_detail']}",
     ]
     skill = report.get("skill") or {}
@@ -390,8 +432,12 @@ def _fix(report: dict) -> int:
     if not report["venv_free"]:
         print(
             "refusing to repair while the venv is in use — pipx recreates the venv, and Windows will "
-            "not replace a running python.exe.\nstop the gateway first, then re-run: psamvault-mcp doctor --fix"
+            "not replace a running python.exe."
         )
+        for holder in report["venv_holders"]:
+            print(f"  pid {holder['pid']} {holder.get('name') or '?'} — {_holder_kind(holder)}")
+        print(_holder_advice(report["venv_holders"]))
+        print("then re-run: psamvault-mcp doctor --fix")
         return 2
     # Repair the version PIPX has — never the interpreter that happens to be running doctor: a sandbox
     # can be running older code, and `pipx install --force` of that version would silently downgrade a
