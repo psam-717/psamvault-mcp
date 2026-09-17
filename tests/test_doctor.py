@@ -438,3 +438,132 @@ class TestHolderReporting:
         text = doctor.render(doctor.diagnose(probe_index=False))
 
         assert "unknown (probe failed)" in text
+
+
+class TestRecordsOnlyRepair:
+    """`--fix` must be able to correct pipx's recorded version while the venv is BUSY.
+
+    The venv is held by live MCP servers in practice (every open Hermes session owns one, the
+    gateways keep more), so a repair that requires a free venv cannot be run at all — which is how
+    `pipx records : 0.4.4` sat next to `installed : 0.5.3` for days. The record is one string in
+    pipx's JSON and the venv already holds the right code, so it is corrected in place.
+    """
+
+    # Built from chr(13)+chr(10) rather than an escape: pipx writes CRLF, and a test that silently
+    # lost them would stop covering the "line endings preserved" claim.
+    NL = chr(13) + chr(10)
+    METADATA = NL.join(
+        [
+            "{",
+            '    "backend": "uv",',
+            '    "main_package": {',
+            '        "apps": [',
+            '            "psamvault-mcp.exe"',
+            "        ],",
+            '        "package_version": "0.4.4"',
+            "    },",
+            '    "pipx_metadata_version": "0.12"',
+            "}",
+            "",
+        ]
+    )
+
+    def _busy_machine(self, fake_machine, monkeypatch, tmp_path, metadata=None):
+        """The reported machine: venv busy, records stale, nothing else wrong."""
+        venv = tmp_path / "venvs" / "psamvault-mcp"
+        venv.mkdir(parents=True)
+        (venv / "pipx_metadata.json").write_text(
+            self.METADATA if metadata is None else metadata, encoding="utf-8", newline=""
+        )
+        env = doctor._install_env()
+        monkeypatch.setattr(
+            doctor,
+            "_install_env",
+            lambda: SimpleNamespace(
+                venv_dir=lambda: venv,
+                holders=env.holders,
+                is_free=env.is_free,
+                linked_apps=env.linked_apps,
+            ),
+        )
+        fake_machine.update(
+            {
+                "installed": "0.5.3",
+                "declared": ["psamvault-mcp"],
+                "linked": ["psamvault", "psamvault-mcp"],
+                "pipx_version": "0.4.4",
+                "pipx_venv_version": "0.5.3",
+                "holders": [{"pid": 42, "name": "python.exe", "cmdline": "…mcp_server.main…"}],
+                "free": False,
+            }
+        )
+        return venv
+
+    def test_repairs_the_record_in_place_while_the_venv_is_busy(self, fake_machine, monkeypatch, tmp_path, capsys):
+        venv = self._busy_machine(fake_machine, monkeypatch, tmp_path)
+        report = doctor.diagnose(probe_index=False)
+
+        rc = doctor._fix(report)
+
+        out = capsys.readouterr().out
+        assert rc == 0, "the recorded version is fixable without a free venv"
+        assert "0.4.4 -> 0.5.3" in out
+        assert "the venv was not touched" in out
+        assert '"package_version": "0.5.3"' in (venv / "pipx_metadata.json").read_text(encoding="utf-8")
+
+    def test_the_edit_touches_nothing_else_in_pipx_s_own_file(self, fake_machine, monkeypatch, tmp_path):
+        """Surgical means surgical: same indent, same key order, same CRLF endings."""
+        venv = self._busy_machine(fake_machine, monkeypatch, tmp_path)
+
+        doctor._fix(doctor.diagnose(probe_index=False))
+
+        after = (venv / "pipx_metadata.json").open("r", encoding="utf-8", newline="").read()
+        assert after == self.METADATA.replace('"0.4.4"', '"0.5.3"')
+        assert after.count(self.NL) == self.METADATA.count(self.NL), "line endings preserved"
+
+    def test_the_original_is_kept_as_a_dated_backup(self, fake_machine, monkeypatch, tmp_path):
+        venv = self._busy_machine(fake_machine, monkeypatch, tmp_path)
+
+        doctor._fix(doctor.diagnose(probe_index=False))
+
+        backups = list(venv.glob("pipx_metadata.json.bak-*"))
+        assert len(backups) == 1
+        # read_text(newline=…) is Python 3.13+; open() carries the same guarantee here
+        assert backups[0].open("r", encoding="utf-8", newline="").read() == self.METADATA
+
+    def test_render_says_the_repair_needs_no_quiet_machine(self, fake_machine, monkeypatch, tmp_path):
+        self._busy_machine(fake_machine, monkeypatch, tmp_path)
+
+        text = doctor.render(doctor.diagnose(probe_index=False))
+
+        assert "corrected in place, no need to stop sessions" in text
+        assert "stop the gateway and retire the MCP processes" not in text
+
+    def test_an_unlinked_entry_point_still_needs_a_free_venv(self, fake_machine, monkeypatch, tmp_path, capsys):
+        """The in-place edit must not become a way to claim a repair that did not happen."""
+        venv = self._busy_machine(fake_machine, monkeypatch, tmp_path)
+        fake_machine["declared"] = ["psamvault-compat", "psamvault-mcp"]
+
+        rc = doctor._fix(doctor.diagnose(probe_index=False))
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "refusing to repair" in out
+        assert '"package_version": "0.4.4"' in (venv / "pipx_metadata.json").read_text(encoding="utf-8")
+
+    def test_an_unexpected_schema_is_reported_not_guessed(self, fake_machine, monkeypatch, tmp_path, capsys):
+        # A second package_version token anywhere in the file: pipx's schema moved, so the in-place
+        # edit can no longer be aimed at one unambiguous string and must refuse rather than guess.
+        duplicated = self.METADATA.replace(
+            '    "backend": "uv",',
+            '    "backend": "uv",' + self.NL + '    "dup": {"package_version": "0.4.4"},',
+        )
+        venv = self._busy_machine(fake_machine, monkeypatch, tmp_path, metadata=duplicated)
+
+        rc = doctor._fix(doctor.diagnose(probe_index=False))
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "could not correct the pipx record" in out
+        assert "expected exactly one" in out
+        assert '"package_version": "0.4.4"' in (venv / "pipx_metadata.json").read_text(encoding="utf-8")
