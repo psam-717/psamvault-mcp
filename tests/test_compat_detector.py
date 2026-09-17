@@ -33,6 +33,32 @@ def test_silent_when_in_sync(monkeypatch, capsys):
     assert capsys.readouterr().out == "", "an in-sync pair must produce no output at all"
 
 
+def test_reports_a_newer_published_release(monkeypatch, capsys):
+    """In sync, but PyPI has something newer: that is news, not drift — and the detector must say so."""
+    monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(detector, "run", _fake_probe(
+        '{"exit_code": 0, "installed_mcp": "0.5.3", "latest_published": "0.6.0",'
+        ' "published_newer": "0.6.0", "installed_skill": "1.9.0", "skill_floor": "1.9.0"}'
+    ))
+    assert detector.main() == 0
+    out = capsys.readouterr().out
+    assert "UPDATE AVAILABLE" in out and "0.6.0" in out
+    # The branch means "in sync with this wheel's contract, but PyPI has something newer" — exactly the
+    # case the apply gate refuses without --allow-breaking, so the advertised command must carry it or
+    # the woken agent runs a command that exits 2.
+    assert "psamvault-mcp compat --apply --latest --allow-breaking" in out
+
+
+def test_silent_when_in_sync_and_nothing_newer_is_published(monkeypatch, capsys):
+    """No drift AND no newer release = no output, so the agent job is not woken for nothing."""
+    monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(detector, "run", _fake_probe(
+        '{"exit_code": 0, "installed_mcp": "0.5.3", "latest_published": "0.5.3", "published_newer": null}'
+    ))
+    assert detector.main() == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_reports_drift_with_the_apply_command(monkeypatch, capsys):
     monkeypatch.setattr(detector.os.path, "isfile", lambda path: True)
     monkeypatch.setattr(detector, "run", _fake_probe(
@@ -72,8 +98,8 @@ def test_drift_report_names_both_remedies(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert '"psamvault_compat": "DRIFT"' in out
     assert '"skill_floor": "1.6.0"' in out
-    assert "psamvault-compat --sync-skill" in out
-    assert "psamvault-compat --apply" in out
+    assert "psamvault-mcp compat --sync-skill" in out
+    assert "psamvault-mcp compat --apply" in out
 
 
 def test_skill_floor_falls_back_to_the_expected_skill_key(monkeypatch, capsys):

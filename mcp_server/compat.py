@@ -14,8 +14,10 @@ it; any skill at or above that floor is healthy. This lets the skill move ahead 
 improved description of an existing tool is a legitimate skill-only update that needs no release —
 while still catching a skill that has fallen behind the server it documents.
 
-CLI: ``psamvault-compat`` (``--check`` default, ``--json``, ``--apply``, ``--sync-skill``,
-``--allow-breaking``, ``--from-git``, ``--pull``).
+CLI: ``psamvault-mcp compat`` (``--check`` default, ``--json``, ``--apply``, ``--apply --latest``,
+``--sync-skill``, ``--from-git``, ``--pull``, ``--allow-breaking``). The standalone ``psamvault-compat``
+console script was removed in 0.5.3: pipx links console scripts only for packages it installed itself,
+so a script added by a later release never reaches PATH while the file sits in the venv.
 Exit codes: 0 in sync, 1 drift found, 2 refused (breaking without the flag), 3 install failed.
 """
 
@@ -25,11 +27,20 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from mcp_server import upgrade_safety as safety
+from mcp_server.versions import is_newer, vkey
+
+try:  # install_env is optional at import time so the module still loads in odd environments
+    from mcp_server import install_env
+except Exception:  # pragma: no cover - defensive
+    install_env = None  # type: ignore[assignment]
+
+from mcp_server import version_check
 
 CONTRACT_FILENAME = "compatibility.json"
 FRONTMATTER_VERSION = re.compile(r"^version:\s*([0-9][0-9A-Za-z.\-+]*)\s*$", re.MULTILINE)
@@ -49,8 +60,9 @@ def load_contract(path: str | Path | None = None) -> dict:
 
 
 def _vkey(version: str) -> tuple:
-    parts = re.split(r"[.\-+]", str(version))
-    return tuple(int(p) if p.isdigit() else 0 for p in parts[:3])
+    """Comparable version key. Kept under this name for existing callers; the single
+    implementation lives in mcp_server.versions so this module and version_check cannot disagree."""
+    return vkey(version)
 
 
 def releases(contract: dict | None = None) -> list[dict]:
@@ -109,6 +121,7 @@ def check(
     skill_version: str | None = None,
     skill_path: str | Path | None = None,
     contract: dict | None = None,
+    probe_index: bool = True,
 ) -> dict:
     contract = contract or load_contract()
     latest = latest_release(contract)
@@ -150,7 +163,7 @@ def check(
     if skill_below_floor:
         findings.append(
             f"skill version {skill_current!r} is BELOW the floor {skill_floor} required by server "
-            f"{effective['mcp']} ({skill_location}) — run: psamvault-compat --sync-skill"
+            f"{effective['mcp']} ({skill_location}) — run: psamvault-mcp compat --sync-skill"
         )
     # Where the skill WOULD come from, so a clone parked on an older branch is visible before anyone
     # runs --sync-skill (which refuses to downgrade, but silence is what let this go unnoticed).
@@ -176,8 +189,34 @@ def check(
         and not missing
         and (entry is not None or fingerprint_matches_latest)
     )
+
+    # What PyPI actually has. The contract only knows releases that shipped WITH this install, so
+    # without this the tool is blind to anything newer (an installed 0.5.1 carries a contract whose
+    # newest entry is 0.5.1 and would report "nothing to apply" with 0.5.2 published).
+    #
+    # Advisory by design: an unreachable index must never fail a check, and a newer published
+    # release must NOT change the exit code — "an update exists" is not "something is broken".
+    published: str | None = None
+    published_newer: str | None = None
+    if probe_index:
+        published = version_check.latest_published()
+        if published and is_newer(published, mcp):
+            published_newer = published
+
+    # The upgrade advice this report will carry. Reaching a release the installed contract has never
+    # seen is breaking-eligible by definition, so that command MUST carry --allow-breaking — the same
+    # process refuses it otherwise, which would make every advertised one-liner a dead end.
+    if published_newer:
+        advice = apply_command(latest=True, breaking=True)
+    else:
+        advice = apply_command(breaking=bool(breaking_pending))
+
     return {
         "installed_mcp": mcp,
+        "latest_published": published,
+        "published_newer": published_newer,
+        "pypi_checked": probe_index,
+        "apply_command": advice,
         "target_mcp": latest["mcp"],
         "version_drift": version_drift,
         "update_available": version_drift,
@@ -208,6 +247,18 @@ def render(report: dict) -> str:
         + ("  [sync]" if report["in_sync"] else "  [drift]"),
         f"  server target    : {report['target_mcp']}"
         + ("  (BREAKING)" if report["breaking_pending"] else ""),
+        "  newest published : "
+        + (
+            report["latest_published"]
+            if report.get("latest_published")
+            else ("unknown (PyPI unreachable — advisory)" if report.get("pypi_checked") else "not checked (--no-index)")
+        ),
+        "  update available : "
+        + (
+            f"yes — run: {report.get('apply_command') or apply_command(latest=True, breaking=True)}"
+            if report.get("published_newer")
+            else "no"
+        ),
         f"  effective release: {report['effective_release']}",
         f"  skill installed  : {report['installed_skill']}"
         + ("  [ahead of the floor — fine]" if report.get("skill_ahead")
@@ -231,10 +282,40 @@ def render(report: dict) -> str:
 
 # ── apply ──────────────────────────────────────────────────────────────────────
 def pipx_python() -> Path:
+    """The venv interpreter pipx owns — the one both the probe and the uv write must agree on.
+
+    Delegates to :func:`install_env.venv_python` on purpose. The busy/free decision comes from that
+    module (it also honours ``PSAMVAULT_MCP_VENV`` and, on Windows without ``LOCALAPPDATA``, resolves
+    ``Scripts/python.exe``); if the two disagreed, the probe could correctly report "busy" — skipping
+    the pipx path — while uv wrote the wheel into a *different* interpreter, leaving the live server
+    on the old build. The duplicated join below only runs where install_env cannot answer at all.
+    """
+    if install_env is not None:
+        try:
+            return Path(install_env.venv_python())
+        except Exception:  # pragma: no cover - defensive; mirrors install_env's own fallbacks
+            pass
     local = os.environ.get("LOCALAPPDATA")
     if local:
         return Path(local) / "pipx" / "pipx" / "venvs" / "psamvault-mcp" / "Scripts" / "python.exe"
     return Path.home() / ".local" / "pipx" / "venvs" / "psamvault-mcp" / "bin" / "python"
+
+
+def apply_command(latest: bool = False, breaking: bool = False) -> str:
+    """The ``--apply`` invocation the flag gate will ACCEPT — one helper, so advice cannot drift.
+
+    Printing ``--apply --latest`` for a release newer than the installed contract is a dead end: the
+    same process refuses it with exit 2 unless ``--allow-breaking`` is present, so a user — or an
+    agent woken by the cron detector — copies a command that can never work. Every surface that
+    advertises an upgrade (``--check``, ``doctor``, the startup notice, the detector JSON) builds its
+    text here.
+    """
+    parts = ["psamvault-mcp", "compat", "--apply"]
+    if latest:
+        parts.append("--latest")
+    if breaking:
+        parts.append("--allow-breaking")
+    return " ".join(parts)
 
 
 def clone_path() -> Path:
@@ -246,18 +327,116 @@ def repo_path() -> Path:
     return Path(os.environ.get("PSAMVAULT_MCP_REPO") or DEFAULT_REPO)
 
 
-def _install(target_version: str) -> dict:
-    """Install the target release into the pipx venv (uv, WITH deps — --no-deps drops tools).
+def _install(target_version: str, force_uv: bool = False, assume_free: bool = False) -> dict:
+    """Install the target release into the pipx venv.
 
-    ``--refresh`` is deliberate: PyPI's simple index answers with ``cache-control: max-age=600``, so
-    right after a release is published uv's cached metadata can still claim the version does not
-    exist — the exact "publish, then immediately apply" sequence this command exists for.
+    Two installers, chosen by whether the venv is free (D9):
+
+    * **pipx, when no MCP process holds the venv** — recreates the venv, which is the only way pipx
+      re-reads the package's entry points. This is what keeps `pipx list` honest and keeps newly
+      added commands linked on PATH.
+    * **uv, when the venv is held** — a running ``python.exe`` cannot be replaced on Windows, so
+      ``pipx install --force`` would fail with os error 32. uv installs *into* the existing venv
+      (no recreation, no lock), at the cost of leaving pipx's records stale — reported as
+      ``relink_pending`` so the user can repair it at a safe moment.
+
+    ``--refresh`` on the uv path is deliberate: PyPI's simple index answers with
+    ``cache-control: max-age=600``, so right after a release is published uv's cached metadata can
+    still claim the version does not exist — the exact "publish, then immediately apply" sequence
+    this command exists for.
     """
-    cmd = [
-        "uv", "pip", "install", "--python", str(pipx_python()), "--refresh", f"psamvault-mcp=={target_version}"
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
+    free = _venv_is_free(assume_free)
+    pipx_ok = _pipx_available()
+    use_pipx = not force_uv and free and pipx_ok
+    if use_pipx:
+        cmd = ["pipx", "install", "--force", f"psamvault-mcp=={target_version}"]
+        timeout = 900
+        uv_reason = None
+    else:
+        cmd = [
+            "uv", "pip", "install", "--python", str(pipx_python()), "--refresh",
+            f"psamvault-mcp=={target_version}",
+        ]
+        timeout = 600
+        # WHY uv: three different causes with three different next steps. Reporting them all as
+        # "the venv is in use" sends operators off to stop sessions that were never the problem.
+        if force_uv:
+            uv_reason = "forced with --force-uv"
+        elif not pipx_ok:
+            uv_reason = "pipx is not on PATH"
+        else:
+            uv_reason = "the venv is in use"
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return {
+        "ok": proc.returncode == 0,
+        "cmd": cmd,
+        "installer": "pipx" if use_pipx else "uv",
+        # A uv install cannot relink apps; pipx's metadata is now behind the installed version.
+        "relink_pending": not use_pipx,
+        "uv_reason": uv_reason,
+        "stdout": proc.stdout[-2000:],
+        "stderr": proc.stderr[-2000:],
+    }
+
+
+def _pipx_available() -> bool:
+    return shutil.which("pipx") is not None
+
+
+def _venv_is_free(assume_free: bool = False) -> bool:
+    """True when nothing holds the venv's python (safe to let pipx recreate it)."""
+    if assume_free:
+        return True
+    if install_env is None:
+        return False  # cannot tell -> assume busy -> the uv path, which is always safe
+    try:
+        return bool(install_env.is_free())
+    except Exception:
+        return False
+
+
+def _select_entry(releases: list[dict], target: str | None = None) -> dict:
+    """The entry for ``target``, else the newest one by the shared comparator — never ``releases[0]``.
+
+    The contract file happens to be newest-first today; selecting positionally would silently pair a
+    successful install with the skill floor and tool fingerprint of a *different* MCP version the first
+    time the file is appended to or reordered.
+    """
+    if target:
+        for entry in releases:
+            if str(entry.get("mcp")) == str(target):
+                return entry
+    return max(releases, key=lambda entry: vkey(str(entry.get("mcp", ""))))
+
+
+def _installed_contract_entry(target: str | None = None) -> dict:
+    """Read the release entry from the contract INSIDE the venv (the just-installed version).
+
+    The running process still holds the old contract, so after installing a release newer than this
+    build knows about, the skill floor and tool fingerprint must be read from the new code — via a
+    fresh interpreter with a neutral cwd.
+
+    The child stays dumb (it prints the whole release list) and the selection happens here, so the
+    "which entry" rule lives in exactly one testable place.
+    """
+    code = (
+        "import json, pathlib, mcp_server\n"
+        "c = pathlib.Path(mcp_server.__file__).with_name('compatibility.json')\n"
+        "print(json.dumps(json.loads(c.read_text(encoding='utf-8'))['releases']))\n"
+    )
+    try:
+        proc = subprocess.run(
+            [str(pipx_python()), "-c", code],
+            capture_output=True, text=True, timeout=120, cwd=str(Path.home()), env={**os.environ, "PYTHONPATH": ""},
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            releases = json.loads(proc.stdout.strip())
+            if isinstance(releases, list) and releases:
+                return _select_entry(releases, target)
+    except Exception:
+        pass
+    # Fall back to the entry this build already knows about
+    return latest_release()
 
 
 def _install_from_git() -> dict:
@@ -273,7 +452,14 @@ def target_is_published(version: str, timeout: float = 20.0) -> bool | None:
     Without this check, applying a contract entry for a not-yet-published release fails deep inside
     the resolver with an opaque "no version of psamvault-mcp==X" error — which is exactly the state a
     contract entry creates between "merged" and "released".
+
+    Reads the payload `--check` already fetched when there is one: one `--apply` run then costs a
+    single index round-trip instead of two, and a slow index cannot stack this call's timeout on top
+    of the check's probe.
     """
+    cached = version_check.published_releases()
+    if cached is not None:
+        return version in cached
     try:
         import httpx
 
@@ -371,7 +557,7 @@ def _sync_skill(entry: dict, allow_downgrade: bool = False) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="psamvault-compat",
+        prog="psamvault-mcp compat",
         description="Check (and optionally repair) the psamvault-mcp ↔ skill version pairing.",
     )
     parser.add_argument("--check", action="store_true", help="report drift (default)")
@@ -400,9 +586,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--installed-version", default=None, help="override the detected version (diagnostics)")
     parser.add_argument("--skill-path", default=None, help="override the installed skill path (diagnostics)")
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="with --apply: target the newest release PUBLISHED on PyPI, not just the contract target",
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help="skip the PyPI probe entirely (offline, or a faster check)",
+    )
+    parser.add_argument("--force-uv", action="store_true", help="always install with uv (never recreate the venv)")
+    parser.add_argument(
+        "--assume-free",
+        action="store_true",
+        help="assume no MCP process holds the venv, so pipx may recreate it",
+    )
     args = parser.parse_args(argv)
 
-    report = check(installed_version=args.installed_version, skill_path=args.skill_path)
+    report = check(
+        installed_version=args.installed_version,
+        skill_path=args.skill_path,
+        probe_index=not args.no_index,
+    )
     print(json.dumps(report, indent=2) if args.json else render(report))
 
     if args.sync_skill:
@@ -423,15 +629,41 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.apply:
         return report["exit_code"]
-    if not report["update_available"]:
+
+    # Which release are we applying? Plain --apply keeps the documented behaviour (the contract
+    # target). --latest additionally reaches a release published after this install's contract was
+    # built — the only way to leave an install that is already behind.
+    contract_target = report["target_mcp"]
+    target = contract_target
+    if args.latest:
+        if report.get("published_newer"):
+            target = report["published_newer"]
+        else:
+            print(
+                "in sync with the newest PUBLISHED release — nothing to apply"
+                if report.get("latest_published")
+                else "cannot tell what is newest: PyPI was unreachable (re-run without --no-index)"
+            )
+            return 0 if report.get("latest_published") else 1
+
+    unknown_newer = is_newer(target, contract_target)
+    if (report["breaking_pending"] or unknown_newer) and not args.allow_breaking:
+        if unknown_newer:
+            print(
+                f"refusing to apply {target} without --allow-breaking: it is newer than anything this "
+                f"install's contract knows about ({contract_target}), so its compatibility is unverified "
+                "by definition. Re-run with --allow-breaking to accept that."
+            )
+        else:
+            print(
+                f"refusing to apply breaking release {target} without --allow-breaking "
+                "(a tool was removed; confirm before installing)"
+            )
+        return 2
+
+    if not report["update_available"] and not unknown_newer:
         print("in sync with the newest release — nothing to apply")
         return 0
-    if report["breaking_pending"] and not args.allow_breaking:
-        print(
-            f"refusing to apply breaking release {report['target_mcp']} without --allow-breaking "
-            "(a tool was removed; confirm before installing)"
-        )
-        return 2
 
     entry = latest_release()
     previous = report["installed_mcp"]  # what to put back if the new install does not work
@@ -464,9 +696,29 @@ def main(argv: list[str] | None = None) -> int:
         # refusing on it produces a false "not published yet" in exactly the publish-then-apply
         # window this command exists for. Attempt the install (--refresh makes it authoritative)
         # and use the index state only to explain a real failure.
-        published = target_is_published(entry["mcp"])
-        installed = _install(entry["mcp"])
-        print(f"install psamvault-mcp=={entry['mcp']}: {'ok' if installed['ok'] else 'FAILED'}")
+        published = target_is_published(target)
+        installed = _install(target, force_uv=args.force_uv, assume_free=args.assume_free)
+        print(
+            f"install psamvault-mcp=={target} via {installed.get('installer', '?')}: "
+            f"{'ok' if installed['ok'] else 'FAILED'}"
+        )
+        reason = installed.get("uv_reason")
+        if installed["ok"] and reason == "the venv is in use":
+            print(
+                "note: installed with uv because the venv is in use, so pipx's records were NOT "
+                "refreshed. Run `psamvault-mcp doctor --fix` when no sessions are running to relink "
+                "the entry points and refresh pipx's metadata."
+            )
+        elif installed["ok"] and reason == "pipx is not on PATH":
+            print(
+                "note: installed with uv because pipx is not on PATH — entry points cannot be "
+                "relinked until pipx is installed. (Keeping the venv free is not the issue here.)"
+            )
+        elif installed["ok"] and reason:
+            print(
+                f"note: installed with uv ({reason}); pipx's records were NOT refreshed. "
+                "Run `psamvault-mcp doctor --fix` if the entry points need relinking."
+            )
     if not installed["ok"]:
         print(installed["stderr"] or installed["stdout"])
         if safety.smoke_test(pipx_python())["ok"]:
@@ -491,10 +743,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"smoke test: {smoke['version']} exposes {len(smoke['tools'])} tools")
 
+    # Read the contract from the version just installed: its skill floor and tool fingerprint are
+    # what the pair must now satisfy (the running process still holds the previous contract).
+    entry = _installed_contract_entry(target)
     synced = _sync_skill(entry, allow_downgrade=args.allow_downgrade)
-    print(f"skill -> {entry['skill']}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
+    print(f"skill -> {entry.get('skill')}: {'ok' if synced['ok'] else 'FAILED'} ({synced})")
 
-    after = check(installed_version=entry["mcp"], skill_version=read_skill_version(args.skill_path))
+    after = check(
+        installed_version=target,
+        skill_version=read_skill_version(args.skill_path),
+        probe_index=False,
+    )
     print(render(after))
     print("restart the gateway/session so the running server picks up the new version")
     return after["exit_code"]

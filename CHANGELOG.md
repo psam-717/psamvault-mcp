@@ -9,6 +9,41 @@ contract calls newest, so the two cannot silently drift apart.
 
 Releases up to and including 0.4.6 predate this file — see the [GitHub releases](https://github.com/psam-717/psamvault-mcp/releases).
 
+## 0.5.3 — 2026-09-14
+
+### Breaking
+
+- **BREAKING: the `psamvault-compat` console script is removed.** pipx links a package's console scripts only when pipx itself installs it, so a script added by a later release stays invisible on `PATH` — the file existed in the venv while the shell answered `command not found`. Everything it did now rides the entry point users already have: `psamvault-mcp compat …` (`--check`, `--apply`, `--apply --latest`, `--sync-skill`, `--from-git`, `--pull`, `--allow-breaking`). The `mcp_server.compat` module is unchanged, so pre-0.5.3 installs and the cron detector (which imports it directly) keep working.
+
+### Added
+
+- feat(cli): **`psamvault-mcp selfcheck`** — reports the version that is installed AND the version a **new** session will actually serve (it spawns a real server and calls `get_version`), plus the contract pairing and the newest published release. Exit 1 on any mismatch. This probe previously existed only in a private skill, so a user without our skills could not answer "what am I running?".
+- feat(cli): **`psamvault-mcp doctor`** — diagnoses installation drift with concrete fixes: entry points the installed package declares but pipx never linked, pipx records that disagree with the installed version, and processes holding the venv. `--fix` reinstalls through pipx when the venv is free; otherwise it prints the exact commands to run at a safe moment.
+- feat(compat): **`--apply --latest`** installs the newest release **published on PyPI**, not merely the one recorded in the installed contract — the only way to leave an install that is already behind.
+- feat(compat): **`--check` asks PyPI** what the newest published release is (`latest_published` / `published_newer` in `--json`, two new lines in the human output).
+- feat(compat): upgrades **choose their installer** — `pipx install --force` when no MCP process holds the venv (the venv is recreated, so entry points stay linked and pipx's records stay honest), `uv pip install` when it is held (never blocked by the Windows file lock), reported as `relink_pending` with the follow-up command.
+- feat(install_env): cross-platform discovery of the pipx venv and of the processes holding it (Windows CIM query / POSIX `pgrep`), standard library only.
+
+### Changed
+
+- changed(compat): `--apply --latest` will only target a release **newer than the installed contract** with `--allow-breaking` — such a release ships a contract this install has never seen, so its compatibility is unverified by definition.
+- changed(compat): a newer published release **never changes the exit code**. An update is news, not breakage. The daily lockstep detector now surfaces it as `UPDATE AVAILABLE`.
+- changed(version_check): the startup notice and `compat --check` share one PyPI probe, so they cannot disagree.
+
+### Fixed
+
+- fix(versions): **one version comparator for the whole package.** The startup notice collapsed any suffixed version to `(0,)` while `compat` used a different rule; both now use `mcp_server.versions.vkey`, which orders `0.5.10` above `0.5.9`, sorts a pre-release below its release, and never raises on a garbage string from the network.
+- fix(version_check): the update notice advised `pipx upgrade psamvault-mcp`, which fails on Windows while MCP servers hold the venv; it now names `psamvault-mcp compat --apply --latest` and points at `doctor`.
+- fix(doctor): apps owned by another pipx package (the `psamvault` CLI lives in the same bin dir) are no longer reported as leftovers of this one.
+
+### Tests
+
+- test: version ordering (pre/post-release, numeric-vs-lexical, never-raises), the PyPI probe and `update_available`, `install_env` path resolution and holder parsing, `selfcheck` exit codes and timeouts, `doctor` against the exact drift shape seen on a real machine, and the compat apply path with the new installer kwargs.
+
+### Docs
+
+- docs: every reference to the removed `psamvault-compat` command swept to `psamvault-mcp compat …` across the README, AGENTS.md, the repo skill and the four release skills; the pre-0.5.3 module fallback is kept and labelled, because on older installs the new subcommand would start the server and hang rather than error.
+
 ## 0.5.2 — 2026-09-12
 
 ### Added

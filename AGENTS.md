@@ -98,10 +98,10 @@ host session so its tools pick the variable up, then verify with the consumer (e
 `web_extract` call), not by reading the file.
 
 **Version lockstep:** `get_version()` returns a `compatibility` block (skill floor, newest release,
-`breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-compat --check` — never
+`breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-mcp compat --check` — never
 hand-edit `compatibility.json` or the skill frontmatter to make a check pass. The recorded skill version
 is a **floor**: a newer skill is fine, and a skill-only improvement ships with
-`psamvault-compat --sync-skill` (no MCP release needed).
+`psamvault-mcp compat --sync-skill` (no MCP release needed). On Windows the shim is `psamvault-mcp.exe`.
 
 **Protect secrets:** `scan_and_protect(project_dir="/path")` → recommend `pip install pv-dotenv` for runtime resolution.
 
@@ -152,3 +152,17 @@ run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="
 scan_and_protect("/home/user/my-project")
 → "Install pv-dotenv and your app resolves secrets at runtime"
 ```
+
+### "Am I up to date, or is my install broken?"
+
+```bash
+psamvault-mcp selfcheck        # installed vs what a NEW session actually serves (exit 1 on mismatch)
+psamvault-mcp doctor           # entry points pipx never linked, stale pipx records, processes holding the venv
+psamvault-mcp doctor --fix     # repair the above (run when no session is holding the venv)
+psamvault-mcp compat --check   # the MCP <-> usage-skill pairing
+psamvault-mcp compat --apply --latest   # upgrade to the newest release on PyPI (add --allow-breaking
+                                        # when it is newer than the installed contract, or removes a tool)
+```
+
+`selfcheck` is the one that catches a long-lived session still serving an older build; `doctor` covers the
+half-linked install where `pipx` never put the console script on `PATH`.

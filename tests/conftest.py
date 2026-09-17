@@ -112,6 +112,20 @@ def clear_keychain_entries() -> None:
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _reset_pypi_index_cache():
+    """Clear version_check's per-process PyPI payload cache around every test.
+
+    The cache is what makes `--apply` cost one index round-trip instead of two; in a test session it
+    would let one test's fake response answer the next test's question.
+    """
+    from mcp_server import version_check
+
+    version_check._INDEX_CACHE = None
+    yield
+    version_check._INDEX_CACHE = None
+
+
 @pytest.fixture
 def vek() -> bytes:
     """Return the deterministic test VEK."""

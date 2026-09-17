@@ -1,4 +1,4 @@
-"""Upgrade safety for `psamvault-compat --apply` — the psamvault-cli lesson, applied to the MCP.
+"""Upgrade safety for `psamvault-mcp compat --apply` — the psamvault-cli lesson, applied to the MCP.
 
 An install that replaces the running server can break in ways the install itself cannot see:
 
@@ -220,18 +220,47 @@ def smoke_test(venv_python: Path, timeout: int = 120) -> dict:
             "detail": "" if ok else "the installed package exposes no tools"}
 
 
+def _venv_is_free(venv_python: Path) -> bool:
+    """True only when pipx could safely recreate the venv.
+
+    A *missing* python.exe counts as free: pipx recreates the venv, which is also how a rollback
+    repairs a venv that a failed `pipx install --force` left behind. Fails busy otherwise.
+    """
+    try:
+        if not Path(venv_python).exists():
+            return True
+        from mcp_server import install_env
+
+        return bool(install_env.is_free(Path(venv_python)))
+    except Exception:  # noqa: BLE001 - cannot prove it is free
+        return False
+
+
 def rollback(previous_version: str | None, venv_python: Path, timeout: int = 600) -> dict:
     """Put the previously installed release back after a failed upgrade.
 
-    Only a *released* previous version can be restored this way; a previous git build has no
-    artifact to reinstall, so the caller is told rather than left thinking it was rolled back.
+    Same installer policy as the forward path (`compat._install`): **pipx** when the venv is free or
+    missing — pipx recreates the venv, so it can repair one a failed `pipx install --force` left
+    without a python.exe, and it leaves pipx's records matching the version that is actually
+    installed — and **uv** only while a live process still holds python.exe, where pipx cannot
+    replace it.
+
+    Only a *released* previous version can be restored this way; a previous git build has no artifact
+    to reinstall, so the caller is told rather than left thinking it was rolled back.
     """
     if not previous_version:
         return {"ok": False, "message": "no previous version recorded — nothing to roll back to"}
-    cmd = ["uv", "pip", "install", "--python", str(venv_python), "--refresh",
-           f"psamvault-mcp=={previous_version}"]
+    if shutil.which("pipx") and _venv_is_free(venv_python):
+        cmd = ["pipx", "install", "--force", f"psamvault-mcp=={previous_version}"]
+        installer = "pipx"
+    else:
+        cmd = ["uv", "pip", "install", "--python", str(venv_python), "--refresh",
+               f"psamvault-mcp=={previous_version}"]
+        installer = "uv"
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode == 0:
-        return {"ok": True, "message": f"rolled back to psamvault-mcp=={previous_version}"}
-    return {"ok": False, "message": f"rollback to {previous_version} failed:\n"
-                                     f"{(proc.stderr or proc.stdout)[-800:]}"}
+        return {"ok": True, "message": f"rolled back to psamvault-mcp=={previous_version}",
+                "installer": installer}
+    return {"ok": False, "message": f"rollback to {previous_version} failed ({installer}):\n"
+                                     f"{(proc.stderr or proc.stdout)[-800:]}",
+            "installer": installer}

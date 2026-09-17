@@ -245,7 +245,10 @@ def test_rollback_requires_a_previous_version():
 
 
 def test_rollback_reinstalls_with_refresh(monkeypatch):
-    """Same pitfall as the forward install: a cached index reports 'no version' right after a publish."""
+    """While a live process holds the venv, pipx cannot replace it — uv with --refresh is the path.
+
+    (Same pitfall as the forward install: a cached index reports "no version" right after a publish.)
+    """
     seen = {}
 
     class Proc:
@@ -258,7 +261,55 @@ def test_rollback_reinstalls_with_refresh(monkeypatch):
         return Proc()
 
     monkeypatch.setattr(us.subprocess, "run", fake_run)
+    monkeypatch.setattr(us, "_venv_is_free", lambda venv_python: False)
     out = us.rollback("0.5.1", Path("C:/x/Scripts/python.exe"))
 
-    assert out["ok"]
+    assert out["ok"] and out["installer"] == "uv"
     assert "--refresh" in seen["cmd"] and "psamvault-mcp==0.5.1" in seen["cmd"]
+
+
+def test_rollback_uses_pipx_when_the_venv_is_free(monkeypatch):
+    """Same installer policy as the forward path.
+
+    A rollback done with uv after a pipx install leaves pipx's records on the new version (the drift
+    `doctor` exists to repair), and it cannot repair a venv that a failed `pipx install --force` left
+    without a python.exe — pipx recreating the venv can.
+    """
+    seen = {}
+
+    class Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return Proc()
+
+    monkeypatch.setattr(us.subprocess, "run", fake_run)
+    monkeypatch.setattr(us.shutil, "which", lambda name: "pipx" if name == "pipx" else None)
+    monkeypatch.setattr(us, "_venv_is_free", lambda venv_python: True)
+
+    out = us.rollback("0.5.1", Path("C:/x/Scripts/python.exe"))
+
+    assert out["ok"] and out["installer"] == "pipx"
+    assert seen["cmd"] == ["pipx", "install", "--force", "psamvault-mcp==0.5.1"]
+
+
+def test_rollback_repairs_a_venv_that_lost_its_python(monkeypatch, tmp_path):
+    """After a failed `pipx install --force` the venv can be gone: pipx must be allowed to rebuild it."""
+    seen = {}
+
+    class Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(us.subprocess, "run", lambda cmd, **k: (seen.__setitem__("cmd", cmd), Proc())[1])
+    monkeypatch.setattr(us.shutil, "which", lambda name: "pipx" if name == "pipx" else None)
+
+    missing = tmp_path / "gone" / "Scripts" / "python.exe"  # never created
+    out = us.rollback("0.5.1", missing)
+
+    assert out["ok"] and out["installer"] == "pipx"
+    assert seen["cmd"][:2] == ["pipx", "install"]
