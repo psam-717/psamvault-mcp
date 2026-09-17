@@ -155,40 +155,31 @@ def _run_powershell(script: str) -> subprocess.CompletedProcess:
 _PS_FORCE_UTF8 = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
 
 
-def _ps_like_literal(value: str) -> str:
-    """Escape a path for use inside a PowerShell single-quoted ``-like`` pattern.
-
-    ``''`` is a literal quote and ``[[]`` a literal ``[`` (``-like`` treats ``[`` as a character
-    class, so an unescaped one in a path would silently stop matching — a missed holder).
-    """
-    return value.replace("'", "''").replace("[", "[[]")
-
-
 def _probe_windows(python: Path) -> list[dict]:
     """Processes whose command line carries this venv, via CIM (``ps`` is not available here).
 
-    The where-clause is deliberately COARSE and separator-agnostic: Windows command lines keep
-    whatever separators the process was launched with, and a path spelled ``D:/…/.venv/Scripts/
-    python.exe`` has no backslash in it at all — verified live, a ``'*<venv>\\*'``-only clause misses
-    that process entirely (i.e. reports a busy venv as free, the dangerous direction). Precision
-    belongs to :func:`_parse_windows`, which requires the venv path followed by a real separator.
+    The script only ENUMERATES; every matching decision happens in :func:`_parse_windows`, on one
+    rule (:func:`_venv_matcher`) instead of a PowerShell ``-like`` clause. The coarse
+    ``'*<venv>\\*'`` clause this used to send misses any process whose path was spelled with forward
+    slashes — verified live, that reports a busy venv as free, the dangerous direction.
 
-    One match comes back as a bare JSON object and several as a list — ``ConvertTo-Json`` decides
-    that at runtime, so both are handled. The array wrapper (and ``-InputObject``) is deliberate: a
-    plain ``| ConvertTo-Json`` prints NOTHING when the pipeline is empty, which made "no process
-    matched" indistinguishable from "the probe died" — see :func:`is_free`'s fail-busy contract.
-    Now the script always prints JSON, so empty output means exactly one thing: the probe failed.
+    ``ParentProcessId`` travels with every row so :func:`_parse_windows` can drop this invocation's
+    own launcher chain: ``psamvault-mcp doctor`` runs as entry-point shim -> python -> this probe, and
+    the shim is a process of its own whose command line carries the venv path.
+
+    One row comes back as a bare JSON object and several as a list — ``ConvertTo-Json`` decides that
+    at runtime, so both are handled. The array wrapper (and ``-InputObject``) is deliberate: a plain
+    ``| ConvertTo-Json`` prints NOTHING when the pipeline is empty, which made "no process matched"
+    indistinguishable from "the probe died" — see :func:`is_free`'s fail-busy contract. Now the
+    script always prints JSON, so empty output means exactly one thing: the probe failed.
     """
     venv = _venv_root(python)
-    spelled = str(venv)
-    forms = [spelled] + ([spelled.replace("\\", "/")] if "\\" in spelled else [])
-    like = " -or ".join(f"$_.CommandLine -like '*{_ps_like_literal(form)}*'" for form in forms)
     script = (
         "$hits = @(Get-CimInstance Win32_Process | "
         # $PID is this very PowerShell process: it holds the pattern text on its own command line
         # and would otherwise always match itself.
-        f"Where-Object {{ $_.ProcessId -ne $PID -and ({like}) }} | "
-        "Select-Object ProcessId,Name,CommandLine); "
+        "Where-Object { $_.ProcessId -ne $PID } | "
+        "Select-Object ProcessId,ParentProcessId,Name,CommandLine); "
         "ConvertTo-Json -InputObject $hits -Compress"
     )
     proc = _run_powershell(script)
@@ -206,7 +197,24 @@ def _probe_windows(python: Path) -> list[dict]:
         # Parseable but the wrong shape: this probe cannot be trusted, so it fails loudly rather
         # than reporting an empty (i.e. "free") venv.
         raise ValueError(f"unexpected PowerShell payload: {type(payload).__name__}")
-    return _parse_windows(payload, venv)
+    return _parse_windows(payload, venv, parent_of=_parent_map(payload).get)
+
+
+def _parent_map(payload: object) -> dict:
+    """``{pid: parent_pid}`` from a raw process listing — the links :func:`_drop_launcher_chain` walks.
+
+    Missing links simply end a walk, so a listing that omits ``ParentProcessId`` degrades to the old
+    behaviour (self excluded, launcher chain kept) rather than to a wrong answer.
+    """
+    items = payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
+    links: dict = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        child, parent = _as_pid(item.get("ProcessId")), _as_pid(item.get("ParentProcessId"))
+        if child is not None and parent is not None:
+            links[child] = parent
+    return links
 
 
 def _venv_matcher(venv: Path) -> re.Pattern:
@@ -224,7 +232,7 @@ def _venv_matcher(venv: Path) -> re.Pattern:
     return re.compile(pattern, re.IGNORECASE)
 
 
-def _parse_windows(payload: object, venv: Path) -> list[dict]:
+def _parse_windows(payload: object, venv: Path, parent_of=None) -> list[dict]:
     if payload is None:
         return []
     items = payload if isinstance(payload, list) else [payload]
@@ -240,7 +248,56 @@ def _parse_windows(payload: object, venv: Path) -> list[dict]:
         if pid is None or pid == os.getpid():
             continue
         found.append({"pid": pid, "name": str(item.get("Name") or ""), "cmdline": cmdline})
-    return sorted(found, key=lambda holder: holder["pid"])
+    found.sort(key=lambda holder: holder["pid"])
+    return _drop_launcher_chain(found, matcher.search, parent_of)
+
+
+def _drop_launcher_chain(found: list[dict], matches, parent_of) -> list[dict]:
+    """Drop the processes that ARE this invocation: the running interpreter and its launcher chain.
+
+    ``psamvault-mcp doctor --fix`` runs as entry-point shim -> python -> probe. The shim is a process
+    of its own whose command line carries the venv path, so it counted as a HOLDER: the count could
+    never reach zero and ``--fix`` refused forever — on every machine, including one whose venv was
+    genuinely idle. A shell that inlined the command (``bash -c '… venv … python …'``) does the same.
+
+    Only CONTIGUOUS ancestors are dropped, and only while their command line still carries this venv:
+    the walk stops at the first unrelated ancestor, so a genuinely separate process is never hidden.
+    A caller that cannot walk (``parent_of is None``) degrades to the old behaviour.
+    """
+    if parent_of is None:
+        return found
+    by_pid = {holder["pid"]: holder for holder in found}
+    drop = {os.getpid()}
+    pid = parent_of(os.getpid())
+    while pid and pid not in drop:
+        holder = by_pid.get(pid)
+        if holder is None or not matches(holder.get("cmdline") or ""):
+            break
+        drop.add(pid)
+        pid = parent_of(pid)
+    return [holder for holder in found if holder["pid"] not in drop]
+
+
+def _posix_parent(pid: int):
+    """PPID of ``pid``: ``/proc`` where it exists, ``ps`` where it does not (macOS, BSD)."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+        # "pid (comm) state ppid …" — comm may contain spaces and ')', so split after the LAST ')'.
+        return int(data[data.rindex(b")") + 1:].split()[1])
+    except Exception:
+        pass
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+        )
+        text = (proc.stdout or "").strip()
+        return int(text) if proc.returncode == 0 and text else None
+    except Exception:
+        return None
 
 
 def _probe_posix(python: Path) -> list[dict]:
@@ -267,7 +324,8 @@ def _probe_posix(python: Path) -> list[dict]:
         if pid is None or pid == os.getpid():
             continue
         found.append({"pid": pid, "name": _command_name(cmdline), "cmdline": cmdline})
-    return sorted(found, key=lambda holder: holder["pid"])
+    found.sort(key=lambda holder: holder["pid"])
+    return _drop_launcher_chain(found, lambda line: needle in line, _posix_parent)
 
 
 def _command_name(cmdline: str) -> str:
