@@ -206,6 +206,12 @@ def _run_blocking(
                 stderr=err_f,
                 env=env,
                 cwd=workdir,
+                # POSIX: give the command its own session, and therefore its own process group, so the
+                # timeout kill can target the command's tree without touching the caller's group. Without
+                # this the child shares our group, and `killpg` (below) kills US — this process is the
+                # MCP server, so a timed-out command took the server down with it. Windows kills by PID
+                # tree (taskkill /T), so it needs no equivalent.
+                **({"start_new_session": True} if os.name != "nt" else {}),
             )
             try:
                 proc.wait(timeout=timeout)
@@ -248,6 +254,14 @@ def _kill_process_tree(pid: int) -> None:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                            capture_output=True, timeout=30)
         else:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            pgid = os.getpgid(pid)
+            if pgid == os.getpgrp():
+                # Never signal our own group: the caller is in it (the MCP server that spawned the
+                # command, or a test runner), so killpg here would kill the caller instead of the
+                # command. Only reachable if the child was spawned without start_new_session, which is
+                # a bug worth surviving rather than a bug worth fatal-ing on.
+                os.kill(pid, signal.SIGKILL)
+            else:
+                os.killpg(pgid, signal.SIGKILL)
     except Exception:
         pass
