@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -151,3 +152,60 @@ async def test_real_timeout_kills_the_process_tree_and_returns_partial_output(sl
     while time.monotonic() < deadline and _process_alive(pid):
         time.sleep(0.25)
     assert not _process_alive(pid), f"timed-out process {pid} was left running"
+
+
+# ── The timeout kill must never signal the CALLER's process group ────────────────────────────────
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are POSIX-only; Windows kills by PID tree")
+async def test_timed_out_command_runs_in_its_own_process_group(tmp_path):
+    """The command must be in its own session/group, so killing its tree cannot reach the caller.
+
+    Regression this pins: the child inherited the caller's process group and the timeout handler called
+    ``os.killpg(os.getpgid(child))`` — which signals the CALLER's group. In production the caller is the
+    MCP server, so a single timed-out ``run_with_credential`` killed the server; in CI it killed pytest
+    and the step shell (exit 137, and no log to say why).
+    """
+    pid_file = tmp_path / "group.pid"
+    pgid_file = tmp_path / "group.pgid"
+    script = _write_script(tmp_path, "slow_group.py", f"""
+        import os, time
+        open(r"{pid_file}", "w").write(str(os.getpid()))
+        open(r"{pgid_file}", "w").write(str(os.getpgrp()))
+        print("working", flush=True)
+        time.sleep(60)
+    """)
+    try:
+        result = await run_command_with_credential(
+            command=f'"{sys.executable}" "{script}"',
+            credential_value="«redacted:test-credential»",
+            inject_as="env",
+            env_var_name="TWINE_PASSWORD",
+            timeout=5,
+        )
+        assert result["error"] == "timeout"
+        assert pgid_file.exists(), "the command never recorded its process group — did it start?"
+        own_group = int(pgid_file.read_text().strip())
+        assert own_group != os.getpgrp(), (
+            "the timed-out command ran in the caller's process group "
+            f"({own_group}); the timeout kill would have signalled the caller"
+        )
+    finally:
+        if pid_file.exists():
+            _kill(int(pid_file.read_text().strip() or 0))
+
+
+async def test_kill_falls_back_to_the_pid_when_the_group_is_ours(monkeypatch):
+    """Defence in depth: even sharing a group must not let the kill reach the caller."""
+    if os.name == "nt":  # pragma: no cover - POSIX path only
+        pytest.skip("POSIX branch")
+    from mcp_server import cmd_runner as cr
+
+    calls: dict[str, tuple] = {}
+    monkeypatch.setattr(cr.os, "getpgid", lambda pid: os.getpgrp())
+    monkeypatch.setattr(cr.os, "killpg", lambda pgid, sig: calls.setdefault("killpg", (pgid, sig)))
+    monkeypatch.setattr(cr.os, "kill", lambda pid, sig: calls.setdefault("kill", (pid, sig)))
+
+    cr._kill_process_tree(4242)
+
+    assert "killpg" not in calls, "signalled our own process group"
+    assert calls.get("kill") == (4242, signal.SIGKILL)
