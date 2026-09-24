@@ -1,3 +1,9 @@
+---
+title: PYTHONPATH conflict
+description: Why a global PYTHONPATH stops the MCP server from loading, and how to fix it.
+order: 110
+---
+
 # PYTHONPATH Conflict: MCP Server Fails to Load
 
 **Date:** 2026-06-19

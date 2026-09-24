@@ -1,3 +1,9 @@
+---
+title: MCP install and connect
+description: Install psamvault-mcp and wire it into an MCP host, with the repair playbook.
+order: 100
+---
+
 # MCP Install & Connect: Agent Playbook
 
 **Audience:** AI agents (and humans) installing or repairing **psamvault-mcp** for any MCP host  
