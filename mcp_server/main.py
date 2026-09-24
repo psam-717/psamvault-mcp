@@ -288,7 +288,7 @@ TOOL_DEFINITIONS = [
             "Saves the browser session after a successful login so it can be reused on subsequent calls. "
             "The credential is NEVER returned to you — psamvault fills the fields directly inside its own browser. "
             ""
-            "Returns a concise summary: success, message, captcha_detected, captcha_screenshot, final_url, steps_count, and failed_at. "
+            "Returns a concise summary: success, message, captcha_detected, captcha_screenshot, url, steps_count, and failed_at. "
             "When success is true, the response includes a message field — always relay it to the user. "
             "When captcha_detected is true, the tool pauses automation; inform the user and tell them to solve the CAPTCHA and click Sign in/Login manually in the browser. "
             "When captcha_screenshot is not null, tell the user a screenshot of the CAPTCHA was saved to that path so they can inspect it. "
@@ -858,6 +858,9 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await tools.scan_and_protect(
                 project_dir=arguments.get("project_dir"),
                 patterns=arguments.get("patterns"),
+                # project_name was declared in the tool schema and honoured by tools.scan_and_protect,
+                # but never forwarded here — so per-project namespacing silently did nothing.
+                project_name=arguments.get("project_name"),
             )
 
         elif name == "run_with_credential":
