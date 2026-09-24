@@ -1,7 +1,7 @@
 ---
 name: psamvault-mcp
 description: "Use psamvault MCP server: credential vault, browser login, API key injection, .env secret protection. MCP tools keep secrets out of the agent's context window."
-version: 1.0.0
+version: 1.9.0
 author: psam-717
 license: MIT
 platforms: [linux, macos, windows]
@@ -36,29 +36,29 @@ This is the **key differentiator**: credentials are never in the agent's context
 
 ## Prerequisites
 
-The MCP server must be running. Two ways to connect:
+The MCP server must be running over **stdio** — the only transport implemented.
 
-### Option A: HTTP/SSE (Recommended for Hermes)
+### Option A: Hermes (stdio)
 
 ```yaml
 # ~/.hermes/config.yaml
 mcp_servers:
   psamvault:
-    url: "http://127.0.0.1:8433/sse"
+    command: psamvault-mcp
+    env:
+      PYTHONPATH: ""
     enabled: true
 ```
 
-Start the server in a terminal:
-
-```bash
-psamvault-mcp --http --port 8433
-```
-
-### Option B: Stdio (for non-Hermes clients)
+### Option B: Any other MCP client (stdio)
 
 ```bash
 psamvault-mcp
 ```
+
+> An HTTP/SSE mode (`psamvault-mcp --http --port 8433`, endpoint `/sse`) used to be documented here as
+> the recommended way to connect. **It does not exist**: the entry point defines no such flags and
+> nothing in the package serves HTTP. Pointing a host at that URL fails to connect.
 
 ### Installation
 
@@ -241,7 +241,7 @@ Tell users they can say things like:
 ## Architecture Notes
 
 - **Single-process Playwright**: The browser lives in-process with the MCP server. No subprocess daemon chain. If the browser crashes, the next call auto-restarts it.
-- **HTTP/SSE transport**: Port 8433 by default. Stdio transport also available.
+- **Transport**: stdio only — the host spawns the process and speaks JSON-RPC over stdin/stdout. (An HTTP/SSE mode was documented in earlier versions; it was never implemented.)
 - **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
 - **No consent dialog**: The v0.4.0+ architecture removed the consent dialog requirement. Credentials are used on demand.
 
