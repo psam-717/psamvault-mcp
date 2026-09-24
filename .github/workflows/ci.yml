@@ -1,0 +1,65 @@
+name: CI
+
+# The suite is self-contained — conftest.py installs an in-memory keyring and redirects Path.home to a
+# temp directory — so CI needs the package plus the test dependencies, and no keychain, no network and no
+# vault session.
+#
+# Two lessons are baked into the flags below, both learned from the first run of this workflow:
+#   - a job that hangs never finishes, and GitHub only publishes a job's log once it HAS finished, so an
+#     unbounded hang reports nothing at all. `-u` keeps partial output, the thread-method timeout reports
+#     the stuck stack, and the shell `timeout` is the last resort.
+#   - `--timeout-method=signal` (the default) does NOT fire when the main thread is blocked in a syscall,
+#     because CPython retries EINTR. The thread method does.
+#
+# That first run found a real bug rather than a slow machine: the timeout kill in cmd_runner signalled the
+# caller's own process group on POSIX, killing the test runner (and, in production, the MCP server).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    env:
+      # Belt and braces: the tests mock the keyring and HOME, but any module that reads config at import
+      # time must not reach for a real keychain or the live backend on an error path.
+      PSAMVAULT_PEPPER: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      PSAMVAULT_API_URL: "https://test.example.com"
+      PYTHON_KEYRING_BACKEND: "keyring.backends.null.Keyring"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install the package and test dependencies
+        timeout-minutes: 6
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio pytest-httpx pytest-timeout
+
+      - name: The package imports from a clean install
+        timeout-minutes: 2
+        run: python -c "import mcp_server.main as m; print('import ok')"
+
+      - name: Run tests
+        timeout-minutes: 15
+        run: |
+          timeout 600 python -u -m pytest tests/ -q --no-header --timeout=120 --timeout-method=thread
+          echo "pytest exit=$?"
