@@ -1,0 +1,43 @@
+name: Docs
+
+# The docs tree is what a website and agents read, so a doc that names a tool, parameter or command that
+# does not exist is a defect. This repo has no other CI: these two checks are the minimum that keeps the
+# written surface honest.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  docs:
+    name: Docs describe a real surface
+    runs-on: ubuntu-latest
+
+    env:
+      # Both checks import mcp_server.main; keep the keychain out of it.
+      PSAMVAULT_PEPPER: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      PSAMVAULT_API_URL: "https://test.example.com"
+      PYTHON_KEYRING_BACKEND: "keyring.backends.null.Keyring"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install the package (both checks read the real registry)
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+
+      - name: Repo docs check (tool table vs TOOL_DEFINITIONS)
+        run: python scripts/docs-sync-check.py
+
+      - name: Docs must not name a tool or parameter that does not exist
+        run: python scripts/check-docs-surface.py
