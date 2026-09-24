@@ -17,6 +17,17 @@ from conftest import TEST_ACCESS_TOKEN, TEST_CREDS, TEST_SITE, TEST_VEK
 from mcp_server import api_client, tools
 
 
+def _echo(var: str) -> str:
+    """A command that prints an env var, using the syntax of the shell behind ``shell=True`` here.
+
+    ``echo %VAR%`` is cmd.exe; POSIX sh needs ``echo "$VAR"``. Two ways the Windows-only form lied on
+    Linux: it printed the literal text (no expansion), and once quoted it the fix was still wrong —
+    an unquoted ``$VAR`` is word-split AND glob-expanded, so a value containing a wildcard listed the
+    working directory instead of printing the value. Quote it.
+    """
+    return f"echo %{var}%" if _os.name == "nt" else f'echo "${var}"'
+
+
 # ── list_vault_sites ───────────────────────────────────────────────────────
 
 class TestListVaultSites:
@@ -601,7 +612,7 @@ class TestRunWithCredential:
 
         result = await tools.run_with_credential(
             site_name="testpypi",
-            command="echo %TWINE_USERNAME% && echo %TWINE_PASSWORD%",
+            command=f"{_echo('TWINE_USERNAME')} && {_echo('TWINE_PASSWORD')}",
             inject_as="env",
             env_var_name="TWINE_PASSWORD",
         )
@@ -693,7 +704,7 @@ class TestRunWithCredential:
 
         result = await tools.run_with_credential(
             site_name="github.com",
-            command="echo %MY_PASS%",
+            command=_echo("MY_PASS"),
             inject_as="env",
             env_var_name="MY_PASS",
         )
