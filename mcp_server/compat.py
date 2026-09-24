@@ -44,8 +44,9 @@ from mcp_server import version_check
 
 CONTRACT_FILENAME = "compatibility.json"
 FRONTMATTER_VERSION = re.compile(r"^version:\s*([0-9][0-9A-Za-z.\-+]*)\s*$", re.MULTILINE)
-DEFAULT_CLONE = Path("D:/Projects/py-projects/private-skills")
-DEFAULT_REPO = Path("D:/Projects/py-projects/psamvault-mcp")
+# No hardcoded checkout paths here. These two constants used to point at the author's D: drive, so
+# `--from-git` and the skill sync failed for every other machine with a FileNotFoundError naming a
+# path the user had never heard of. Discovery is documented on repo_path()/clone_path().
 
 
 # ── the contract ───────────────────────────────────────────────────────────────
@@ -318,13 +319,50 @@ def apply_command(latest: bool = False, breaking: bool = False) -> str:
     return " ".join(parts)
 
 
-def clone_path() -> Path:
-    return Path(os.environ.get("PSAMVAULT_SKILL_CLONE") or DEFAULT_CLONE)
+def _find_checkout(start: Path) -> Path | None:
+    """Walk up from ``start`` looking for a psamvault-mcp source checkout."""
+    for candidate in [start, *start.parents]:
+        if (candidate / "pyproject.toml").is_file() and (candidate / "mcp_server").is_dir():
+            return candidate
+    return None
 
 
 def repo_path() -> Path:
-    """The clone `--from-git` installs from (and whose git state `--apply` reports)."""
-    return Path(os.environ.get("PSAMVAULT_MCP_REPO") or DEFAULT_REPO)
+    """The checkout `--from-git` installs from (and whose git state `--apply` reports).
+
+    Discovery, in order: ``PSAMVAULT_MCP_REPO``, the checkout this process runs from, then the
+    checkout the current directory is inside — which is the normal case for a pipx-installed binary
+    invoked from a terminal in the repo. Never a hardcoded path.
+
+    Raises:
+        FileNotFoundError: nothing lookable; the message names the env var that fixes it.
+    """
+    env = os.environ.get("PSAMVAULT_MCP_REPO")
+    if env:
+        return Path(env)
+    for start in (Path(__file__).resolve().parent, Path.cwd()):
+        found = _find_checkout(start)
+        if found is not None:
+            return found
+    raise FileNotFoundError(
+        "cannot find a psamvault-mcp checkout: run this from inside the checkout, or set "
+        "PSAMVAULT_MCP_REPO to its path"
+    )
+
+
+def clone_path() -> Path:
+    """The skill clone a release ships from. Override: ``PSAMVAULT_SKILL_CLONE``.
+
+    Falls back to ``private-skills`` next to the discovered checkout. Callers print the resulting
+    path, so a missing clone names itself rather than failing obscurely.
+    """
+    env = os.environ.get("PSAMVAULT_SKILL_CLONE")
+    if env:
+        return Path(env)
+    try:
+        return repo_path().parent / "private-skills"
+    except FileNotFoundError:
+        return Path("private-skills")
 
 
 def _install(target_version: str, force_uv: bool = False, assume_free: bool = False) -> dict:
@@ -441,7 +479,11 @@ def _installed_contract_entry(target: str | None = None) -> dict:
 
 def _install_from_git() -> dict:
     """Install the repo's current code — the normal path for a merged-but-unreleased version."""
-    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), str(repo_path())]
+    try:
+        repo = repo_path()
+    except FileNotFoundError as exc:
+        return {"ok": False, "cmd": None, "stdout": "", "stderr": str(exc)}
+    cmd = ["uv", "pip", "install", "--python", str(pipx_python()), str(repo)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     return {"ok": proc.returncode == 0, "cmd": cmd, "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:]}
 
@@ -672,14 +714,21 @@ def main(argv: list[str] | None = None) -> int:
     backup = safety.snapshot_skill(installed_skill_path())
     print(f"snapshot: skill backed up to {backup}" if backup else "snapshot: no installed skill to back up")
 
+    repo = None
+    if args.pull or from_git:
+        try:
+            repo = repo_path()
+        except FileNotFoundError as exc:
+            print(f"\u2717 {exc}")
+            return 1
     if args.pull:
         # Upgrade safety (psamvault-cli's model): never pull over uncommitted work, never lose it.
-        pulled = safety.stash_and_pull(repo_path())
-        print(f"repo: {pulled['message'] or f'pulled {repo_path().name} to origin/main'}")
+        pulled = safety.stash_and_pull(repo)
+        print(f"repo: {pulled['message'] or f'pulled {repo.name} to origin/main'}")
         if not pulled["ok"]:
             return 1
     if from_git:
-        state = safety.git_repo_state(repo_path(), fetch=not args.pull)
+        state = safety.git_repo_state(repo, fetch=not args.pull)
         print(f"repo: installing {safety.render_repo_state(state)}")
         if safety.is_pipx_editable():
             print(
