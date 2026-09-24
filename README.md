@@ -1,6 +1,6 @@
 # psamvault-mcp
 
-**v0.4.4** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
+**v0.5.3** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
 
 Lets AI agents use your stored credentials without ever seeing their plaintext values. Also integrates with [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime credential resolution in your `.env` files.
 
@@ -41,7 +41,7 @@ Tools are grouped into three categories. Always start in **Entry & Orientation**
 | **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
 | **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
 | **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
-| **`export_key_to_mcp_config`** | Exports a vault API key directly into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before writing |
+| **`export_key_to_mcp_config`** | Exports a vault API key directly into a client MCP config file (Hermes — the only host whose config shape is verified) — auto-verifies HTTP keys before writing |
 | **`export_key_to_env_file`** | Exports a vault API key into an agent's `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
 | **`verify_api_key`** | Verifies a stored API key is valid against its provider's API — returns status, provider, and verification result |
 
@@ -245,7 +245,7 @@ Full agent playbook (corrupt pipx, PATH shadowing, session timeout, reload):
 
 ## Transport modes
 
-psamvault-mcp primarily uses **stdio transport** (the MCP standard for desktop agents). HTTP/SSE transport is also available as an option.
+psamvault-mcp speaks **stdio transport** — the MCP standard for desktop agents, and the only transport implemented.
 
 ### stdio (default — for Hermes, Goose, Claude Desktop, Cline, Grok Build)
 
@@ -259,19 +259,16 @@ Starts the MCP server over stdin/stdout. This is the default mode and works with
 > the MCP protocol. That is not a hang — use `--version` / `--help` for smoke
 > tests, and let the host spawn the process for real use.
 
-### HTTP/SSE (for custom clients, remote setups, or network-accessible deployments)
+### HTTP/SSE — not implemented
 
-```bash
-psamvault-mcp --http --port 8433
-```
+Earlier versions of this README documented `psamvault-mcp --http --port 8433` and an SSE endpoint at
+`http://127.0.0.1:8433/sse`. **Neither exists**: the entry point defines no `--http`, `--port` or
+`--host` flag, and nothing in the package serves HTTP. A host configured against that URL fails to
+connect — stdio is the only transport.
 
-Starts an HTTP server with Server-Sent Events (SSE) transport.
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--http` | off | Enable HTTP/SSE transport |
-| `--port` | `8433` | HTTP server port |
-| `--host` | `127.0.0.1` | HTTP server bind address |
+That is deliberate rather than an oversight to patch around: the stdio model gets its safety from the
+host process boundary. A network transport for a credential vault needs an authentication design first,
+because an unauthenticated local socket would hand any local process the agent's own vault access.
 
 ### Goose setup
 
@@ -344,19 +341,6 @@ mcp_servers:
     enabled: true
 ```
 
-If you need HTTP/SSE transport instead (e.g. for remote access), start the server with `--http` and point Hermes at the SSE endpoint:
-
-```yaml
-mcp_servers:
-  psamvault:
-    url: "http://127.0.0.1:8433/sse"
-    enabled: true
-```
-
-```bash
-psamvault-mcp --http --port 8433
-```
-
 Restart or reload Hermes — the tools will be discovered automatically.
 
 ### Claude Desktop setup
@@ -401,8 +385,6 @@ Any MCP client supporting stdio transport can use psamvault-mcp.
   }
 }
 ```
-
-For HTTP/SSE support, point the client at `http://127.0.0.1:8433/sse`.
 
 ## Troubleshooting
 
@@ -468,7 +450,7 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | `use_credential` | Make authenticated HTTP requests using stored API keys or site passwords — only the HTTP response is returned |
 | `run_with_credential` | Run a CLI command with a credential injected via env var or stdin — all output redacted of the secret |
 | `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
-| `export_key_to_mcp_config` | Export a vault API key into a client MCP config file (Hermes, Claude, etc.) — auto-verifies HTTP keys before write, with `skip_verify` / `verify_url` overrides |
+| `export_key_to_mcp_config` | Export a vault API key into a client MCP config file (Hermes — the only host whose config shape is verified) — auto-verifies HTTP keys before write, with `skip_verify` / `verify_url` overrides |
 | `export_key_to_env_file` | Export a vault API key into an agent `.env` as a variable (`agent="hermes"` → `HERMES_HOME/.env`, or explicit `env_path`) — updates in place, timestamped backup, auto-verifies HTTP keys |
 | `verify_api_key` | Verify a stored API key is valid against its provider's API. Returns `success`, `verification`, `provider`, `status`, `detail` |
 
