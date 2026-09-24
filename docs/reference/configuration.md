@@ -179,7 +179,7 @@ psamvault-mcp doctor       # diagnose PATH/entry-point and pipx drift (--fix to 
 | `psamvault-mcp compat --apply --from-git` | Install the local repo (merged but not yet released). `--pull` stashes local changes, pulls `--ff-only origin main`, and restores first. |
 | `psamvault-mcp compat --check --json` | Machine-readable report. `--no-index` skips the PyPI probe entirely. |
 | `psamvault-mcp selfcheck` | Installed vs what a **new session** actually serves. Exit 1 on mismatch — the only way to catch a stale long-lived session. |
-| `psamvault-mcp doctor` | Why an install looks broken: entry points pipx never linked, pipx records that disagree with reality, processes holding the venv. `--fix` repairs it (run when no session is holding the venv). |
+| `psamvault-mcp doctor` | Why an install looks broken: entry points pipx never linked, pipx records that disagree with reality, processes holding the venv. `--fix` repairs it — a stale **record** is corrected in place, so sessions can stay up, while relinking entry points still needs a free venv. |
 
 Both subcommands are subcommands of the server's own entry point on purpose, so they need no separate
 install and no venv path. On Windows the shim is `psamvault-mcp.exe`. The pre-0.5.3 standalone

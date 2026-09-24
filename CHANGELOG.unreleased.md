@@ -16,6 +16,7 @@
 
 ## Fixed
 
+- `fix(doctor): keep the version pipx records — correct it in place, so the repair no longer needs a quiet machine` — `pipx records : 0.4.4` beside `installed : 0.5.3` is one string in pipx's own JSON, and the venv already holds the right code. `--fix` now rewrites exactly that token (indentation, key order and CRLF endings preserved; dated `.bak` kept) when the stale record is the only drift, so `psamvault-mcp doctor --fix` succeeds with sessions running. When an entry point also needs **relinking** — which really does recreate the venv — `--fix` still refuses, names the holders and waits.
 - `fix(install_env): stop counting this command's own launcher as a venv holder` — `psamvault-mcp doctor --fix` runs as entry-point shim → python → probe, and the shim is a process of its own whose command line carries the venv path. Counting it meant the holder total could never reach zero, so **`doctor --fix` refused to repair on every machine, including one whose venv nothing else held**. The running interpreter was already excluded; now self plus the contiguous launcher ancestors (the shim, a shell that inlined the command) are excluded, and the walk stops at the first ancestor that does not carry the venv.
 - `fix(doctor): name the process holding the venv, and stop giving advice that repeats what was just done` — the refusal said `2 process(es) holding it … stop the gateway first`, which is unactionable when the gateway is already stopped (the usual case). It now lists every holder with pid and image name, and when those look like MCP servers it points at both the gateways **and** the Hermes desktop app, whose open sessions each hold one and which respawns a server the moment you kill it.
 - `fix(install_env): one matching rule for "is this process holding the venv"` — the Windows probe sent a PowerShell `-like` clause and then re-filtered in Python. The clause had to be told both separator spellings by hand and a backslash-only one silently missed real holders (a busy venv read as free — the dangerous direction). The script now only enumerates and `_venv_matcher` decides, so there is a single rule and it is the one the tests exercise.
@@ -29,6 +30,7 @@
 
 ## Tests
 
+- `test(doctor): pin the in-place record repair` — the record is corrected with the venv busy, the edit changes nothing else in pipx's file (CRLF endings included), a dated backup is kept, and an unlinked entry point still needs a free venv rather than being claimed as repaired. An unexpected pipx schema is reported, never guessed at.
 - `test(install_env): pin the launcher-chain exclusion` — the shim, a contiguous shell wrapper, the stop at an unrelated ancestor, and the degraded no-parent-links path.
 - `test(doctor): pin holder reporting` — the refusal names each holder, and the advice names the desktop app when MCP servers are holding the venv.
 - `test(ci): run the suite on Python 3.11 and 3.13 for every push and pull request` — this repo had no CI at all, so the suite had only ever run on one machine and one OS, which is what let the two bugs above survive.

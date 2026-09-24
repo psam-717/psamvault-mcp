@@ -20,6 +20,7 @@ Exit codes: 0 healthy, 1 findings, 2 a requested repair failed.
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib.metadata
 import json
 import os
@@ -397,14 +398,20 @@ def render(report: dict) -> str:
             # psamvault-mcp==<installed>` line prints the running interpreter's version (wrong when
             # doctor is run from a sandbox) and bypasses doctor's own busy/uncertain checks — and this
             # is the path users actually copy, because --fix refuses while holders exist.
-            lines.append("fix (when no sessions are running):")
-            lines.append("  stop the gateway and retire the MCP processes, then:")
-            lines.append("  psamvault-mcp doctor --fix")
-            if report.get("venv_probe_uncertain"):
+            if _needs_only_bookkeeping(report):
+                lines.append("fix: psamvault-mcp doctor --fix")
                 lines.append(
-                    "  (the process probe could not be trusted, so repair will refuse until it can — "
-                    "do not recreate the venv by hand)"
+                    "  (only pipx's record is wrong — it is corrected in place, no need to stop sessions)"
                 )
+            else:
+                lines.append("fix (when no sessions are running):")
+                lines.append("  stop the gateway and retire the MCP processes, then:")
+                lines.append("  psamvault-mcp doctor --fix")
+                if report.get("venv_probe_uncertain"):
+                    lines.append(
+                        "  (the process probe could not be trusted, so repair will refuse until it can — "
+                        "do not recreate the venv by hand)"
+                    )
         else:
             lines.append("fix: psamvault-mcp doctor --fix")
     else:
@@ -412,8 +419,100 @@ def render(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _bookkeeping_drift(report: dict) -> bool:
+    """True when pipx's recorded version disagrees with the version in ITS venv."""
+    recorded = report.get("pipx_metadata_version")
+    actual = report.get("pipx_venv_version") or report.get("installed_version")
+    return bool(report.get("pipx_records_ok") and recorded and actual and recorded != actual)
+
+
+def _needs_only_bookkeeping(report: dict) -> bool:
+    """True when the stale record is the ONLY thing ``--fix`` has left to do.
+
+    That distinction decides whether a repair can happen with the venv busy: a wrong version string
+    can be corrected in place, an unlinked entry point cannot (relinking is pipx recreating the venv).
+    """
+    leftovers = bool(
+        report.get("missing_links")
+        or report.get("stale_links")
+        or not report.get("fresh_import_ok", True)
+    )
+    return _bookkeeping_drift(report) and not leftovers
+
+
+def _repair_pipx_record(report: dict) -> dict:
+    """Correct pipx's recorded version WITHOUT recreating the venv.
+
+    ``pipx install --force`` is the thorough repair — it relinks entry points too — but it recreates
+    the venv, so it needs one that is free. The venv is nearly always held (the Hermes desktop app and
+    the gateways each keep an MCP server running), which left the visible symptom — ``pipx records :
+    0.4.4`` beside ``installed : 0.5.3`` — unfixable without quitting everything first. It is one
+    string in pipx's own JSON: the venv already holds the right code, only the note beside it is wrong.
+
+    The edit is surgical — the exact ``"package_version": "<old>"`` token is replaced in the file text,
+    so indentation, key order and line endings stay exactly as pipx wrote them. Exactly one occurrence
+    is required; if pipx's schema ever moves, this reports instead of guessing. The original is kept
+    as a dated ``.bak`` the first time a repair runs.
+    """
+    wanted = report.get("pipx_venv_version") or report.get("installed_version")
+    if not wanted:
+        return {"ok": False, "reason": "the installed version could not be determined"}
+    env = _install_env()
+    if env is None:
+        return {"ok": False, "reason": "install_env is unavailable in this build"}
+    try:
+        venv = env.venv_dir()
+    except Exception as exc:
+        return {"ok": False, "reason": f"the pipx venv could not be located ({exc})"}
+    if venv is None:
+        return {"ok": False, "reason": "the pipx venv could not be located"}
+    path = Path(venv) / "pipx_metadata.json"
+    try:
+        # newline="" throughout: universal-newline mode would rewrite the file's CRLF endings.
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return {"ok": False, "reason": f"no pipx metadata at {path}"}
+    except Exception as exc:
+        return {"ok": False, "reason": f"{path} could not be read ({exc})"}
+    try:
+        recorded = ((json.loads(text) or {}).get("main_package") or {}).get("package_version")
+    except Exception as exc:
+        return {"ok": False, "reason": f"{path} is not valid JSON ({exc})"}
+    if recorded == wanted:
+        return {"ok": True, "was": recorded, "now": wanted, "changed": False, "path": str(path)}
+    needle = f'"package_version": "{recorded}"'
+    if text.count(needle) != 1:
+        return {
+            "ok": False,
+            "reason": f"expected exactly one {needle!r} in {path}, found {text.count(needle)}",
+        }
+    backup = path.with_name(path.name + ".bak-" + datetime.date.today().strftime("%Y%m%d"))
+    try:
+        if not backup.exists():
+            with backup.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(text)
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(text.replace(needle, f'"package_version": "{wanted}"'))
+    except Exception as exc:
+        return {"ok": False, "reason": f"{path} could not be written ({exc})"}
+    return {
+        "ok": True,
+        "was": recorded,
+        "now": wanted,
+        "changed": True,
+        "path": str(path),
+        "backup": str(backup),
+    }
+
+
 def _fix(report: dict) -> int:
-    """Relink + refresh pipx's records by reinstalling the exact installed version."""
+    """Repair install drift.
+
+    Two paths, because the venv is nearly always busy: a stale pipx *record* is corrected in place
+    (no venv needed), while relinking entry points reinstalls through pipx and therefore waits for a
+    free venv.
+    """
     from mcp_server import compat
 
     env = _install_env()
@@ -430,6 +529,23 @@ def _fix(report: dict) -> int:
               f"The repair named in the finding is: {advice}")
         return 0
     if not report["venv_free"]:
+        # Bookkeeping needs no free venv: the venv already holds the right code, and only the note
+        # beside it is wrong. Everything else --fix does (relinking an entry point) IS a venv
+        # recreation, so that part still waits for a quiet machine.
+        if _needs_only_bookkeeping(report):
+            repaired = _repair_pipx_record(report)
+            if repaired.get("ok") and repaired.get("changed"):
+                print(
+                    f"pipx records: {repaired['was']} -> {repaired['now']}"
+                    f"  (bookkeeping only — the venv was not touched; {len(report['venv_holders'])} "
+                    f"process(es) still run it)"
+                )
+                print(render(diagnose(probe_index=False)))
+                return 0
+            if repaired.get("ok"):
+                print(f"pipx records already match ({repaired['now']}) — nothing to do")
+                return 0
+            print(f"could not correct the pipx record: {repaired.get('reason')}")
         print(
             "refusing to repair while the venv is in use — pipx recreates the venv, and Windows will "
             "not replace a running python.exe."

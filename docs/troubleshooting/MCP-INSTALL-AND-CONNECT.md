@@ -273,6 +273,53 @@ Tell the user to run this in their terminal, then retry the MCP tool.
 
 **Fix:** Use `--version` / `--help` for smoke tests. Let the **MCP host** spawn the process for real use.
 
+### G. pipx records a version that is not installed (stale record)
+
+**Symptom:** `pipx list` reports an older version than the code that actually runs, and `doctor` marks
+the record:
+
+```text
+  pipx records     : 0.4.4   [stale]
+```
+
+Nothing is broken — which is why this can sit there for weeks.
+
+**Cause:** pipx writes the version into its own `pipx_metadata.json` when *pipx* performs the install.
+An upgrade that writes into the existing venv instead of recreating it — the normal
+`uv pip install --python <pipx venv python> …` path — leaves that note behind. The venv holds the
+right code; only the note beside it is wrong.
+
+**Fix:**
+
+```bash
+psamvault-mcp doctor --fix
+```
+
+When the stale record is the only drift, it is corrected **in place**: no venv recreation, so it works
+with sessions live and MCP servers running — and the venv is nearly always held, which is why this used
+to be effectively unfixable. Only the `package_version` value in pipx's JSON is rewritten; the original
+is kept once as `pipx_metadata.json.bak-<date>`, and if pipx's file stops looking the way it expects it
+reports rather than guessing. Then confirm:
+
+```bash
+psamvault-mcp doctor     # the stale finding is gone
+pipx list                # shows the version that is really installed
+```
+
+**When `--fix` will not repair in place (by design):** if entry points also need relinking (`missing` /
+`stale` links on PATH, or a failed fresh import). Relinking means pipx recreating the venv, so `--fix`
+still refuses while the venv is held, and names every holder:
+
+```bash
+psamvault-mcp doctor --json    # .venv_holders lists each holder's pid and image name
+```
+
+Stop the gateways and quit the desktop app — each open session owns an MCP server, and the app respawns
+one after you kill it — then run `--fix` again.
+
+**Not for:** changing which version is installed. The record is bookkeeping, not code. To move versions,
+use the upgrade path (`compat --apply`, or an install from the index).
+
 ---
 
 ## Agent decision tree (copy this)
