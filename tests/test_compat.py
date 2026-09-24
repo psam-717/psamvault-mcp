@@ -310,6 +310,11 @@ def test_install_refreshes_the_index_cache(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "ok", "")
 
     monkeypatch.setattr(compat.subprocess, "run", fake_run)
+    # Force the uv path. Which installer runs is environment-dependent — the venv is held on Windows
+    # (so uv, with --refresh) and free on Linux (so pipx, which needs no refresh) — and this test is
+    # about the uv path, so it must not depend on that.
+    monkeypatch.setattr(compat, "_venv_is_free", lambda assume_free=False: False)
+    monkeypatch.setattr(compat, "pipx_python", lambda: "python")
     result = compat._install("0.5.0")
     assert result["ok"] is True
     assert "--refresh" in captured["cmd"], captured["cmd"]
@@ -421,6 +426,8 @@ def test_apply_from_git_skips_the_index_check(monkeypatch, capsys):
         raise AssertionError("--from-git must not consult PyPI")
 
     monkeypatch.setattr(compat, "target_is_published", _boom)
+    # The checkout is discovered, never hardcoded; point it at this repo so the git-state read works.
+    monkeypatch.setattr(compat, "repo_path", lambda: Path(__file__).resolve().parents[1])
     contract = _fake_contract()  # built BEFORE load_contract is patched (else it recurses)
     monkeypatch.setattr(compat, "load_contract", lambda *a, **k: contract)
     _offline(monkeypatch)
@@ -740,3 +747,29 @@ class TestApplyFetchesTheIndexOnce:
         calls = self._fake_get(monkeypatch, {"info": {"version": "0.5.3"}, "releases": {"0.5.3": []}})
         assert compat.target_is_published("0.5.3") is True
         assert len(calls) == 1
+
+
+# ── checkout discovery (never a hardcoded developer path) ──────────────────────
+def test_repo_path_prefers_the_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("PSAMVAULT_MCP_REPO", str(tmp_path / "elsewhere"))
+    assert compat.repo_path() == tmp_path / "elsewhere"
+
+
+def test_repo_path_finds_the_checkout_it_runs_from():
+    """In a checkout — as in CI — discovery finds THIS repo, not a path on someone's D: drive."""
+    found = compat.repo_path()
+    assert (found / "mcp_server").is_dir() and (found / "pyproject.toml").is_file()
+
+
+def test_repo_path_explains_itself_when_nothing_is_found(monkeypatch, tmp_path):
+    monkeypatch.delenv("PSAMVAULT_MCP_REPO", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(compat, "__file__", str(tmp_path / "site-packages" / "mcp_server" / "compat.py"))
+    with pytest.raises(FileNotFoundError) as excinfo:
+        compat.repo_path()
+    assert "PSAMVAULT_MCP_REPO" in str(excinfo.value), "the error must name the way out"
+
+
+def test_clone_path_defaults_to_the_sibling_of_the_repo(monkeypatch):
+    monkeypatch.delenv("PSAMVAULT_SKILL_CLONE", raising=False)
+    assert compat.clone_path() == compat.repo_path().parent / "private-skills"
