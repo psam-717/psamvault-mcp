@@ -28,3 +28,7 @@
 ## Docs
 
 - The upgrade playbook's "stop everything" scenario no longer hands out a hand-rolled `-like` kill filter (it disagreed with `doctor`: it matched nothing while `doctor` reported two holders). It drives the kill from `doctor --json` — the probe's own list — uses `hermes gateway stop --all` (there are usually two gateways), and states that the desktop app must be quit.
+
+- `docs(repo): the user documentation now lives in docs/` — overview, installation and host wiring, a feature map, guides for credential injection and browser login, a complete tool reference (13 tools) and a configuration reference; a website can populate from the repo, and `docs/README.md` links every page so none is orphaned.
+- `docs(reference): the tool reference is taken from the code` — tool names and parameters come from `TOOL_DEFINITIONS` rather than from prose, so a renamed or removed tool cannot leave the docs describing something the server no longer does.
+- `docs(troubleshooting): the two playbooks now carry the same front matter` — every page under `docs/` satisfies one site contract (title/description/order) and is reachable from the docs root. Content unchanged.
