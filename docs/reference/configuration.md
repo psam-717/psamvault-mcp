@@ -150,12 +150,12 @@ psamvault-mcp --version    Print version and exit
 psamvault-mcp --help       Show this help and exit
 ```
 
-> The project readme and the usage skill document an HTTP/SSE mode (`psamvault-mcp --http --port
-> 8433`, with `--host` defaulting to `127.0.0.1`) and an SSE endpoint at
-> `http://127.0.0.1:8433/sse`. The installed 0.5.3 entry point defines **no** `--http`, `--port`, or
-> `--host` flag — the CLI accepts `--version`/`-V`, `--help`/`-h`, and the maintenance subcommands
-> only. Config for stdio (as shown above); treat the HTTP/SSE examples as documentation of an earlier
-> or planned mode until the flags appear in `psamvault-mcp --help`.
+> An HTTP/SSE mode (`psamvault-mcp --http --port 8433`, with `--host` defaulting to `127.0.0.1`, and an
+> SSE endpoint at `http://127.0.0.1:8433/sse`) used to be documented in the README and in the usage
+> skill. **It does not exist**: the entry point defines no `--http`, `--port` or `--host` flag — it
+> accepts `--version`/`-V`, `--help`/`-h` and the maintenance subcommands only — and nothing in the
+> package serves HTTP. Stdio is the only transport this server speaks, and the config
+> above reflects that.
 
 Because the server is a stdio process, a bare launch that appears to sit there is **not** a hang — it
 is waiting for JSON-RPC on stdin. Use `--version` / `--help` for smoke tests.
