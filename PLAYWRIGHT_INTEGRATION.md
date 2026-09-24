@@ -41,7 +41,8 @@ Playwright's Python API is async. `browser_login` must be `async def`. Since `ha
 
 ### 4. `mcp_server/main.py`
 - Add new `Tool` definition to `TOOL_DEFINITIONS` for `browser_login`:
-  - Required: `site_name`, `login_url`, `username_selector`, `password_selector`, `submit_selector`
+  - Required: `site_name` only. `login_url` and the selectors are optional — the flow discovers the
+    sign-in page and its fields when they are omitted, which is what the tool's own description says.
 - Add `elif name == "browser_login": result = await tools.browser_login(...)` in `handle_call_tool`
 
 ## Files NOT changing
