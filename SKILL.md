@@ -1,7 +1,7 @@
 ---
 name: psamvault-mcp
 description: "Use psamvault MCP server: credential vault, browser login, API key injection, .env secret protection. MCP tools keep secrets out of the agent's context window."
-version: 1.9.0
+version: 1.9.1
 author: psam-717
 license: MIT
 platforms: [linux, macos, windows]
@@ -217,8 +217,9 @@ it first.
 Two operator checks sit beside it: `psamvault-mcp selfcheck` reports what is installed against the version
 a **new session will actually serve** (exit 1 on mismatch — the only way to catch a stale long-lived
 session), and `psamvault-mcp doctor` explains why an install looks broken (entry points pipx never linked,
-pipx records that disagree with reality, processes holding the venv), with `--fix` to repair it when no
-session is holding the venv.
+pipx records that disagree with reality, processes holding the venv), with `--fix` to repair it — a stale
+pipx record is corrected in place, so live sessions are no obstacle, while relinking an entry point still
+waits for a free venv.
 `--apply` snapshots the installed skill, smoke-tests the fresh install in a new interpreter
 from a neutral cwd, and rolls back to the previous release if the install or the smoke test fails. The
 skill version recorded per release is a **floor**: a newer skill is healthy, and a skill-only improvement
