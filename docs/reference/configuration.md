@@ -105,8 +105,8 @@ confirm you are affected, is in
 | `PSAMVAULT_PEPPER` | — (keychain) | The pepper used by the CLI's key derivation. Read from the OS keychain under the `psamvault` service (`config.pepper`), loaded into the process environment at config-load time. A legacy value found in `config.env` is migrated to the keychain and removed from the file. |
 | `PSAMVAULT_MCP_SKIP_UPDATE_CHECK` | unset | When set, the startup "update available" check is skipped and the PyPI index is not contacted. `psamvault-mcp selfcheck` sets this for the diagnostic child it spawns, so a check cannot consume the one-shot notice meant for the next real session. |
 | `PSAMVAULT_MCP_VENV` | — | Overrides the venv path used by the install/upgrade helper when it needs to act on a specific environment. |
-| `PSAMVAULT_SKILL_CLONE` | a default clone path | Overrides where `compat` looks for the local skill clone (the source `--sync-skill` installs from). |
-| `PSAMVAULT_MCP_REPO` | a default repo path | Overrides where `compat --from-git` installs from, and whose git state `--apply` reports. |
+| `PSAMVAULT_SKILL_CLONE` | — | Overrides where `compat` looks for the local skill clone (the source `--sync-skill` installs from). Without it the clone is `private-skills` **beside the discovered checkout**. |
+| `PSAMVAULT_MCP_REPO` | — | Overrides the checkout `compat --from-git` installs from and whose git state `--apply` reports. Without it the checkout is **discovered**: the one this process runs from, else the one the current directory is inside — so `--from-git` in the repo you are standing in works with no configuration. Nothing found raises, naming this variable. |
 | `HERMES_HOME` | `~/.hermes` | Base directory for the Hermes export targets: `config.yaml` (`export_key_to_mcp_config`) and `.env` (`export_key_to_env_file`), and the base for the installed skill path the compatibility check reads. On Windows the platform default is `%LOCALAPPDATA%\hermes`. |
 
 Platform variables (`LOCALAPPDATA`, `USERPROFILE`, `VIRTUAL_ENV`) are used only for path resolution on
@@ -217,9 +217,9 @@ The server and its usage skill are a **pinned pair**, and the pairing ships *ins
 | `notes` | A one-line summary of the release. |
 | `tools` | The release's tool **fingerprint** — the sorted list of tool names. |
 
-The newest entry in the contract is **0.5.3** (skill floor 1.9.0, marked breaking for the *CLI*
-surface — the standalone `psamvault-compat` script removal and the new `selfcheck` / `doctor`
-subcommands — with the 13 MCP tools unchanged). The contract's own schema, skill repo/path, and
+The newest entry in the contract is **0.5.4** (skill floor 1.9.1, **not** breaking — fixes and
+documentation only, with the 13 MCP tools and their names unchanged). Older entries are kept, so an
+install can be told what it is missing without reaching the network. The contract's own schema, skill repo/path, and
 `installed_path` (`skills/psam-custom/psamvault-mcp/SKILL.md` under `HERMES_HOME`) head the file.
 
 **The recorded skill version is a floor, not a pin.** Each release says the *minimum* skill version
