@@ -295,9 +295,10 @@ right code; only the note beside it is wrong.
 psamvault-mcp doctor --fix
 ```
 
-When the stale record is the only drift, it is corrected **in place**: no venv recreation, so it works
-with sessions live and MCP servers running — and the venv is nearly always held, which is why this used
-to be effectively unfixable. Only the `package_version` value in pipx's JSON is rewritten; the original
+When the stale record is the only drift, it is corrected **in place** (**0.5.4 and later**): no venv
+recreation, so it works with sessions live and MCP servers running — and the venv is nearly always held,
+which is why this used to be effectively unfixable. On 0.5.3 and earlier `--fix` refuses while the venv
+is held, so every session **and** the desktop app has to be stopped before it will touch anything. Only the `package_version` value in pipx's JSON is rewritten; the original
 is kept once as `pipx_metadata.json.bak-<date>`, and if pipx's file stops looking the way it expects it
 reports rather than guessing. Then confirm:
 
@@ -315,7 +316,10 @@ psamvault-mcp doctor --json    # .venv_holders lists each holder's pid and image
 ```
 
 Stop the gateways and quit the desktop app — each open session owns an MCP server, and the app respawns
-one after you kill it — then run `--fix` again.
+one after you kill it — then run `--fix` again. (**0.5.4 and later** counts the holders correctly; on
+0.5.3 and earlier `doctor` also counted its own launcher shim, so a genuinely idle venv could read as
+held and `--fix` refused on every machine. If that is what you are seeing, upgrade rather than killing
+more processes.)
 
 **Not for:** changing which version is installed. The record is bookkeeping, not code. To move versions,
 use the upgrade path (`compat --apply`, or an install from the index).
