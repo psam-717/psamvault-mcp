@@ -175,7 +175,7 @@ login flow — including multi-step flows (e.g., 'Continue with Email' → email
 submit). Uses semantic locators (get_by_role, get_by_label) that work with Shadow DOM, React, and Vue
 apps. Saves the browser session after a successful login so it can be reused on subsequent calls. The
 credential is NEVER returned to you — psamvault fills the fields directly inside its own browser.
-Returns a concise summary: success, message, captcha_detected, captcha_screenshot, final_url,
+Returns a concise summary: success, message, captcha_detected, captcha_screenshot, url,
 steps_count, and failed_at. When success is true, the response includes a message field — always relay
 it to the user. When captcha_detected is true, the tool pauses automation; inform the user and tell
 them to solve the CAPTCHA and click Sign in/Login manually in the browser. When captcha_screenshot is
@@ -194,8 +194,7 @@ Only site_name is required. All other parameters are optional.
 | `timeout_ms` | integer | no (default `8000`) | Per-step detection timeout in milliseconds. Default is 8000. Increase for slow or JS-heavy sites. |
 
 **Returns.** `success`, `message`, `captcha_detected`, `captcha_screenshot`, `steps_count`,
-`failed_at`, `url`, `title`, `error_text`, `hint`, `login_page_screenshot`. (The registry description
-calls the ending URL `final_url`; the login flow returns it as `url`.) A launch failure returns
+`failed_at`, `url`, `title`, `error_text`, `hint`, `login_page_screenshot`. A launch failure returns
 `{"success": false, "error": ...}`, and an unexpected flow error returns `success: false` with
 `failed_at: "unexpected_error"`.
 
@@ -338,11 +337,11 @@ captured secrets can then be used with use_credential.
 | `patterns` | array of string | no | Optional custom key name patterns to scan for (e.g. ['MY_CUSTOM_KEY']). |
 | `project_name` | string | no | Optional project name for grouping. Keys stored as 'project_name/.env/KEY_NAME' instead of 'env/.env/KEY_NAME'. Use this for cleaner per-project organisation. |
 
-> **Note on `project_name`.** The parameter is declared in the tool schema and accepted by the tool
-> implementation, but the server's request router (`handle_call_tool` in `mcp_server/main.py`) does
-> not currently forward `project_name` from the request to the handler, so the per-project namespace
-> is **not applied** in the installed 0.5.3. Pass it only if you have verified the behaviour against
-> your installed build.
+> **Note on `project_name`.** The parameter is forwarded by the server's request router
+> (`handle_call_tool` in `mcp_server/main.py`) from **0.5.4** onward. On 0.5.3 and earlier the router
+> dropped it, so keys were stored as `env/.env/KEY_NAME` even when the argument was passed and a
+> later `list_api_keys(project_name=...)` found nothing. Upgrade first
+> (`psamvault-mcp compat --apply`) if you need the per-project namespace.
 
 **Returns.** A dict with `scanned_dir`, `files_scanned`, `secrets_found`, `captured`, `files_modified`,
 `errors` — or `{"error": ...}` when not logged in or the scan fails. When no secrets are found the
