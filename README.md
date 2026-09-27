@@ -1,6 +1,6 @@
 # psamvault-mcp
 
-**v0.5.3** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
+**v0.5.4** — MCP server for [psamvault](https://pypi.org/project/psamvault/).
 
 Lets AI agents use your stored credentials without ever seeing their plaintext values. Also integrates with [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime credential resolution in your `.env` files.
 
@@ -491,8 +491,16 @@ psamvault-mcp compat --apply --from-git --pull   # ...after stashing local chang
 
 psamvault-mcp selfcheck                          # installed vs what a NEW session actually serves (exit 1 on mismatch)
 psamvault-mcp doctor                             # why an install looks broken: entry points, pipx records, processes holding the venv
-psamvault-mcp doctor --fix                       # ...and repair it (run when no session is holding the venv)
+psamvault-mcp doctor --fix                       # ...and repair it: an in-place repair works with sessions up
 ```
+
+`doctor --fix` has **two repair paths**, and only one of them needs a quiet machine. A stale pipx
+**record** — `pipx list` showing an older version than the code that actually runs — is corrected **in
+place**: the venv is not recreated, so it works with sessions and MCP servers running, which is nearly
+always the case. Relinking an entry point pipx never linked *is* a venv recreation, so that path still
+refuses while the venv is held. When it refuses it names every holder (`pid` + image) and what to stop —
+read that list before stopping anything twice: the usual holder is the desktop app, whose open sessions
+each own an MCP server and which respawns one moments after you kill it.
 
 `--apply` exit codes: **0** ok, **1** install failed, **2** refused (needs `--allow-breaking`), **3** the
 contract's release is not on PyPI yet (publish it, or use `--from-git`). `--check` only ever returns 0 or 1 —

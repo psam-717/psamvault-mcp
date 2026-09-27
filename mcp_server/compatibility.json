@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-14",
+  "updated": "2026-09-26",
   "skill": {
     "name": "psamvault-mcp",
     "repo": "psam-717/private-skills",
@@ -8,6 +8,29 @@
     "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
   },
   "releases": [
+    {
+      "mcp": "0.5.4",
+      "skill": "1.9.1",
+      "breaking": false,
+      "added": [],
+      "removed": [],
+      "notes": "Fixes and documentation only — the 13 tools and their names are unchanged. `doctor --fix` corrects a stale pipx-record version IN PLACE (sessions and MCP servers can stay running) and no longer counts its own launcher as a venv holder, so a genuinely idle venv no longer reads as held; a timed-out `run_with_credential` no longer kills the server on POSIX; `compat --from-git` / `--sync-skill` DISCOVER the checkout and the skill clone instead of using a hardcoded path (override with PSAMVAULT_MCP_REPO / PSAMVAULT_SKILL_CLONE); `scan_and_protect` now forwards `project_name`, so the documented per-project namespace exists. Docs: the repo gained a docs/ tree a website can populate from, and the README/SKILL.md no longer describe an HTTP transport that was never implemented.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
     {
       "mcp": "0.5.3",
       "skill": "1.9.0",

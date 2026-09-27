@@ -158,7 +158,8 @@ scan_and_protect("/home/user/my-project")
 ```bash
 psamvault-mcp selfcheck        # installed vs what a NEW session actually serves (exit 1 on mismatch)
 psamvault-mcp doctor           # entry points pipx never linked, stale pipx records, processes holding the venv
-psamvault-mcp doctor --fix     # repair the above (run when no session is holding the venv)
+psamvault-mcp doctor --fix     # repair the above (a stale pipx record is corrected in place; relinking an
+                               # entry point still wants no sessions running)
 psamvault-mcp compat --check   # the MCP <-> usage-skill pairing
 psamvault-mcp compat --apply --latest   # upgrade to the newest release on PyPI (add --allow-breaking
                                         # when it is newer than the installed contract, or removes a tool)

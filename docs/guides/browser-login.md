@@ -124,8 +124,8 @@ Recommended sequence (from the shipped `how-to-login` prompt):
 | `error_text` | Text of a detected on-page error, or null. |
 | `hint` | A recovery suggestion to relay to the user. |
 
-The tool's own description refers to the ending URL as `final_url`; the login flow returns it as
-`url`. Read the key the tool actually returns — `url`.
+Read the key the tool actually returns — `url`. (Tool descriptions older than 0.5.4 called it
+`final_url`; the flow never did.)
 
 ## See also
 
