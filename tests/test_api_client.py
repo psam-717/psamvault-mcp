@@ -84,6 +84,65 @@ class TestListVaultEntries:
         with pytest.raises(RuntimeError, match="Session expired"):
             await api_client.list_vault_entries(TEST_ACCESS_TOKEN)
 
+    @pytest.mark.asyncio
+    async def test_retries_with_a_token_rotated_by_another_client(
+        self, httpx_mock: HTTPXMock, session_file, monkeypatch
+    ):
+        """Refresh tokens are single-use and every client shares one store.
+
+        When our refresh 401s because another process rotated the chain first, the
+        stored token has changed: re-read it and retry instead of reporting expiry.
+        """
+        from mcp_server import session as session_mod
+
+        attempts: list[str] = []
+
+        async def _refresh(token: str):
+            attempts.append(token)
+            if len(attempts) == 1:
+                # another client rotated the chain and persisted its successor
+                session_mod.update_tokens("winner_access", "rotated_by_other_client")
+                raise RuntimeError(
+                    "psamvault API error 401: Refresh token is invalid or has expired"
+                )
+            return ("new_access", "new_refresh")
+
+        monkeypatch.setattr(api_client, "_refresh_access_token", _refresh)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/vault", status_code=401
+        )
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/vault", json={"entries": []}
+        )
+
+        result = await api_client.list_vault_entries(TEST_ACCESS_TOKEN)
+
+        assert result == []
+        assert attempts == [TEST_REFRESH_TOKEN, "rotated_by_other_client"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_when_the_store_is_unchanged(
+        self, httpx_mock: HTTPXMock, session_file, monkeypatch
+    ):
+        """A genuinely dead chain gets one attempt, not a retry loop."""
+        attempts: list[str] = []
+
+        async def _refresh(token: str):
+            attempts.append(token)
+            raise RuntimeError(
+                "psamvault API error 401: Refresh token is invalid or has expired"
+            )
+
+        monkeypatch.setattr(api_client, "_refresh_access_token", _refresh)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/vault", status_code=401
+        )
+
+        with pytest.raises(RuntimeError, match="Session expired"):
+            await api_client.list_vault_entries(TEST_ACCESS_TOKEN)
+
+        assert attempts == [TEST_REFRESH_TOKEN]
+
 
 class TestGetVaultEntry:
     @pytest.mark.asyncio
