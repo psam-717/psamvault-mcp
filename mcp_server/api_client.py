@@ -48,7 +48,17 @@ async def _refresh_and_retry(retry_fn):
     """
     try:
         refresh_token = get_refresh_token()
-        new_access, new_refresh = await _refresh_access_token(refresh_token)
+        try:
+            new_access, new_refresh = await _refresh_access_token(refresh_token)
+        except Exception:
+            # Refresh tokens are single-use and the CLI, the dashboard and every MCP
+            # server share one keychain entry, so a 401 here may just mean another
+            # client rotated the chain a moment ago. Re-read the store once and retry
+            # with its token; an unchanged (or empty) store means the chain is dead.
+            rotated = get_refresh_token()
+            if not rotated or rotated == refresh_token:
+                raise
+            new_access, new_refresh = await _refresh_access_token(rotated)
         update_tokens(new_access, new_refresh)
         result = await retry_fn(new_access)
         if result is None:
