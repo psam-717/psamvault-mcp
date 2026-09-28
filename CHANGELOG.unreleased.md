@@ -13,3 +13,7 @@
   Sections: Added / Changed / Fixed / Tests / Docs. One line per user-visible change:
   `type(scope): what changed and why it matters`.
 -->
+
+## Fixed
+
+- fix(session): a refresh that 401s because another client rotated the single-use token first now re-reads the keychain store and retries once with the newer token, instead of reporting the vault session as expired.
