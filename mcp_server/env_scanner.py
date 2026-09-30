@@ -106,13 +106,35 @@ def _is_ignored(path: Path, project_dir: Path, gitignore_patterns: list[str]) ->
 # ── File finding ─────────────────────────────────────────────────────────────
 
 
-def find_env_files(project_dir: str) -> list[Path]:
-    """Recursively find all ``.env*`` files in a project directory.
+# Copies a person makes before editing .env. Live variants such as
+# .env.local and .env.production are not in this list.
+_BACKUP_SUFFIXES = ("bak", "old", "save", "backup", "orig", "copy", "tmp", "swp")
+
+
+def is_backup_env_file(path: Path) -> bool:
+    """True for ``.env.bak-*``, ``.env.old``, ``.env.save``, and ``.env.<digits>``."""
+    name = path.name.lower()
+    if not name.startswith(".env") or name == ".env":
+        return False
+    if name.endswith("~"):
+        return True
+    rest = name[4:]
+    suffix = rest[1:] if rest.startswith(".") else rest
+    if suffix.startswith(_BACKUP_SUFFIXES):
+        return True
+    return suffix.isdigit()
+
+
+def find_env_files(project_dir: str, include_backups: bool = False) -> list[Path]:
+    """Recursively find ``.env*`` files in a project directory.
 
     - Expands ``~`` in the path.
     - Respects ``.gitignore`` — files ignored by git are excluded.
     - Skips the ``.git/`` directory entirely.
     - Skips files whose name contains ``example`` (e.g. ``.env.example``).
+    - Skips backup copies (``.env.bak-*``, ``.env.old``, ``.env.save``,
+      ``.env.<digits>``) unless ``include_backups`` is true. Those copies
+      were being stored as a second live key.
 
     Returns a list of :class:`Path` objects, sorted by path.
     """
@@ -135,6 +157,9 @@ def find_env_files(project_dir: str) -> list[Path]:
 
         # Skip files with "example" in the filename
         if "example" in entry.name.lower():
+            continue
+
+        if not include_backups and is_backup_env_file(entry):
             continue
 
         # Respect .gitignore
@@ -261,7 +286,7 @@ def scan_env_file(env_path: Path) -> list[dict]:
 # ── High-level orchestrator ─────────────────────────────────────────────────
 
 
-def scan_project(project_dir: str) -> dict:
+def scan_project(project_dir: str, include_backups: bool = False) -> dict:
     """Scan a project directory for exposed secrets in ``.env`` files.
 
     Combines :func:`find_env_files` and :func:`scan_env_file` into a single
@@ -269,6 +294,8 @@ def scan_project(project_dir: str) -> dict:
 
     Args:
         project_dir: Path to the project directory (``~`` expansion supported).
+        include_backups: When false (the default), skip ``.env.bak-*`` and
+            other rotated copies so they are not stored as live keys.
 
     Returns:
         A dict with:
@@ -283,7 +310,7 @@ def scan_project(project_dir: str) -> dict:
     """
     root = Path(project_dir).expanduser().resolve()
 
-    env_files = find_env_files(str(root))
+    env_files = find_env_files(str(root), include_backups=include_backups)
 
     gitignore_patterns = _load_gitignore(root)
     # Check which .env files are not in .gitignore
