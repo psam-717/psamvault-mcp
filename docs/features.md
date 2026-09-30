@@ -103,7 +103,9 @@ Guide: [Credential injection](./guides/credential-injection.md). Tool:
 passwords using pattern matching, encrypts them into the psamvault vault, and replaces the plaintext
 values with `psamvault:<KEY_NAME>` placeholders. Passing `project_name` groups the keys as
 `project_name/.env/KEY_NAME`; without it they are stored as `env/.env/KEY_NAME`
-(backwards-compatible). The captured secrets can then be used with `use_credential`.
+(backwards-compatible). Backup copies (`.env.bak-*`, `.env.old`, `.env.save`, a dated
+`.env.<digits>`) are skipped so they are not stored as a second live key. `.env.local` and
+`.env.production` are still scanned. The captured secrets can then be used with `use_credential`.
 
 **When to reach for it.** As a one-time safety check when the agent starts working in a project
 directory that has `.env` files. Pair the result with
