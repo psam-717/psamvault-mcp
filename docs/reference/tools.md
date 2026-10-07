@@ -342,6 +342,9 @@ captured secrets can then be used with use_credential.
 > dropped it, so keys were stored as `env/.env/KEY_NAME` even when the argument was passed and a
 > later `list_api_keys(project_name=...)` found nothing. Upgrade first
 > (`psamvault-mcp compat --apply`) if you need the per-project namespace.
+>
+> Backup copies (`.env.bak-*`, `.env.old`, `.env.save`, `.env.<digits>`) are not scanned.
+> `.env.local` and `.env.production` still are.
 
 **Returns.** A dict with `scanned_dir`, `files_scanned`, `secrets_found`, `captured`, `files_modified`,
 `errors` — or `{"error": ...}` when not logged in or the scan fails. When no secrets are found the
