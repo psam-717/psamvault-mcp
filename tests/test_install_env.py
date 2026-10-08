@@ -101,6 +101,24 @@ def _entry(pid, name, cmdline, ppid=None):
     return row
 
 
+# ── fixtures ───────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _fixture_pids_cannot_collide_with_the_probe(monkeypatch):
+    """Pin the probe's own PID for every test in this file.
+
+    The probe deliberately drops the process asking the question
+    (``pid == os.getpid()`` while parsing, and again in ``_drop_launcher_chain``), so a FIXTURE pid
+    equal to this process's real pid disappears from the answer. The literal pids used below
+    (1680, 2200, 4242, 5150, 8808) are ordinary values on a freshly booted CI runner — a 3.11 job
+    whose pytest pid was 2200 failed ``test_windows_counts_a_holder_launched_with_forward_slashes``
+    with ``[1680] == [1680, 2200]`` while the same commit passed on another runner.
+
+    Pinning to 5000 — a value no fixture row uses — makes these tests depend on the parsers instead
+    of on pid luck. Tests that reason about the asking process pin their own value and shadow this.
+    """
+    monkeypatch.setattr(ie.os, "getpid", lambda: 5000)
+
+
 # ── discovery ──────────────────────────────────────────────────────────────────
 def test_venv_dir_honours_the_env_override(monkeypatch, tmp_path):
     _as_windows(monkeypatch)
