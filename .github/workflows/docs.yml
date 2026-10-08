@@ -1,8 +1,8 @@
 name: Docs
 
 # The docs tree is what a website and agents read, so a doc that names a tool, parameter or command that
-# does not exist is a defect. This repo has no other CI: these two checks are the minimum that keeps the
-# written surface honest.
+# does not exist is a defect, and a change that adds a tool without documenting it is the same defect
+# seen from the other side. Three checks, one per failure direction.
 
 on:
   push:
@@ -10,10 +10,16 @@ on:
   pull_request:
     branches: ["**"]
 
+# One run per ref: a superseded push should not hold a runner or report a stale verdict.
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docs:
     name: Docs describe a real surface
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     env:
       # Both checks import mcp_server.main; keep the keychain out of it.
@@ -32,6 +38,7 @@ jobs:
           cache: "pip"
 
       - name: Install the package (both checks read the real registry)
+        timeout-minutes: 6
         run: |
           pip install --upgrade pip
           pip install -e .
@@ -41,3 +48,53 @@ jobs:
 
       - name: Docs must not name a tool or parameter that does not exist
         run: python scripts/check-docs-surface.py
+
+  docs-with-the-change:
+    # The job above is absolute: does the documentation describe a surface that exists? This one is
+    # relative: did THIS change bring the page that describes it? A tool, or an environment variable,
+    # that no page names fails here — every existing page stays true, so no other check can see it.
+    name: Docs change with the code
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      PSAMVAULT_PEPPER: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      PSAMVAULT_API_URL: "https://test.example.com"
+      PYTHON_KEYRING_BACKEND: "keyring.backends.null.Keyring"
+      BASE_REF: ${{ github.base_ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # The one escape hatch, and it is a deliberate act: the label IS the decision, the log records it.
+      DOCS_NOT_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'docs-not-needed') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the gate compares against the PR's base branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install the package (the gate reads the real registry)
+        timeout-minutes: 6
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+
+      - name: Fetch the branch this PR merges into
+        run: git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+      - name: Docs must move with the code
+        run: |
+          if [ "$DOCS_NOT_NEEDED" = "true" ]; then
+            python scripts/docs-touch-check.py \
+              --base "origin/${BASE_REF}" --head "$HEAD_SHA" --committed-only \
+              --allow-no-docs "PR is labelled docs-not-needed"
+          else
+            python scripts/docs-touch-check.py \
+              --base "origin/${BASE_REF}" --head "$HEAD_SHA" --committed-only
+          fi
