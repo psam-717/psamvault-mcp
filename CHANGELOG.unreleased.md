@@ -16,4 +16,9 @@
 
 ## Fixed
 
+- fix(scan): `scan_and_protect` skips `.env.bak-*`, `.env.old`, `.env.save`, and dated `.env.<digits>` copies so they are not stored as a second live key. `.env.local` and `.env.production` are still scanned
 - fix(session): a refresh that 401s because another client rotated the single-use token first now re-reads the keychain store and retries once with the newer token, instead of reporting the vault session as expired.
+
+## Docs
+
+- docs(scan): the scan guide and the `scan_and_protect` tool page say backup env files are skipped
