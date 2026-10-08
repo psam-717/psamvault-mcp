@@ -204,6 +204,32 @@ chore(deps): bump httpx to 0.28.0
 
 5. A maintainer will review your PR. Expect feedback within a few days. Address comments by pushing additional commits to the same branch — do not force-push after review has started.
 
+### Docs come with the change
+
+`docs/` is what the website and other agents read, so the page that describes a tool is part of the
+change that adds it. Two checks enforce that, and both run in CI as separate jobs and locally as plain
+scripts:
+
+```bash
+python scripts/check-docs-surface.py   # absolute: the docs must not name a tool that does not exist
+python scripts/docs-touch-check.py     # relative: did THIS change document itself?
+```
+
+`docs-touch-check.py` compares your branch against the branch it merges into. A **new** tool, or a new
+`PSAMVAULT_*` environment variable, that no page names fails the job; so does a **removed** tool the docs
+still name — the failure the surface gate cannot see, because every existing page stays true while the
+new surface goes unmentioned.
+
+A behaviour change that touches no page is a warning, not a failure. If it genuinely needs no docs
+(test-only, pure refactor), record the decision instead of leaving it unsaid:
+
+```bash
+python scripts/docs-touch-check.py --allow-no-docs "pure refactor, no user-visible change"
+```
+
+In CI the same waiver is the **`docs-not-needed`** label on the PR — the label is the decision, and the
+job log prints it.
+
 ---
 
 ## Security Guidelines
