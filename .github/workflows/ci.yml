@@ -20,15 +20,21 @@ on:
   pull_request:
     branches: ["**"]
 
+# One run per ref: a superseded push should not hold a runner or report a stale verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     env:
       # Belt and braces: the tests mock the keyring and HOME, but any module that reads config at import
