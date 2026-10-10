@@ -207,6 +207,42 @@ limits.
 
 ---
 
+## Naming an API key
+
+`use_credential`, `run_with_credential`, `export_key_to_mcp_config`, `export_key_to_env_file` and
+`verify_api_key` all take a name and resolve it to exactly one stored API key before reading anything.
+Two spellings work.
+
+| Spelling | Example | How it is resolved |
+|---|---|---|
+| Full stored name | `atlas054probe/.env/my_custom_key` | Contains a slash, so it is treated as the exact name `list_api_keys` returned and sent unchanged. This is the shape `scan_and_protect` writes — `project/.env/KEY`, or `env/.env/KEY` when no `project_name` was given. |
+| Leaf | `my_custom_key` | No slash, so it is matched against the key list on the **last** segment of each stored name. A key stored flat under its own name (`pypi`, `testpypi`) matches itself. |
+
+A leaf that matches **several** stored keys is an error, never a guess — and never a `not found`:
+
+```
+API key name 'token' is ambiguous — it matches 2 stored keys: 'alpha/.env/token', 'beta/.env/token'.
+Pass the full stored name exactly as list_api_keys returns it.
+```
+
+A name that matches nothing stays `not found`.
+
+**When to use which.** If you have the record from `list_api_keys`, pass its `name` field verbatim —
+that is always unambiguous and is one request. Pass the leaf only when you are typing the name by hand
+and it is unique in the vault; on `ambiguous`, re-run `list_api_keys` and pass the full name. `not
+found` from a leaf means no stored key ends in that segment, so `list_api_keys` is also how you tell a
+typo from a key that is genuinely absent.
+
+**Scope.** This is the API key store only. The site tools (`list_vault_sites`,
+`check_credential_exists`, `get_username_for_site`, `browser_login`) take a site name such as
+`github.com` and are unaffected — a vault site password is not an API key entry.
+
+**Cost.** A leaf lookup reads `GET /apikeys` first (that is what makes the ambiguity check possible),
+then reads the entry by its resolved name; a full stored name is a single read. Nothing is sent to the
+provider and no key value is returned by the resolution step.
+
+---
+
 ## `list_api_keys`
 
 **Group:** API Key Operations.
@@ -227,6 +263,9 @@ or `{"error": ...}`.
 
 **When to use it.** When the user asks "what API keys do I have", and before `use_credential` or
 `run_with_credential` to find the exact key name to pass as `site_name`.
+
+**Name resolution.** The `name` field is the exact string the API key tools accept. `project` and
+`key_name` are display fields — pass `name`. See [Naming an API key](#naming-an-api-key).
 
 **Never returns key values.**
 
@@ -266,6 +305,9 @@ Sensitive response headers (`set-cookie`, `authorization`, `www-authenticate`, `
 credential, and a rejected internal-address target.
 
 **When to use it.** **Always** for authenticated HTTP/API requests.
+
+**Name resolution.** `site_name` accepts a vault site name (`github.com`), an API key's stored name
+(`project/.env/KEY`), or a unique leaf. See [Naming an API key](#naming-an-api-key).
 
 **Never returns the credential value** — only the HTTP response.
 
@@ -312,6 +354,9 @@ anything.
 **When to use it.** For `twine upload`, `git push`, `docker login`, `npm publish`, `pip install`
 against a private repo, or any CLI tool that needs an API key or password. For the timeout pitfall and
 the retry rules, read the [Credential injection guide](../guides/credential-injection.md).
+
+**Name resolution.** `site_name` accepts a vault site name (`github.com`), an API key's stored name
+(`project/.env/KEY`), or a unique leaf. See [Naming an API key](#naming-an-api-key).
 
 **Never returns the credential value** — stdout and stderr are redacted before they reach the agent.
 Commands that could dump a secret are refused (`psamvault get|show|ak-get|ak-show|search|list|export`,
@@ -404,6 +449,9 @@ must be provisioned without the key entering chat. Never hand-edit the config, n
 paste the key, and never run the host's own `mcp add` CLI — psamvault owns the write (with backup and
 `dry_run`).
 
+**Name resolution.** `key_name` accepts the stored name (`project/.env/KEY`) or a unique leaf. See
+[Naming an API key](#naming-an-api-key).
+
 **Never returns the key value** — only the summary above. A failed probe is final:
 `skip_verify=true` never overrides a provider rejecting the key.
 
@@ -445,6 +493,9 @@ file. Only `agent="hermes"` has a verified `.env` location — never invent a pa
 rejected on purpose and must be targeted with `env_path`. Restart the host session afterwards (the
 `.env` is read at startup) and verify with the consumer, not the file.
 
+**Name resolution.** `key_name` accepts the stored name (`project/.env/KEY`) or a unique leaf. See
+[Naming an API key](#naming-an-api-key).
+
 **Never returns the key value** — only the summary above.
 
 ---
@@ -472,6 +523,9 @@ returns `success: false`, `verification: "failed"` and a `detail` saying so.
 
 **When to use it.** **Before** `export_key_to_mcp_config`, or whenever you need to prove a stored key
 still works.
+
+**Name resolution.** `key_name` accepts the stored name (`project/.env/KEY`) or a unique leaf. See
+[Naming an API key](#naming-an-api-key).
 
 **Never returns the key value.**
 
