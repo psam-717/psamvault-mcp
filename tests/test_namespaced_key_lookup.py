@@ -74,13 +74,14 @@ def _paths(httpx_mock: HTTPXMock) -> list[str]:
 
 
 class TestFullStoredName:
-    """The exact string list_api_keys returns is passed straight through, slashes and all."""
+    """The exact string list_api_keys returns is looked up as the whole path parameter."""
 
     @pytest.mark.asyncio
-    async def test_project_scoped_name_is_looked_up_verbatim(
+    async def test_project_scoped_name_resolves_to_the_stored_name(
         self, httpx_mock: HTTPXMock, session_file
     ):
         entry = _encrypted_entry()
+        _add_list(httpx_mock, PROJECT_KEY)
         httpx_mock.add_response(
             method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=entry
         )
@@ -88,16 +89,20 @@ class TestFullStoredName:
         result = await api_client.get_api_key_entry(TEST_ACCESS_TOKEN, PROJECT_KEY)
 
         assert result == entry
-        assert _paths(httpx_mock) == [f"/apikeys/{PROJECT_KEY}"]
+        assert _paths(httpx_mock) == ["/apikeys", f"/apikeys/{PROJECT_KEY}"]
         # The slashes must reach the server as path separators: percent-encoding them would make
         # the route miss the entry that list_api_keys just returned.
-        assert httpx_mock.get_requests()[0].url.raw_path == b"/apikeys/atlas054probe/.env/my_custom_key"
+        assert (
+            httpx_mock.get_requests()[-1].url.raw_path
+            == b"/apikeys/atlas054probe/.env/my_custom_key"
+        )
 
     @pytest.mark.asyncio
-    async def test_unscoped_name_is_looked_up_verbatim(
+    async def test_unscoped_name_resolves_to_the_stored_name(
         self, httpx_mock: HTTPXMock, session_file
     ):
         entry = _encrypted_entry()
+        _add_list(httpx_mock, ENV_KEY)
         httpx_mock.add_response(
             method="GET", url=f"{api_client.BASE_URL}/apikeys/{ENV_KEY}", json=entry
         )
@@ -105,7 +110,87 @@ class TestFullStoredName:
         result = await api_client.get_api_key_entry(TEST_ACCESS_TOKEN, ENV_KEY)
 
         assert result == entry
-        assert _paths(httpx_mock) == [f"/apikeys/{ENV_KEY}"]
+        assert _paths(httpx_mock) == ["/apikeys", f"/apikeys/{ENV_KEY}"]
+
+
+class TestStoredCasing:
+    """The store normalises every name on write (``strip().lower()`` in the backend), so the
+    caller's casing must not decide the request: any casing matches, and the STORED spelling is
+    what goes on the wire — asking the route for the caller's casing asks for a name that is
+    not stored.
+
+    This is issue #47's own repro: ``scan_and_protect`` reported
+    ``stored_as: atlas054probe/.env/MY_CUSTOM_KEY`` while ``list_api_keys`` returned
+    ``atlas054probe/.env/my_custom_key``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_uppercase_full_name_is_sent_as_the_stored_name(
+        self, httpx_mock: HTTPXMock, session_file
+    ):
+        entry = _encrypted_entry()
+        _add_list(httpx_mock, PROJECT_KEY)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=entry
+        )
+
+        result = await api_client.get_api_key_entry(
+            TEST_ACCESS_TOKEN, "ATLAS054PROBE/.ENV/MY_CUSTOM_KEY"
+        )
+
+        assert result == entry
+        assert _paths(httpx_mock) == ["/apikeys", f"/apikeys/{PROJECT_KEY}"]
+        assert (
+            httpx_mock.get_requests()[-1].url.raw_path
+            == b"/apikeys/atlas054probe/.env/my_custom_key"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mixed_case_unscoped_name_is_sent_as_the_stored_name(
+        self, httpx_mock: HTTPXMock, session_file
+    ):
+        entry = _encrypted_entry()
+        _add_list(httpx_mock, ENV_KEY)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/apikeys/{ENV_KEY}", json=entry
+        )
+
+        result = await api_client.get_api_key_entry(TEST_ACCESS_TOKEN, "ENV/.env/Telegram_Bot_Token")
+
+        assert result == entry
+        assert _paths(httpx_mock) == ["/apikeys", f"/apikeys/{ENV_KEY}"]
+
+    @pytest.mark.asyncio
+    async def test_uppercase_leaf_resolves_to_the_stored_name(
+        self, httpx_mock: HTTPXMock, session_file
+    ):
+        entry = _encrypted_entry()
+        _add_list(httpx_mock, PROJECT_KEY)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=entry
+        )
+
+        result = await api_client.get_api_key_entry(TEST_ACCESS_TOKEN, "MY_CUSTOM_KEY")
+
+        assert result == entry
+        assert _paths(httpx_mock) == ["/apikeys", f"/apikeys/{PROJECT_KEY}"]
+
+    @pytest.mark.asyncio
+    async def test_a_slashed_name_with_no_matching_stored_path_is_not_found(
+        self, httpx_mock: HTTPXMock, session_file
+    ):
+        """A slashed name claims a full path, so a leaf with the same ending must not satisfy it.
+
+        The alternative — falling back to the leaf — would silently read a DIFFERENT project's key.
+        """
+        _add_list(httpx_mock, PROJECT_KEY)
+
+        with pytest.raises(api_client.ApiKeyLookupError):
+            await api_client.get_api_key_entry(
+                TEST_ACCESS_TOKEN, "otherproject/.env/my_custom_key"
+            )
+
+        assert _paths(httpx_mock) == ["/apikeys"]
 
 
 class TestLeafResolution:
@@ -190,6 +275,7 @@ class TestToolsReadAScannedEntryBack:
         self, tmp_path, mock_tool_deps, httpx_mock: HTTPXMock
     ):
         env_file = tmp_path / ".env"
+        _add_list(httpx_mock, ENV_KEY)
         httpx_mock.add_response(
             method="GET", url=f"{api_client.BASE_URL}/apikeys/{ENV_KEY}", json=_encrypted_entry()
         )
@@ -228,9 +314,32 @@ class TestToolsReadAScannedEntryBack:
         assert "MY_CUSTOM_KEY=" + SECRET in env_file.read_text(encoding="utf-8")
 
     @pytest.mark.asyncio
+    async def test_export_key_to_env_file_accepts_the_issue_repro_casing(
+        self, tmp_path, mock_tool_deps, httpx_mock: HTTPXMock
+    ):
+        """Issue #47's repro verbatim: the scan reported the name in upper case."""
+        env_file = tmp_path / ".env"
+        _add_list(httpx_mock, PROJECT_KEY)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=_encrypted_entry()
+        )
+        httpx_mock.add_response(url=VERIFY_URL, status_code=200)
+
+        result = await tools.export_key_to_env_file(
+            key_name="atlas054probe/.env/MY_CUSTOM_KEY",
+            env_var_name="FOO",
+            env_path=str(env_file),
+            verify_url=VERIFY_URL,
+        )
+
+        assert result.get("success") is True, result
+        assert "FOO=" + SECRET in env_file.read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
     async def test_run_with_credential_accepts_the_full_name(
         self, mock_tool_deps, httpx_mock: HTTPXMock
     ):
+        _add_list(httpx_mock, PROJECT_KEY)
         httpx_mock.add_response(
             method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=_encrypted_entry()
         )
@@ -244,6 +353,26 @@ class TestToolsReadAScannedEntryBack:
 
         assert result["exit_code"] == 0, result
         assert SECRET not in result["stdout"]
+
+    @pytest.mark.asyncio
+    async def test_run_with_credential_accepts_the_issue_repro_casing(
+        self, mock_tool_deps, httpx_mock: HTTPXMock
+    ):
+        """The other half of the repro: run_with_credential('ATLAS054PROBE/.env/MY_CUSTOM_KEY')."""
+        _add_list(httpx_mock, PROJECT_KEY)
+        httpx_mock.add_response(
+            method="GET", url=f"{api_client.BASE_URL}/apikeys/{PROJECT_KEY}", json=_encrypted_entry()
+        )
+
+        result = await tools.run_with_credential(
+            site_name="ATLAS054PROBE/.env/MY_CUSTOM_KEY",
+            command=_echo("MY_CUSTOM_KEY"),
+            inject_as="env",
+            env_var_name="MY_CUSTOM_KEY",
+        )
+
+        assert result["exit_code"] == 0, result
+        assert "[REDACTED]" in result["stdout"]
 
     @pytest.mark.asyncio
     async def test_run_with_credential_resolves_a_leaf(
