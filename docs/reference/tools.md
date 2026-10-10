@@ -213,10 +213,19 @@ limits.
 `verify_api_key` all take a name and resolve it to exactly one stored API key before reading anything.
 Two spellings work.
 
+The vault **normalises every name on write** (stripped and lower-cased), so matching is
+case-insensitive and the **stored spelling** is what is sent: `atlas054probe/.env/MY_CUSTOM_KEY` and
+`atlas054probe/.env/my_custom_key` are the same lookup, and the request always carries
+`atlas054probe/.env/my_custom_key`. A key stored as `pypi` answers to `PYPI`.
+
 | Spelling | Example | How it is resolved |
 |---|---|---|
-| Full stored name | `atlas054probe/.env/my_custom_key` | Contains a slash, so it is treated as the exact name `list_api_keys` returned and sent unchanged. This is the shape `scan_and_protect` writes — `project/.env/KEY`, or `env/.env/KEY` when no `project_name` was given. |
+| Full stored name | `atlas054probe/.env/my_custom_key` | Contains a slash, so it must match a stored name whole (apart from case) and is sent with its slashes intact. This is the shape `scan_and_protect` writes — `project/.env/KEY`, or `env/.env/KEY` when no `project_name` was given — and the casing it *reports* can differ from the casing the vault *stored*. |
 | Leaf | `my_custom_key` | No slash, so it is matched against the key list on the **last** segment of each stored name. A key stored flat under its own name (`pypi`, `testpypi`) matches itself. |
+
+A slashed name is a claim about the whole path and gets **no** leaf fallback: `other/.env/my_custom_key`
+is `not found` even when `atlas054probe/.env/my_custom_key` exists, so a wrong project can never
+silently read another project's key.
 
 A leaf that matches **several** stored keys is an error, never a guess — and never a `not found`:
 
@@ -228,17 +237,18 @@ Pass the full stored name exactly as list_api_keys returns it.
 A name that matches nothing stays `not found`.
 
 **When to use which.** If you have the record from `list_api_keys`, pass its `name` field verbatim —
-that is always unambiguous and is one request. Pass the leaf only when you are typing the name by hand
-and it is unique in the vault; on `ambiguous`, re-run `list_api_keys` and pass the full name. `not
-found` from a leaf means no stored key ends in that segment, so `list_api_keys` is also how you tell a
-typo from a key that is genuinely absent.
+that is always unambiguous. Pass the leaf only when you are typing the name by hand and it is unique in
+the vault; on `ambiguous`, re-run `list_api_keys` and pass the full name. `not found` from a leaf means
+no stored key ends in that segment, so `list_api_keys` is also how you tell a typo from a key that is
+genuinely absent. Copying a name out of a `scan_and_protect` result works even when its casing differs
+from the stored one — that difference is expected, not a mistake.
 
 **Scope.** This is the API key store only. The site tools (`list_vault_sites`,
 `check_credential_exists`, `get_username_for_site`, `browser_login`) take a site name such as
 `github.com` and are unaffected — a vault site password is not an API key entry.
 
-**Cost.** A leaf lookup reads `GET /apikeys` first (that is what makes the ambiguity check possible),
-then reads the entry by its resolved name; a full stored name is a single read. Nothing is sent to the
+**Cost.** Every lookup reads `GET /apikeys` first — that read is what supplies the stored spelling and
+makes the ambiguity check possible — then reads the entry by its resolved name. Nothing is sent to the
 provider and no key value is returned by the resolution step.
 
 ---
