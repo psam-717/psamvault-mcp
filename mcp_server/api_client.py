@@ -166,45 +166,72 @@ def _leaf(name: str) -> str:
     return name.rsplit("/", 1)[-1]
 
 
+def _normalized(name: str) -> str:
+    """The store's own name normalisation — the backend strips and lowercases on write."""
+    return name.strip().lower()
+
+
+def _not_found(name: str) -> ApiKeyLookupError:
+    return ApiKeyLookupError(
+        f"API key entry '{name}' not found. "
+        "Run list_api_keys to see the exact stored names."
+    )
+
+
 async def resolve_api_key_name(access_token: str, name: str) -> str:
-    """Resolve a caller-supplied API key name to the exact stored name.
+    """Resolve a caller-supplied API key name to the exact STORED name.
 
     Two name shapes reach the API key tools:
 
     * a **full stored name** — what ``list_api_keys`` returns, e.g. ``project/.env/KEY`` or the
-      unscoped ``env/.env/KEY`` (the shape ``scan_and_protect`` writes). It contains a slash and
-      is passed through untouched: the backend route takes the whole string as one path
-      parameter, so the slashes must reach the server as separators. Percent-encoding them
-      (``%2F``) would send a name the route cannot match.
+      unscoped ``env/.env/KEY`` (the shape ``scan_and_protect`` writes).
     * a **bare leaf** — a key's name on its own, e.g. ``KEY`` or the flat name of a standalone
-      key such as ``pypi``. The stored name is the namespaced one, so a leaf is not addressable
-      directly. It is resolved against ``GET /apikeys``: an exact stored name wins, otherwise a
-      unique leaf match resolves to its stored name, several matches raise
-      :class:`AmbiguousApiKeyError`, and no match raises :class:`ApiKeyLookupError`.
+      key such as ``pypi``.
 
+    The store normalises every name on write (``strip().lower()`` in the backend's
+    ``api_key_crud``), so matching is case-insensitive and the **stored spelling** is what is
+    returned. The caller's casing is not a name the route has — asking for it 404s a key that
+    exists, which is issue #47's own repro: the scan reported
+    ``atlas054probe/.env/MY_CUSTOM_KEY`` while the entry is stored as
+    ``atlas054probe/.env/my_custom_key``.
+
+    Resolution reads ``GET /apikeys`` and:
+
+    * an exact, case-insensitive match on the whole stored name wins (a standalone key is
+      addressed by its own name);
+    * otherwise a bare leaf is matched on the last segment of each stored name — one match
+      resolves to its stored name, several raise :class:`AmbiguousApiKeyError`, none is
+      :class:`ApiKeyLookupError` (not found);
+    * a name containing a slash claims the full path and is deliberately NOT given the leaf
+      fallback, so a wrong project prefix cannot silently read another project's key.
+
+    The resolved name is sent as one path parameter with its slashes intact: the backend route
+    takes the whole string, so percent-encoding them (``%2F``) would send a name it cannot match.
     Resolution happens BEFORE any single-key GET, so an ambiguous leaf can never become a 404 on
     the leaf that reads like the key does not exist.
     """
-    if "/" in name:
-        return name
+    wanted = _normalized(name)
 
     entries = await list_api_key_entries(access_token)
     stored = [entry["name"] for entry in entries if entry.get("name")]
 
-    if name in stored:
-        # A standalone key is addressed by its own name.
-        return name
+    exact = [stored_name for stored_name in stored if _normalized(stored_name) == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AmbiguousApiKeyError(name, exact)
 
-    matches = [stored_name for stored_name in stored if _leaf(stored_name) == name]
+    if "/" in name:
+        # A slashed name claims a full path; only the exact match above may satisfy it.
+        raise _not_found(name)
+
+    matches = [stored_name for stored_name in stored if _normalized(_leaf(stored_name)) == wanted]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         raise AmbiguousApiKeyError(name, matches)
 
-    raise ApiKeyLookupError(
-        f"API key entry '{name}' not found. "
-        "Run list_api_keys to see the exact stored names."
-    )
+    raise _not_found(name)
 
 
 async def get_api_key_entry(access_token: str, name: str) -> dict:
