@@ -18,7 +18,9 @@
 
 - fix(scan): `scan_and_protect` skips `.env.bak-*`, `.env.old`, `.env.save`, and dated `.env.<digits>` copies so they are not stored as a second live key. `.env.local` and `.env.production` are still scanned
 - fix(session): a refresh that 401s because another client rotated the single-use token first now re-reads the keychain store and retries once with the newer token, instead of reporting the vault session as expired.
+- fix(api_client): an API key lookup now resolves the name `list_api_keys` returns — `project/.env/KEY` and the unscoped `env/.env/KEY` are sent as the whole path parameter, and a bare leaf is matched against the key list — so the entries `scan_and_protect` stores can be read back by `export_key_to_env_file`, `run_with_credential`, `use_credential`, `export_key_to_mcp_config` and `verify_api_key` instead of reporting them as not found. A leaf matching several stored keys now errors with the candidates rather than 404ing.
 
 ## Docs
 
 - docs(scan): the scan guide and the `scan_and_protect` tool page say backup env files are skipped
+- docs(tools): the tool reference explains how an API key name is resolved — the full stored name, a unique leaf, the ambiguous-leaf error, and which tools are unaffected
