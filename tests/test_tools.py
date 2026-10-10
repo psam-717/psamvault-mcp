@@ -28,6 +28,21 @@ def _echo(var: str) -> str:
     return f"echo %{var}%" if _os.name == "nt" else f'echo "${var}"'
 
 
+def _add_api_key_list(httpx_mock: HTTPXMock, *names: str) -> None:
+    """Serve ``GET /apikeys`` for a name lookup.
+
+    A bare key name is resolved against the list endpoint before the single-key GET (issue #47:
+    ``scan_and_protect`` stores ``project/.env/KEY``, so a leaf has to be resolved to the stored
+    name). Naming the key here makes the lookup an exact match, which keeps the single-key GET
+    that follows; passing nothing at all makes the lookup fail not-found and fall through to vault.
+    """
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{api_client.BASE_URL}/apikeys",
+        json={"entries": [{"name": name} for name in names]},
+    )
+
+
 # ── list_vault_sites ───────────────────────────────────────────────────────
 
 class TestListVaultSites:
@@ -386,6 +401,7 @@ class TestUseCredential:
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
         # Mock the API key lookup endpoint
+        _add_api_key_list(httpx_mock, "test-key")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/test-key",
@@ -417,6 +433,7 @@ class TestUseCredential:
         from conftest import encrypt_test_creds
 
         # Mock API key lookup to fail with 500
+        _add_api_key_list(httpx_mock, "test-site")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/test-site",
@@ -454,12 +471,8 @@ class TestUseCredential:
     @pytest.mark.asyncio
     async def test_neither_found(self, mock_tool_deps, httpx_mock: HTTPXMock):
         """Both API key and vault lookups fail, returns error."""
-        # Mock API key lookup to fail
-        httpx_mock.add_response(
-            method="GET",
-            url=f"{api_client.BASE_URL}/apikeys/missing-cred",
-            status_code=404,
-        )
+        # The name is not in the key list, so the API-key leg reports not-found.
+        _add_api_key_list(httpx_mock)
 
         # Mock vault lookup to fail
         httpx_mock.add_response(
@@ -496,6 +509,7 @@ class TestUseCredential:
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
         # Mock API key lookup
+        _add_api_key_list(httpx_mock, "my-api-key")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/my-api-key",
@@ -542,6 +556,7 @@ class TestUseCredential:
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
         # Mock API key lookup
+        _add_api_key_list(httpx_mock, "filter-key")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/filter-key",
@@ -601,6 +616,7 @@ class TestRunWithCredential:
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
         # Mock API key lookup
+        _add_api_key_list(httpx_mock, "testpypi")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/testpypi",
@@ -641,6 +657,7 @@ class TestRunWithCredential:
         ciphertext = aesgcm.encrypt(iv, payload_bytes, None)
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
+        _add_api_key_list(httpx_mock, "dockerhub")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/dockerhub",
@@ -665,11 +682,7 @@ class TestRunWithCredential:
     @pytest.mark.asyncio
     async def test_neither_found(self, mock_tool_deps, httpx_mock: HTTPXMock):
         """Both API key and vault lookups fail."""
-        httpx_mock.add_response(
-            method="GET",
-            url=f"{api_client.BASE_URL}/apikeys/missing",
-            status_code=404,
-        )
+        _add_api_key_list(httpx_mock)
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/vault/missing",
@@ -685,6 +698,7 @@ class TestRunWithCredential:
         """API key lookup fails, falls back to vault entry."""
         from conftest import encrypt_test_creds
 
+        _add_api_key_list(httpx_mock, "github.com")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/github.com",
@@ -731,6 +745,7 @@ class TestRunWithCredential:
         ciphertext = aesgcm.encrypt(iv, payload_bytes, None)
         blob_hex, iv_hex = ciphertext.hex(), iv.hex()
 
+        _add_api_key_list(httpx_mock, "some-key")
         httpx_mock.add_response(
             method="GET",
             url=f"{api_client.BASE_URL}/apikeys/some-key",

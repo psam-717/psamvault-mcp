@@ -139,15 +139,116 @@ async def list_api_key_entries(access_token: str) -> list[dict]:
     return result
 
 
+class ApiKeyLookupError(RuntimeError):
+    """A caller-supplied API key name did not resolve to one stored key."""
+
+
+class AmbiguousApiKeyError(ApiKeyLookupError):
+    """A bare name matches more than one stored key, so no single key may be chosen.
+
+    Raised instead of guessing (and instead of the ``404 No API key entry found`` that a
+    leaf-only lookup used to produce, which states the opposite of the truth).
+    ``candidates`` holds every stored name that matched, in list order.
+    """
+
+    def __init__(self, name: str, candidates: list[str]):
+        self.name = name
+        self.candidates = list(candidates)
+        joined = ", ".join(f"'{candidate}'" for candidate in self.candidates)
+        super().__init__(
+            f"API key name '{name}' is ambiguous — it matches {len(self.candidates)} stored "
+            f"keys: {joined}. Pass the full stored name exactly as list_api_keys returns it."
+        )
+
+
+def _leaf(name: str) -> str:
+    """The last '/'-separated segment of a stored name (the whole name when it is flat)."""
+    return name.rsplit("/", 1)[-1]
+
+
+def _normalized(name: str) -> str:
+    """The store's own name normalisation — the backend strips and lowercases on write."""
+    return name.strip().lower()
+
+
+def _not_found(name: str) -> ApiKeyLookupError:
+    return ApiKeyLookupError(
+        f"API key entry '{name}' not found. "
+        "Run list_api_keys to see the exact stored names."
+    )
+
+
+async def resolve_api_key_name(access_token: str, name: str) -> str:
+    """Resolve a caller-supplied API key name to the exact STORED name.
+
+    Two name shapes reach the API key tools:
+
+    * a **full stored name** — what ``list_api_keys`` returns, e.g. ``project/.env/KEY`` or the
+      unscoped ``env/.env/KEY`` (the shape ``scan_and_protect`` writes).
+    * a **bare leaf** — a key's name on its own, e.g. ``KEY`` or the flat name of a standalone
+      key such as ``pypi``.
+
+    The store normalises every name on write (``strip().lower()`` in the backend's
+    ``api_key_crud``), so matching is case-insensitive and the **stored spelling** is what is
+    returned. The caller's casing is not a name the route has — asking for it 404s a key that
+    exists, which is issue #47's own repro: the scan reported
+    ``atlas054probe/.env/MY_CUSTOM_KEY`` while the entry is stored as
+    ``atlas054probe/.env/my_custom_key``.
+
+    Resolution reads ``GET /apikeys`` and:
+
+    * an exact, case-insensitive match on the whole stored name wins (a standalone key is
+      addressed by its own name);
+    * otherwise a bare leaf is matched on the last segment of each stored name — one match
+      resolves to its stored name, several raise :class:`AmbiguousApiKeyError`, none is
+      :class:`ApiKeyLookupError` (not found);
+    * a name containing a slash claims the full path and is deliberately NOT given the leaf
+      fallback, so a wrong project prefix cannot silently read another project's key.
+
+    The resolved name is sent as one path parameter with its slashes intact: the backend route
+    takes the whole string, so percent-encoding them (``%2F``) would send a name it cannot match.
+    Resolution happens BEFORE any single-key GET, so an ambiguous leaf can never become a 404 on
+    the leaf that reads like the key does not exist.
+    """
+    wanted = _normalized(name)
+
+    entries = await list_api_key_entries(access_token)
+    stored = [entry["name"] for entry in entries if entry.get("name")]
+
+    exact = [stored_name for stored_name in stored if _normalized(stored_name) == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AmbiguousApiKeyError(name, exact)
+
+    if "/" in name:
+        # A slashed name claims a full path; only the exact match above may satisfy it.
+        raise _not_found(name)
+
+    matches = [stored_name for stored_name in stored if _normalized(_leaf(stored_name)) == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise AmbiguousApiKeyError(name, matches)
+
+    raise _not_found(name)
+
+
 async def get_api_key_entry(access_token: str, name: str) -> dict:
     """
     GET /apikeys/{name} — return the encrypted blob and iv for an API key.
     The MCP server decrypts this locally before using it.
+
+    ``name`` may be the exact stored name (as returned by ``list_api_keys``) or a bare leaf; it
+    is resolved first (see :func:`resolve_api_key_name`). The resolved name is sent as a single
+    path parameter with its slashes intact.
     """
+    resolved = await resolve_api_key_name(access_token, name)
+
     async def _call(token: str):
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{BASE_URL}/apikeys/{name}",
+                f"{BASE_URL}/apikeys/{resolved}",
                 headers=_auth_headers(token),
                 timeout=30.0,
             )

@@ -454,6 +454,10 @@ async def use_credential(
         try:
             encrypted_entry = await api_client.get_api_key_entry(access_token, site_name)
             entry_type = "api_key"
+        except api_client.AmbiguousApiKeyError as exc:
+            # A leaf that names several stored keys must not fall through to "not found" (nor be
+            # silently resolved to one of them): the caller has to pick the full stored name.
+            return {"error": str(exc)}
         except Exception:
             # Fall through to vault entries
             pass
@@ -769,6 +773,10 @@ async def run_with_credential(
         try:
             encrypted_entry = await api_client.get_api_key_entry(access_token, site_name)
             entry_type = "api_key"
+        except api_client.AmbiguousApiKeyError as exc:
+            # A leaf that names several stored keys must not fall through to "not found" (nor be
+            # silently resolved to one of them): the caller has to pick the full stored name.
+            return {"error": str(exc)}
         except Exception:
             pass
 
