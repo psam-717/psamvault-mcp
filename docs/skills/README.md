@@ -43,6 +43,41 @@ These are not skills — they are the surfaces the skills delegate depth to, eac
    the whole folder.
 4. Do not restate a procedure in another file. If it changed, the skill changed.
 
+## Keeping the installed copy and these pages in step
+
+Both copies are edit points: the **installed skill** (`HERMES_HOME/skills/psam-custom/psamvault-mcp/SKILL.md`)
+is what an agent loads on a machine, and it is edited there; these pages are what the repository and the
+documentation site publish, and they are edited here. Neither is generated from the other — they are
+**merged**, with `git merge-file` and a recorded base:
+
+```bash
+python scripts/sync-skill-docs.py --check     # in step? exit 1 if not (also fails on conflicts)
+python scripts/sync-skill-docs.py --pull      # this page's edits -> the installed skill
+python scripts/sync-skill-docs.py --publish   # the installed skill's edits -> these pages [--commit [--push]]
+python scripts/sync-skill-docs.py --init      # record the baseline commit (after committing pages)
+```
+
+Shared text lives between markers, one pair per section:
+
+```markdown
+<!-- section:usage/pitfalls -->
+…text kept in step with the installed skill…
+<!-- /section:usage/pitfalls -->
+```
+
+The section id names the page it belongs to, which is what lets the tool split one installed file across
+three pages. The heading line stays **outside** the markers, so this page may present a section
+differently from the installed skill without that registering as a difference — and anything else outside
+(the front matter, a "See also" list) is furniture that exists only here and is never touched.
+
+Rules worth knowing:
+
+- a section marked on **one** side only is local to that side and is never moved;
+- an unclosed marker, a duplicate id, or an id whose page does not match the file is an error, and nothing
+  is written;
+- two edits to the **same line** are a conflict: the tool writes nothing and prints both versions for a
+  human to choose. It never picks a winner.
+
 ## Not published here: release and publishing skills
 
 The skills for *cutting a release* — version bump, contract entry, TestPyPI/PyPI upload, GitHub release,
