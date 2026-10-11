@@ -14,6 +14,10 @@
   `type(scope): what changed and why it matters`.
 -->
 
+## Added
+
+- feat(sync): the installed skill and `docs/skills/` are kept in step by a three-way merge (`scripts/sync-skill-docs.py` — `--check`, `--init`, `--pull`, `--publish`), so either copy can be edited: a contributor's page edit reaches the installed skill, and an installed-skill edit becomes a docs change. Same-line disagreements are reported, never auto-resolved.
+
 ## Fixed
 
 - fix(scan): `scan_and_protect` skips `.env.bak-*`, `.env.old`, `.env.save`, and dated `.env.<digits>` copies so they are not stored as a second live key. `.env.local` and `.env.production` are still scanned
