@@ -5,7 +5,7 @@ are not a follow-up step: a release with stale docs is an unfinished release, an
 those docs as truth. This script makes the rule mechanical instead of aspirational.
 
 It checks, against the code's actual tool surface (`mcp_server.main.TOOL_DEFINITIONS`):
-  1. every tool the code exposes is documented in README / AGENTS / SKILL;
+  1. every tool the code exposes is documented in README / AGENTS / the tool reference;
   2. no doc table still names a tool the code no longer has (the failure a tool COUNT cannot catch);
   3. every "N tools" claim in the docs matches the real count;
   4. `mcp_server/compatibility.json`'s newest entry lists exactly the code's tools;
@@ -27,16 +27,26 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-# Surfaces that must name every tool.
-TOOL_DOCS = ("README.md", "AGENTS.md", "SKILL.md")
-# Everything scanned for stale names / counts.
-ALL_DOCS = TOOL_DOCS + (
+# Surfaces that must name every tool. The repository-root SKILL.md is deliberately NOT one of them: it is
+# an index into docs/skills/, while the catalogue of tools lives in the tool reference. It is still scanned
+# below for stale names and counts.
+TOOL_DOCS = ("README.md", "AGENTS.md", "docs/reference/tools.md")
+# Everything scanned for stale tool names / "N tools" claims. The tool reference is deliberately NOT in this
+# list: its tables are parameter tables, so their first cells are parameter names (`site_name`), not tools.
+# The other direction — a tool removed by a change while the docs still name it — is enforced by
+# docs-touch-check, which compares against the change that removes it.
+ALL_DOCS = (
+    "README.md",
+    "AGENTS.md",
+    "SKILL.md",
     "CLAUDE.md",
     "NEMOCLAW_COMPAT.md",
     "mcp_server/agent_guide.py",
     "mcp_server/prompts/general-rules.md",
     "docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md",
 )
+# Directories whose every page is scanned too, so a new skill page cannot escape the check.
+DOC_DIRS = ("docs/skills",)
 
 FIRST_CELL = re.compile(r"^\|\s*`([a-z][a-z0-9_]*)`", re.MULTILINE)
 COUNT_CLAIM = re.compile(r"\b(\d{1,3})\s+tools\b")
@@ -57,7 +67,13 @@ def code_tools() -> list[str]:
 def problems(repo: Path = REPO, tools: list[str] | None = None) -> list[str]:
     tools = sorted(tools if tools is not None else code_tools())
     found: list[str] = []
-    for rel in ALL_DOCS:
+    scanned = list(ALL_DOCS)
+    for directory in DOC_DIRS:
+        scanned += [
+            path.relative_to(repo).as_posix()
+            for path in sorted((repo / directory).glob("*.md"))
+        ]
+    for rel in dict.fromkeys(scanned):
         path = repo / rel
         if not path.is_file():
             continue
@@ -113,7 +129,7 @@ def main() -> int:
         print(f"docs are OUT OF SYNC with the code ({len(tools)} tools):")
         for line in found:
             print(f"  - {line}")
-        print("\nUpdate the docs before releasing (README, AGENTS, SKILL, agent prompts, docs/, CHANGELOG.md).")
+        print("\nUpdate the docs before releasing (README, AGENTS, the tool reference, agent prompts, docs/, CHANGELOG.md).")
         return 1
     print(f"docs in sync with the code ({len(tools)} tools)")
     return 0

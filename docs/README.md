@@ -34,10 +34,17 @@ New here? Read [Overview](overview.md), then [Installation](installation.md).
 - [MCP install & connect](troubleshooting/MCP-INSTALL-AND-CONNECT.md) — the agent playbook for PATH shadowing, corrupt pipx installs, absolute-path config, session reload, and per-host verification.
 - [PYTHONPATH conflict](troubleshooting/PYTHONPATH-CONFLICT.md) — `pydantic_core` / native-module import errors when another tool (e.g. Hermes) sets a global `PYTHONPATH`.
 
+## Skills
+
+- [Skills index](skills/README.md) — the agent-followable set: what each skill is for and when to load it. Release/publishing skills are deliberately excluded.
+- [Install](skills/install.md) — install the server into an MCP host and prove it works, end to end.
+- [Upgrade](skills/upgrade.md) — upgrade an existing install on Windows, macOS or Linux, and prove which version a new session actually gets.
+- [Use the tools](skills/usage.md) — which tool for which job, the workflows, and the rules that do not bend.
+
 ## Related documents outside this tree
 
 - [README.md](../README.md) — project readme: features, client setup examples, and the changelog / version-lockstep notes.
-- [SKILL.md](../SKILL.md) — the agent-facing usage skill. It is the pinned pair to the server's version; do not treat this tree as a replacement for it.
+- [SKILL.md](../SKILL.md) — the skill index. It routes a host or agent to the procedures in `docs/skills/`, which are the single source for them; release and publishing procedure is not published there.
 - [AGENTS.md](../AGENTS.md) — agent security rules and tool workflows.
 - [CLAUDE.md](../CLAUDE.md) — the same rules expressed for Claude-style agents.
 - [CONTRIBUTING.md](../CONTRIBUTING.md)

@@ -28,8 +28,15 @@ def _make_repo(tmp_path, readme: str, count: str = "3", contract_tools=None, age
     (tmp_path / "AGENTS.md").write_text(
         agents if agents is not None else "\n".join(f"- `{t}`" for t in TOOLS), encoding="utf-8"
     )
+    # The repository-root SKILL.md is an index: the tool catalogue lives in the reference page, so the
+    # fixture's SKILL.md is deliberately free of tool names (see test_the_index_skill_is_not_the_tool_catalogue).
     (tmp_path / "SKILL.md").write_text(
-        skill if skill is not None else "\n".join(f"- `{t}`" for t in TOOLS), encoding="utf-8"
+        skill if skill is not None else "# psamvault-mcp — skill index\n\n- [Use the tools](docs/skills/usage.md)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "reference").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "reference" / "tools.md").write_text(
+        "\n".join(f"- `{t}`" for t in TOOLS), encoding="utf-8"
     )
     if changelog is not False:
         (tmp_path / "CHANGELOG.md").write_text(
@@ -77,6 +84,18 @@ def test_undocumented_tool_is_caught(tmp_path):
     repo = _make_repo(tmp_path, "\n".join(f"| `{t}` | x |" for t in TOOLS[:-1]))
     found = docs_sync.problems(repo=repo, tools=TOOLS)
     assert any("does not document the tool" in f for f in found), found
+
+
+def test_the_index_skill_is_not_the_tool_catalogue(tmp_path):
+    """SKILL.md is an index now: it need not name every tool, but a stale name inside it is still caught."""
+    repo = _make_repo(tmp_path, "\n".join(f"| `{t}` | x |" for t in TOOLS))
+    assert docs_sync.problems(repo=repo, tools=TOOLS) == []
+
+    (repo / "SKILL.md").write_text(
+        "# index\n\n| `capture_stripe_credentials` | gone |\n", encoding="utf-8"
+    )
+    found = docs_sync.problems(repo=repo, tools=TOOLS)
+    assert any("capture_stripe_credentials" in f for f in found), found
 
 
 def test_contract_mismatch_is_caught(tmp_path):
