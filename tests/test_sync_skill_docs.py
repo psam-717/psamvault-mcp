@@ -190,6 +190,21 @@ def test_publish_brings_an_installed_edit_into_the_docs(tmp_path):
     assert "installed edit" in (repo / "docs" / "skills" / "usage.md").read_text(encoding="utf-8")
 
 
+def test_publish_commits_the_pages_on_their_own_branch(tmp_path):
+    """A publish must be its own PR, never a commit appended to whatever branch is checked out."""
+    repo, installed = _make_case(tmp_path)
+    _run(repo, installed, "--init")
+    installed.write_text(installed.read_text(encoding="utf-8").replace(
+        "body from docs", "body from docs, installed edit"), encoding="utf-8")
+    assert _run(repo, installed, "--publish", "--commit")[0] == 0
+    branches = subprocess.run(["git", "-C", str(repo), "branch", "--list", "sync/skill-docs-*"],
+                              capture_output=True, text=True).stdout
+    assert "sync/skill-docs-" in branches
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    assert head.startswith("sync/skill-docs-"), f"checked out {head}, expected the sync branch"
+
+
 def test_a_conflicting_edit_writes_nothing(tmp_path):
     repo, installed = _make_case(tmp_path)
     _run(repo, installed, "--init")
