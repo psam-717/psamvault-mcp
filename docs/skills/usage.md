@@ -16,6 +16,8 @@ what credentials exist.
 HTTP status, an exit code) — and **no secret appears in your output, your files, or the transcript**.
 
 ## What the server gives you
+<!-- section:usage/overview -->
+
 
 A zero-knowledge vault for agents: the credential is decrypted server-side and used where it is needed, so
 it never enters your context window. Three flows cover almost everything:
@@ -29,6 +31,13 @@ it never enters your context window. Three flows cover almost everything:
 **Never** read `~/.psamvault/` files, read the keychain, or ask the user to paste a credential instead.
 Those defeat the point, and the tools are the only supported path.
 
+<!-- /section:usage/overview -->
+## When to use this
+<!-- section:usage/when-to-use -->
+(synced from the installed skill)
+<!-- /section:usage/when-to-use -->
+
+
 ## Orientation — always first
 
 Neither of these needs credential access, so start here when you are unsure which tool to use:
@@ -39,6 +48,8 @@ Neither of these needs credential access, so start here when you are unsure whic
 | `search_vault_tools` | `query: str` | Which tool to use for a job (`""` returns the full list) |
 
 ## The tool catalogue
+<!-- section:usage/tools -->
+
 
 The authoritative catalogue — every parameter and every returned field — is
 [Tool reference](../reference/tools.md). The short form, by purpose:
@@ -67,6 +78,8 @@ The authoritative catalogue — every parameter and every returned field — is
 > **Invalid keys are never written.** A probe that can be attempted is always attempted, and a provider
 > rejecting the key blocks the write — `skip_verify=true` cannot override it. It covers only providers that
 > cannot be probed at all, and the result then records `verification: skipped`.
+
+<!-- /section:usage/tools -->
 
 ## Workflows
 <!-- section:usage/workflows -->
@@ -220,6 +233,8 @@ Notes:
 
 <!-- /section:usage/workflows -->
 ## The rules that do not bend
+<!-- section:usage/security-rules -->
+
 
 | Rule | Why |
 |---|---|
@@ -229,6 +244,8 @@ Notes:
 | Prefer `fields` on large responses | Fewer tokens, less data, nothing sensitive echoed |
 | Relay the `message` field verbatim | It contains the instructions the user needs |
 | Classify every call before making it | Read-only and verification are always safe; exports get `dry_run` or a throwaway path; `browser_login` uses a real account, so confirm first; nothing irreversible without approval |
+
+<!-- /section:usage/security-rules -->
 
 ## Common pitfalls
 <!-- section:usage/pitfalls -->
@@ -280,6 +297,16 @@ Tell users they can say things like:
 - [ ] `use_credential` makes authenticated HTTP calls successfully
 - [ ] `run_with_credential` runs CLI commands with credential injection
 <!-- /section:usage/verification -->
+## Architecture notes
+<!-- section:usage/architecture -->
+(synced from the installed skill)
+<!-- /section:usage/architecture -->
+
+## Related projects
+<!-- section:usage/related -->
+(synced from the installed skill)
+<!-- /section:usage/related -->
+
 ## See also
 
 - [Tool reference](../reference/tools.md) — the full catalogue.
