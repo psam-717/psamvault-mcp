@@ -17,6 +17,15 @@ Claude Code, Cursor, Cline, Goose, Grok Build, or any stdio MCP client — for t
    `compatibility` block.
 4. `list_vault_sites` returns a list — which is also the proof that a vault session exists.
 
+## Transport — stdio only
+
+The server speaks MCP over **stdio**: the host spawns the process and exchanges JSON-RPC over
+stdin/stdout. That is the only transport the package implements.
+
+> An HTTP/SSE mode (`psamvault-mcp --http --port 8433`, endpoint `/sse`) has been documented in the past as
+> a way to connect. **It does not exist** — the entry point defines no such flags and nothing in the
+> package serves HTTP, so pointing a host at that URL fails to connect.
+
 ## Step 0 — preconditions
 
 | Need | How to confirm | If missing |
