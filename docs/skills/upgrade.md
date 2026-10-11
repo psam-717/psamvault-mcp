@@ -158,6 +158,7 @@ Then open a **new** agent session and call `get_version` — the only check that
 will actually be served.
 
 ## Version lockstep — what the pairing means
+<!-- section:upgrade/version-lockstep -->
 
 `mcp_server/compatibility.json` ships inside the wheel and records, for every MCP release, the usage-skill
 version and the expected tool fingerprint. `compat --check` compares the **installed** skill against that
@@ -174,6 +175,7 @@ record.
 - **The installed server is authoritative.** Pull the skill to match it — never the reverse.
 - On Windows the shim is `psamvault-mcp.exe`.
 
+<!-- /section:upgrade/version-lockstep -->
 ## Traps
 
 | Trap | Reality |

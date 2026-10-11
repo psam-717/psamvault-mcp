@@ -69,6 +69,7 @@ The authoritative catalogue — every parameter and every returned field — is
 > cannot be probed at all, and the result then records `verification: skipped`.
 
 ## Workflows
+<!-- section:usage/workflows -->
 
 ### 1. Log me into a site
 
@@ -116,6 +117,7 @@ prove it was present, print a length or a 4-character prefix — **never the val
 `list_vault_sites()` for sites (optionally `get_username_for_site` to show usernames) and `list_api_keys()`
 for keys, presented as a clean list. Both return names only.
 
+<!-- /section:usage/workflows -->
 ## The rules that do not bend
 
 | Rule | Why |
@@ -128,6 +130,7 @@ for keys, presented as a clean list. Both return names only.
 | Classify every call before making it | Read-only and verification are always safe; exports get `dry_run` or a throwaway path; `browser_login` uses a real account, so confirm first; nothing irreversible without approval |
 
 ## Common pitfalls
+<!-- section:usage/pitfalls -->
 
 1. **Assuming a tool exists.** Call `search_vault_tools("")` first.
 2. **Ignoring `captcha_detected`.** The browser is paused; the user must solve it.
@@ -144,13 +147,17 @@ for keys, presented as a clean list. Both return names only.
    a config edit, a wrong binary on PATH: see [Install](./install.md) and
    [MCP install & connect](../troubleshooting/MCP-INSTALL-AND-CONNECT.md).
 
+<!-- /section:usage/pitfalls -->
 ## Prompts you can suggest to the user
+<!-- section:usage/agent-prompts -->
 
 "What credentials do I have stored?" · "Log me into github.com" · "Check my GitHub profile info" · "Get my
 top 10 starred repositories" · "Protect the secrets in my project directory" · "Check if I have a
 credential for z.ai" · "What's my username for Kaggle?"
 
+<!-- /section:usage/agent-prompts -->
 ## Verification checklist
+<!-- section:usage/verification -->
 
 - [ ] `get_version()` returns a version
 - [ ] `search_vault_tools("")` returns the tool list
@@ -159,6 +166,7 @@ credential for z.ai" · "What's my username for Kaggle?"
 - [ ] `use_credential` completes an authenticated HTTP call
 - [ ] no secret appeared anywhere in your output
 
+<!-- /section:usage/verification -->
 ## See also
 
 - [Tool reference](../reference/tools.md) — the full catalogue.

@@ -27,6 +27,7 @@ stdin/stdout. That is the only transport the package implements.
 > package serves HTTP, so pointing a host at that URL fails to connect.
 
 ## Step 0 — preconditions
+<!-- section:install/prerequisites -->
 
 | Need | How to confirm | If missing |
 |---|---|---|
@@ -37,6 +38,7 @@ stdin/stdout. That is the only transport the package implements.
 
 An expired session is not an install failure: the fix is `psamvault login` run by the user in a terminal.
 
+<!-- /section:install/prerequisites -->
 ## Step 1 — install the server
 
 Prefer **pipx**: it isolates the dependency set and puts the entry point in your user bin.
