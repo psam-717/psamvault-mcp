@@ -157,6 +157,23 @@ psamvault-mcp --version         # must print a version and exit cleanly, no trac
 Then open a **new** agent session and call `get_version` — the only check that reflects what the user
 will actually be served.
 
+## Version lockstep — what the pairing means
+
+`mcp_server/compatibility.json` ships inside the wheel and records, for every MCP release, the usage-skill
+version and the expected tool fingerprint. `compat --check` compares the **installed** skill against that
+record.
+
+- The recorded skill version is a **floor, not a pin**: a skill *ahead* of it is healthy, and only a skill
+  *below* it is drift. `compat --apply` on a breaking target needs `--allow-breaking`; `--from-git` installs
+  the local checkout instead of the index, and `--from-git --pull` stashes uncommitted work, pulls
+  `--ff-only origin main`, then restores it.
+- `compat --apply` snapshots the installed skill, smoke-tests the fresh install in a new interpreter from a
+  **neutral cwd**, and rolls back to the previous release if the install or the smoke test fails.
+- A skill-only improvement ships with `compat --sync-skill` (the clone's working tree, as-is) with no MCP
+  release at all.
+- **The installed server is authoritative.** Pull the skill to match it — never the reverse.
+- On Windows the shim is `psamvault-mcp.exe`.
+
 ## Traps
 
 | Trap | Reality |
