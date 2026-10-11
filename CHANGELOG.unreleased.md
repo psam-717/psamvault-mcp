@@ -24,4 +24,4 @@
 
 - docs(scan): the scan guide and the `scan_and_protect` tool page say backup env files are skipped
 - docs(tools): the tool reference explains how an API key name is resolved — the full stored name, a unique leaf, case-insensitive matching, the ambiguous-leaf error, and which tools are unaffected
-- docs(skills): a new `docs/skills/` folder carries agent-followable procedures — install into a host, upgrade safely on Windows/macOS/Linux, and route a credential task — so an agent can be handed the repo as its guide. Release and publishing procedures are excluded.
+- docs(skills): `docs/skills/` is now the single source for the agent-followable procedures (install, upgrade, use-the-tools) and the repository-root `SKILL.md` is an index into it, so a procedure is updated in one place instead of two. The docs-sync gate's "every tool is documented" rule now reads `docs/reference/tools.md`. Release and publishing procedures stay excluded.
