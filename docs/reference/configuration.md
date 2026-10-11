@@ -217,8 +217,8 @@ The server and its usage skill are a **pinned pair**, and the pairing ships *ins
 | `notes` | A one-line summary of the release. |
 | `tools` | The release's tool **fingerprint** — the sorted list of tool names. |
 
-The newest entry in the contract is **0.5.4** (skill floor 1.9.1, **not** breaking — fixes and
-documentation only, with the 13 MCP tools and their names unchanged). Older entries are kept, so an
+The newest entry in the contract is **0.5.5** (skill floor 1.9.1, **not** breaking — fixes, documentation and
+a repository tool, with the 13 MCP tools and their names unchanged). Older entries are kept, so an
 install can be told what it is missing without reaching the network. The contract's own schema, skill repo/path, and
 `installed_path` (`skills/psam-custom/psamvault-mcp/SKILL.md` under `HERMES_HOME`) head the file.
 

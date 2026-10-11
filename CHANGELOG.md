@@ -9,6 +9,25 @@ contract calls newest, so the two cannot silently drift apart.
 
 Releases up to and including 0.4.6 predate this file — see the [GitHub releases](https://github.com/psam-717/psamvault-mcp/releases).
 
+## 0.5.5 — 2026-10-11
+
+### Added
+
+- `feat(sync): keep the installed skill and the published pages in step` — `scripts/sync-skill-docs.py` three-way merges the two copies (`git merge-file`; base = the repo commit both sides last agreed on), so either one can be edited: a contributor's `docs/skills/` edit reaches the installed skill (`--pull`), and an edit to the installed skill becomes a docs change (`--publish`). Same-line disagreements are reported to a human and never auto-resolved; `--check` exits 1 on any drift, so the two cannot silently diverge.
+- `feat(sync): regenerate the distribution copy of the skill` — `--publish` also writes `private-skills/psamvault-mcp/SKILL.md` from the installed skill, so the copy `compat --sync-skill` installs from can no longer be stale while claiming the same version. It sat two sections behind (a thinner `Prerequisites` and `Verification Checklist`) at the same `1.9.1`.
+
+### Fixed
+
+- `fix(scan): a backup .env is no longer stored as a second live key` — `scan_and_protect` skips `.env.bak-*`, `.env.old`, `.env.save`, and dated `.env.<digits>` copies. `.env.local` and `.env.production` are still scanned.
+- `fix(session): recover from a refresh-token rotation race` — a refresh that 401s because another client rotated the single-use token first now re-reads the keychain store and retries once with the newer token, instead of reporting the vault session as expired.
+- `fix(api_client): read back the entries scan_and_protect stores` — an API key lookup now resolves the name `list_api_keys` returns: `project/.env/KEY` and the unscoped `env/.env/KEY` are sent as the whole path parameter, and a bare leaf is matched against the key list — so the entries the scan stores can be used by `export_key_to_env_file`, `run_with_credential`, `use_credential`, `export_key_to_mcp_config` and `verify_api_key` instead of being reported as not found. A leaf matching several stored keys now errors with the candidates rather than 404ing. Matching is case-insensitive, because the vault strips and lower-cases every name on write: the stored spelling, not the caller's casing, is what is sent.
+
+### Docs
+
+- `docs(scan): the scan guide and the scan_and_protect tool page say backup env files are skipped`
+- `docs(tools): the tool reference explains how an API key name is resolved` — the full stored name, a unique leaf, case-insensitive matching, the ambiguous-leaf error, and which tools are unaffected.
+- `docs(skills): the agent-followable procedures now live in docs/skills/ and the repository-root SKILL.md is an index into it` — a procedure is updated in one place instead of two, and the pages carry section markers so they can be merged with the installed copy. The docs-sync gate's "every tool is documented" rule now reads `docs/reference/tools.md`.
+
 ## 0.5.4 — 2026-09-26
 
 ### Fixed

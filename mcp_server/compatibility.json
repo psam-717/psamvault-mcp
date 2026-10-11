@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-26",
+  "updated": "2026-10-11",
   "skill": {
     "name": "psamvault-mcp",
     "repo": "psam-717/private-skills",
@@ -8,6 +8,29 @@
     "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
   },
   "releases": [
+    {
+      "mcp": "0.5.5",
+      "skill": "1.9.1",
+      "breaking": false,
+      "added": [],
+      "removed": [],
+      "notes": "Fixes, documentation, and a maintainer tool — the 13 tools and their names are unchanged. `scan_and_protect` no longer stores `.env` backup copies (`.env.bak-*`, `.env.old`, `.env.save`, dated `.env.<digits>`) as second live keys; a refresh that loses a rotation race no longer reports the vault session as expired; and an API key name is resolved the way `list_api_keys` returns it — full stored name, unique leaf, case-insensitive — so the entries the scan stores can finally be read back, with an ambiguous leaf listing candidates instead of 404ing. New in the repository: `scripts/sync-skill-docs.py`, which keeps the installed skill, the docs pages and the distribution copy in step by three-way merge (`--check`, `--init`, `--pull`, `--publish`). The skill floor stays 1.9.1: the usage skill's text is unchanged by this release.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
     {
       "mcp": "0.5.4",
       "skill": "1.9.1",
