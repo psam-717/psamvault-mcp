@@ -267,15 +267,24 @@ def cmd_check(repo: Path, installed: Path, state: dict) -> int:
               f"docs-only {len(docs_only)}, installed-only {len(installed_only)}"
               + (f" — {', '.join(docs_only + installed_only)}" if docs_only or installed_only else ""))
     pending = len(shared) - merged_same
+    mirror, status = mirror_status(state, installed)
+    if mirror is not None:
+        print(f"  mirror          : {mirror} — {status}")
     if pending:
         print(f"\n  {pending} section(s) not in step — run --pull (docs -> installed) "
               "or --publish (installed -> docs)")
+        return 1
+    if status == "stale":
+        print("\n  the distribution mirror is stale — run --publish to regenerate it from the installed skill")
+        return 1
+    if status == "missing":
+        print(f"\n  the mirror file recorded in the state is missing: {mirror}")
         return 1
     print("\n  ✓ in step")
     return 0
 
 
-def cmd_init(repo: Path, installed: Path) -> int:
+def cmd_init(repo: Path, installed: Path, mirror: Path | None = None) -> int:
     docs, local, _, docs_only, installed_only, shared = plan(repo, installed, {})
     commit = head_commit(repo)
     # The baseline has to be readable from git, so an uncommitted edit to a docs page can never become
@@ -295,6 +304,7 @@ def cmd_init(repo: Path, installed: Path) -> int:
         print(f"  differ at baseline: {len(differing)} — {', '.join(differing)}")
         print("  (recorded as-is: the next --pull/--publish merges from here)")
     save_state(installed, {"repo": "psam-717/psamvault-mcp", "commit": commit,
+                           "mirror": str(mirror) if mirror else load_state(installed).get("mirror"),
                            "synced_utc": _utc()})
     print(f"  state written   : {state_path(installed)}")
     return 0
@@ -337,7 +347,10 @@ def _run_sync(direction: str, repo: Path, installed: Path, state: dict, dry_run:
             print(f"\n  ── {section_id} ── mine ─\n{_indent(mine[section_id])}")
             print(f"  ── {section_id} ── theirs ─\n{_indent(theirs[section_id])}")
         return 1
-    if not changed:
+    mirror, status = mirror_status(state, installed)
+    mirror_pending = (not mine_is_installed) and mirror is not None and status != "in step"
+
+    if not changed and not mirror_pending:
         print("  already in step — nothing to write")
         return 0
     if dry_run:
@@ -360,10 +373,15 @@ def _run_sync(direction: str, repo: Path, installed: Path, state: dict, dry_run:
         path.write_text(splice(path.read_text(encoding="utf-8"), {section_id: merged[section_id]}),
                         encoding="utf-8")
         print(f"  written         : {path}  ({section_id})")
-    if commit:
+    if commit and changed:
         _commit_docs(repo, push)
-    else:
+    elif changed:
         print("  next            : review the diff, then --commit [--push], or do it by hand")
+    if mirror is not None and status != "in step":
+        write_mirror(mirror, installed)
+        print(f"  mirror written  : {mirror}  (was {status})")
+        if commit:
+            _commit_mirror(mirror, push)
     _advance_baseline(repo, installed, state)
     return 0
 
@@ -404,6 +422,66 @@ def _branch(repo: Path) -> str:
     return proc.stdout.strip()
 
 
+def _stamp() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def same_text(a: str, b: str) -> bool:
+    """Compare ignoring line-ending style — a Windows checkout and a repo blob differ by CRLF alone."""
+    return a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
+
+
+def mirror_status(state: dict, installed: Path) -> tuple[Path | None, str]:
+    """``(path, 'unset' | 'missing' | 'stale' | 'in step')`` for the distribution mirror."""
+    raw = state.get("mirror")
+    if not raw:
+        return None, "unset"
+    path = Path(raw)
+    if not path.is_file():
+        return path, "missing"
+    if same_text(path.read_text(encoding="utf-8"), installed.read_text(encoding="utf-8")):
+        return path, "in step"
+    return path, "stale"
+
+
+def write_mirror(path: Path, installed: Path) -> None:
+    """The mirror is a full copy of the installed skill — markers and all — so nothing is lost."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(installed.read_text(encoding="utf-8").replace("\r\n", "\n"),
+                    encoding="utf-8", newline="")
+
+
+def _repo_root(path: Path) -> Path | None:
+    for candidate in (path.parent, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _commit_mirror(path: Path, push: bool) -> None:
+    root = _repo_root(path)
+    if root is None:
+        print(f"  mirror commit   : skipped — {path} is not inside a git checkout")
+        return
+    rel = path.relative_to(root).as_posix()
+    branch = f"sync/skill-mirror-{_stamp()}"
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", branch], check=True)
+    subprocess.run(["git", "-C", str(root), "add", rel], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m",
+                    "chore(skill): mirror the installed psamvault-mcp skill"], check=True)
+    print(f"  mirror committed: {branch} in {root.name}")
+    if push:
+        subprocess.run(["git", "-C", str(root), "push", "-u", "origin", branch], check=True)
+        print(f"  mirror pushed   : origin {branch}")
+
+
+def find_mirror(repo: Path) -> Path | None:
+    """The distribution clone that ships the skill sits beside this checkout in the usual layout."""
+    candidate = repo.parent / "private-skills" / "psamvault-mcp" / "SKILL.md"
+    return candidate if candidate.is_file() else None
+
+
 def _indent(text: str) -> str:
     return "\n".join("    " + line for line in text.splitlines())
 
@@ -435,13 +513,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="with --pull/--publish: show, write nothing")
     parser.add_argument("--commit", action="store_true", help="with --publish: commit the docs changes")
     parser.add_argument("--push", action="store_true", help="with --publish --commit: push the branch")
+    parser.add_argument("--mirror", type=Path,
+                        help="the distribution copy of the skill (default: a sibling private-skills clone)")
     args = parser.parse_args(argv)
 
     try:
         installed = args.installed or find_installed()
         state = load_state(installed)
         if args.init:
-            return cmd_init(args.repo, installed)
+            return cmd_init(args.repo, installed, args.mirror or find_mirror(args.repo))
         if args.pull or args.publish:
             return _run_sync("pull" if args.pull else "publish", args.repo, installed, state,
                              args.dry_run, commit=args.commit, push=args.push)
