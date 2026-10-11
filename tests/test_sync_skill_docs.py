@@ -62,6 +62,9 @@ def _make_case(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     _git(repo, "init", "-q")
+    # The tool commits with the machine's own git identity, so a test repo needs one (CI runners have none).
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test Runner")
     _commit(repo, "init")
     return repo, installed
 
