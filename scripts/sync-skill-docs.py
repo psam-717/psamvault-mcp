@@ -246,9 +246,9 @@ def cmd_check(repo: Path, installed: Path, state: dict) -> int:
         if local[section_id] == docs[section_id]:
             merged_same += 1
         elif clean and merged.strip() == local[section_id].strip():
-            print(f"  · {section_id}: docs side has changes to pull")
-        elif clean and merged.strip() == docs[section_id].strip():
             print(f"  · {section_id}: installed side has changes to publish")
+        elif clean and merged.strip() == docs[section_id].strip():
+            print(f"  · {section_id}: docs side has changes to pull")
         elif clean:
             print(f"  · {section_id}: both sides changed — merges cleanly")
         else:
@@ -263,7 +263,15 @@ def cmd_check(repo: Path, installed: Path, state: dict) -> int:
         print(f"\n  {len(problems)} conflict(s) — nothing is written until they are resolved by hand.")
         return 1
     if docs_only or installed_only:
-        print("\n  Sections outside the shared set are local to their side and are never moved.")
+        print("  local to one side: "
+              f"docs-only {len(docs_only)}, installed-only {len(installed_only)}"
+              + (f" — {', '.join(docs_only + installed_only)}" if docs_only or installed_only else ""))
+    pending = len(shared) - merged_same
+    if pending:
+        print(f"\n  {pending} section(s) not in step — run --pull (docs -> installed) "
+              "or --publish (installed -> docs)")
+        return 1
+    print("\n  ✓ in step")
     return 0
 
 
@@ -297,7 +305,8 @@ def _utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _run_sync(direction: str, repo: Path, installed: Path, state: dict, dry_run: bool) -> int:
+def _run_sync(direction: str, repo: Path, installed: Path, state: dict, dry_run: bool,
+              commit: bool = False, push: bool = False) -> int:
     docs, local, base, docs_only, installed_only, shared = plan(repo, installed, state)
     if not state.get("commit"):
         raise SyncError("no baseline recorded — run --init first")
@@ -342,16 +351,57 @@ def _run_sync(direction: str, repo: Path, installed: Path, state: dict, dry_run:
         print(f"  written         : {target}")
         if docs_only:
             print(f"  note            : docs-only sections were not touched: {', '.join(docs_only)}")
+        _advance_baseline(repo, installed, state)
+        return 0
+
+    for section_id in changed:
+        page = section_id.split("/", 1)[0]
+        path = repo.joinpath(*DOCS_DIR, f"{page}.md")
+        path.write_text(splice(path.read_text(encoding="utf-8"), {section_id: merged[section_id]}),
+                        encoding="utf-8")
+        print(f"  written         : {path}  ({section_id})")
+    if commit:
+        _commit_docs(repo, push)
     else:
-        for section_id in changed:
-            page = section_id.split("/", 1)[0]
-            path = repo.joinpath(*DOCS_DIR, f"{page}.md")
-            path.write_text(splice(path.read_text(encoding="utf-8"), {section_id: merged[section_id]}),
-                            encoding="utf-8")
-            print(f"  written         : {path}  ({section_id})")
-        print("  next            : review the diff, then commit on a branch and open a PR")
-    save_state(installed, {**state, "commit": head_commit(repo), "synced_utc": _utc()})
+        print("  next            : review the diff, then --commit [--push], or do it by hand")
+    _advance_baseline(repo, installed, state)
     return 0
+
+
+def _docs_dirty(repo: Path) -> bool:
+    proc = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", "docs/skills"],
+                          capture_output=True, text=True)
+    return bool(proc.stdout.strip())
+
+
+def _advance_baseline(repo: Path, installed: Path, state: dict) -> None:
+    """Move the baseline only to a commit that actually contains the current docs content.
+
+    Advancing while docs/skills is dirty would record a base nobody ever had, and the next merge would
+    read that difference as an edit.
+    """
+    if _docs_dirty(repo):
+        print("  baseline        : NOT advanced — docs/skills has uncommitted changes; commit, then --init")
+        return
+    commit = head_commit(repo)
+    save_state(installed, {**state, "commit": commit, "synced_utc": _utc()})
+    print(f"  baseline        : advanced to {commit}")
+
+
+def _commit_docs(repo: Path, push: bool) -> None:
+    subprocess.run(["git", "-C", str(repo), "add", "docs/skills"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m",
+                    "docs(skills): sync the shared sections from the installed skill"], check=True)
+    print(f"  committed       : {head_commit(repo)}")
+    if push:
+        subprocess.run(["git", "-C", str(repo), "push"], check=True)
+        print(f"  pushed          : {_branch(repo)}")
+
+
+def _branch(repo: Path) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True)
+    return proc.stdout.strip()
 
 
 def _indent(text: str) -> str:
@@ -383,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--pull", action="store_true", help="docs -> installed")
     group.add_argument("--publish", action="store_true", help="installed -> docs")
     parser.add_argument("--dry-run", action="store_true", help="with --pull/--publish: show, write nothing")
+    parser.add_argument("--commit", action="store_true", help="with --publish: commit the docs changes")
+    parser.add_argument("--push", action="store_true", help="with --publish --commit: push the branch")
     args = parser.parse_args(argv)
 
     try:
@@ -391,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.init:
             return cmd_init(args.repo, installed)
         if args.pull or args.publish:
-            return _run_sync("pull" if args.pull else "publish", args.repo, installed, state, args.dry_run)
+            return _run_sync("pull" if args.pull else "publish", args.repo, installed, state,
+                             args.dry_run, commit=args.commit, push=args.push)
         return cmd_check(args.repo, installed, state)
     except SyncError as exc:
         print(f"sync-skill-docs: {exc}", file=sys.stderr)
