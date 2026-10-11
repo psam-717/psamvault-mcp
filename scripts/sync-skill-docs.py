@@ -407,13 +407,16 @@ def _advance_baseline(repo: Path, installed: Path, state: dict) -> None:
 
 
 def _commit_docs(repo: Path, push: bool) -> None:
+    """Commit the published pages on their own branch, so a publish is always its own PR."""
+    branch = f"sync/skill-docs-{_stamp()}"
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", branch], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "docs/skills"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m",
                     "docs(skills): sync the shared sections from the installed skill"], check=True)
-    print(f"  committed       : {head_commit(repo)}")
+    print(f"  committed       : {head_commit(repo)} on {branch}")
     if push:
-        subprocess.run(["git", "-C", str(repo), "push"], check=True)
-        print(f"  pushed          : {_branch(repo)}")
+        subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", branch], check=True)
+        print(f"  pushed          : origin {branch}")
 
 
 def _branch(repo: Path) -> str:
