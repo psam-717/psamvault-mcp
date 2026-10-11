@@ -29,14 +29,65 @@ stdin/stdout. That is the only transport the package implements.
 ## Step 0 — preconditions
 <!-- section:install/prerequisites -->
 
-| Need | How to confirm | If missing |
-|---|---|---|
-| Python ≥ 3.11 | `python --version` | install Python, then re-run |
-| The psamvault CLI | `psamvault --version` | `pipx install psamvault` |
-| A configured, logged-in vault | `psamvault login` | `psamvault configure` first — **the user must run `login` themselves**; an agent cannot supply the password |
-| Chromium (only for `browser_login`) | — | `playwright install chromium` |
+The MCP server must be running and connected. Hermes connects via **stdio transport** (configured in `config.yaml`):
 
-An expired session is not an install failure: the fix is `psamvault login` run by the user in a terminal.
+### Setup (for Hermes)
+
+The Hermes config already has this entry — it's active:
+
+```yaml
+mcp_servers:
+  psamvault:
+    command: psamvault-mcp
+    enabled: true
+    env:
+      PYTHONPATH: ""
+```
+
+No manual start needed — Hermes manages the process lifecycle.
+
+### Proving the lane is live
+
+Answer "are you connected to psamvault-mcp?" by **calling the server**, never by reading `config.yaml` or
+your own notes:
+
+1. `get_version()` — installed version plus the pairing (`tool_surface_matches_newest`, `expected_tool_count`,
+   `breaking_pending`, `paired_skill_version`).
+2. One read-only list call — `list_vault_sites()` or `list_api_keys()` — which proves the round trip
+   end-to-end, not merely that a process exists.
+
+- **An `enabled: true` config entry is a statement of intent, not a live connection.** MCP tools load in
+  **new sessions only**, so an entry added this session is not visible yet, and a config entry by itself is
+  no evidence that a server answered.
+- **Quote the version from `get_version`, never from memory or this file.** The installed server is
+  routinely ahead of both; report what it returns, and if the surface it reports is not the surface this file
+  documents, trust the server (see "Version lockstep").
+- When psam asks this as a lead-in to work he wants done next, pair the answer with the MCP's own backlog —
+  the open PRs and issues against `psam-717/psamvault-mcp` and `psam-717/psamvault-cli` — so "yes, connected"
+  arrives with the state of what is outstanding on it.
+
+### Installation
+
+```bash
+pipx install psamvault-mcp
+playwright install chromium
+```
+
+The user must also have the psamvault CLI installed and logged in:
+
+```bash
+pipx install psamvault
+psamvault configure
+psamvault login
+```
+
+### HTTP/SSE alternative (for non-Hermes clients)
+
+For clients that don't support stdio MCP transport:
+
+```bash
+psamvault-mcp --http --port 8433
+```
 
 <!-- /section:install/prerequisites -->
 ## Step 1 — install the server

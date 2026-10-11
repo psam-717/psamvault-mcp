@@ -160,20 +160,59 @@ will actually be served.
 ## Version lockstep — what the pairing means
 <!-- section:upgrade/version-lockstep -->
 
-`mcp_server/compatibility.json` ships inside the wheel and records, for every MCP release, the usage-skill
-version and the expected tool fingerprint. `compat --check` compares the **installed** skill against that
-record.
+This skill and the server are a **pair with a floor, not a pin**. The contract ships inside the wheel as
+`mcp_server/compatibility.json` and maps each MCP release to the **minimum** skill version that documents
+it. Any skill at or above that floor is healthy — the skill may legitimately move *ahead* of the MCP
+(an improved description of an existing tool is a skill-only update), while a skill that has fallen
+*below* the floor is drift.
 
-- The recorded skill version is a **floor, not a pin**: a skill *ahead* of it is healthy, and only a skill
-  *below* it is drift. `compat --apply` on a breaking target needs `--allow-breaking`; `--from-git` installs
-  the local checkout instead of the index, and `--from-git --pull` stashes uncommitted work, pulls
-  `--ff-only origin main`, then restores it.
-- `compat --apply` snapshots the installed skill, smoke-tests the fresh install in a new interpreter from a
-  **neutral cwd**, and rolls back to the previous release if the install or the smoke test fails.
-- A skill-only improvement ships with `compat --sync-skill` (the clone's working tree, as-is) with no MCP
-  release at all.
-- **The installed server is authoritative.** Pull the skill to match it — never the reverse.
-- On Windows the shim is `psamvault-mcp.exe`.
+- `get_version` reports the pairing (`compatibility.paired_skill_version`, newest release, whether a
+  breaking release is pending) — check it before trusting this file.
+- **`psamvault-mcp compat --check`** — diagnose the pair (`--json` for machines). Exit `0` in sync,
+  `1` drift. A skill **newer** than the floor reports `skill installed: <v> [ahead of the floor — fine]`
+  and stays in sync — that is not a problem to fix. It also reports what PyPI has
+  (`newest published`, `update available`), because the contract inside the installed wheel can only
+  ever describe its own release.
+- **`psamvault-mcp compat --apply`** — install the target release and bring the skill up to date (it
+  installs the **newest** skill available, provided it meets the floor). A release marked **breaking**
+  refuses without `--allow-breaking`.
+- **`psamvault-mcp compat --apply --latest`** — target the newest release **published on PyPI**, not just
+  the one recorded in the installed contract. That is the only way to leave an install that is already
+  behind. It requires `--allow-breaking` when the target is newer than the installed contract, because
+  such a release ships a contract this install has never seen.
+- **`psamvault-mcp compat --sync-skill`** — **skill-only update**: install the clone's newest skill, MCP
+  untouched. Use this when the skill improved but no MCP release happened. It reads the clone as-is
+  (uncommitted skill work is installable), snapshots the current skill first, and refuses — writing
+  nothing — if the clone's skill is below the floor.
+- **`psamvault-mcp selfcheck`** — the version that is **installed** vs the version a **new session will
+  actually serve** (it spawns a real server and asks `get_version`), plus the contract pairing and the
+  newest published release. Exit `1` on any mismatch. Use it whenever a user asks "am I up to date?"
+  and after any upgrade.
+- **`psamvault-mcp doctor`** — why an installation looks wrong: entry points the package declares but
+  pipx never linked on `PATH`, pipx records that disagree with the installed version, and processes
+  holding the venv. `--fix` has **two repair paths**: a stale pipx *record* — `pipx list` showing an
+  older version than the code that runs — is corrected **in place**, so sessions and MCP servers can
+  stay up (0.5.4 and later); relinking an entry point pipx never linked *is* a venv recreation, so that
+  path still refuses while the venv is held, names every holder (pid + image) and says what to stop. On
+  0.5.3 and earlier `--fix` always wanted a quiet machine, and `doctor` could count its own launcher
+  shim as a holder — so an idle venv read as busy and `--fix` refused on every machine (fixed in 0.5.4).
+- `--apply` also has upgrade safety: it snapshots the skill, `--from-git --pull` stashes/pulls/restores
+  the repo around the install, it smoke-tests the fresh install in a new interpreter from a neutral cwd,
+  and it rolls back to the previous release if the install or the smoke test fails. When the venv is free
+  it installs through **pipx** (so entry points stay linked and pipx's records stay honest); when MCP
+  processes hold it, it falls back to `uv` and reports `relink_pending`.
+- **Authority: the installed server wins.** The skill is brought to the version the installed server
+  requires, never the reverse.
+- A daily cron job (`psamvault MCP <-> skill lockstep`) runs the detector and wakes the agent on drift
+  **or when a newer release is published** (`UPDATE AVAILABLE`); a breaking release is reported for
+  approval, never installed silently.
+- If `get_version` reports a tool this file does not describe (or vice versa), trust the check over
+  your memory of this file — and **never** hand-edit `compatibility.json` or this frontmatter to
+  silence it. Fix the pairing at release time, or with `--sync-skill` for a skill-only change.
+- **Pre-0.5.3 installs:** the subcommands do not exist there, and `psamvault-mcp compat …` does **not**
+  error on them — it ignores the argument and starts the stdio server (which looks like a hang). On those
+  versions call the module directly:
+  `<venv python> -c "from mcp_server.compat import main; raise SystemExit(main(['--check']))"`.
 
 <!-- /section:upgrade/version-lockstep -->
 ## Traps

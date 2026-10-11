@@ -71,51 +71,152 @@ The authoritative catalogue — every parameter and every returned field — is
 ## Workflows
 <!-- section:usage/workflows -->
 
-### 1. Log me into a site
+### 1. Browser Login
 
-1. `check_credential_exists(site_name="github.com")` — confirm before opening a browser.
-2. `browser_login(site_name="github.com")`.
-3. Relay the response's `message` field **verbatim** — it carries the instructions the user needs.
-4. If `captcha_detected` is `true` the browser is paused: tell the user to solve the CAPTCHA in that window
-   and click sign in. Do not retry blindly.
+When the user asks "Log me into X":
 
-### 2. Authenticated API call
+1. **Check** the credential exists:
+   ```
+   check_credential_exists(site_name="github.com")
+   ```
+2. **Call** browser_login:
+   ```
+   browser_login(site_name="github.com")
+   ```
+3. **Relay** the result — always include the `message` field from the response verbatim to the user
+4. **Handle CAPTCHA**: If `captcha_detected` is `true`, tell the user the browser is paused and they need to solve the CAPTCHA manually
 
-```
-use_credential(
-    site_name="github.com",
-    target_url="https://api.github.com/user/repos",
-    inject_as="bearer_token",
-    fields=["name", "html_url", "language"],
-)
-```
+### 2. API Credential Usage
 
-Injection modes: `bearer_token` (Authorization: Bearer …), `api_key_header` (needs `header_name`),
-`basic_auth` (username:password). Use `fields` on every large response — a full GitHub user object is ~40
-fields. Depth: [Credential injection](../guides/credential-injection.md).
+When the user needs an authenticated API call:
 
-### 3. Run a command with a credential
+1. **Check** the credential:
+   ```
+   check_credential_exists(site_name="github.com")
+   ```
+2. **Call** use_credential:
+   ```
+   use_credential(
+       site_name="github.com",
+       target_url="https://api.github.com/user",
+       inject_as="bearer_token"
+   )
+   ```
+3. **Use the `fields` parameter** to return only needed data (reduces tokens):
+   ```
+   use_credential(
+       site_name="github.com",
+       target_url="https://api.github.com/user/repos",
+       inject_as="bearer_token",
+       fields=["name", "html_url", "language"]
+   )
+   ```
 
-```
-run_with_credential(site_name="stripe", command="stripe balance retrieve",
-                    inject_as="env_var", env_var_name="STRIPE_SECRET_KEY")
-```
+Supported injection modes:
+- `bearer_token` — `Authorization: Bearer ***`
+- `api_key_header` — Custom header name with API key value
+- `basic_auth` — `Authorization: Basic base64(user:pass)`
 
-The credential arrives in the child process's environment and is redacted from the output. If you must
-prove it was present, print a length or a 4-character prefix — **never the value**.
+### 3. CLI Command with Credential (run_with_credential)
 
-### 4. Protect a project's `.env`
+When the user needs to run a CLI tool that requires credentials:
 
-1. `scan_and_protect(project_dir="/path/to/project")`.
-2. Tell the user what was found and encrypted — names, never values.
-3. For runtime resolution recommend [pv-dotenv](https://pypi.org/project/pv-dotenv/): replace
-   `from dotenv import load_dotenv` with `from pv_dotenv import load_dotenv`. The `.env` now holds
-   `psamvault:KEY` placeholders, and pv-dotenv resolves them at runtime.
+1. **Check** what credential to use:
+   ```
+   list_api_keys()  # or list_vault_sites()
+   ```
+2. **Call** run_with_credential:
+   ```
+   # Publish to PyPI
+   run_with_credential(
+       site_name="pypi",
+       command="twine upload dist/*",
+       inject_as="env",
+       env_var_name="TWINE_PASSWORD"
+   )
 
-### 5. What credentials do I have?
+   # Docker login
+   run_with_credential(
+       site_name="dockerhub",
+       command="docker login -u myuser --password-stdin",
+       inject_as="stdin"
+   )
 
-`list_vault_sites()` for sites (optionally `get_username_for_site` to show usernames) and `list_api_keys()`
-for keys, presented as a clean list. Both return names only.
+   # Push to private repo
+   run_with_credential(
+       site_name="github-api",
+       command="git push origin main",
+       inject_as="env",
+       env_var_name="GITHUB_TOKEN"
+   )
+
+   # npm publish
+   run_with_credential(
+       site_name="npm",
+       command="npm publish",
+       inject_as="env",
+       env_var_name="NPM_TOKEN"
+   )
+   ```
+
+3. **The credential value NEVER enters your context** — all output is scanned and redacted before being returned.
+
+Supported injection modes:
+- `env` — Set credential as an environment variable. Requires `env_var_name`.
+- `stdin` — Pipe credential as stdin to the process.
+
+Auto-convenience: When `env_var_name="TWINE_PASSWORD"`, the tool automatically sets `TWINE_USERNAME=__token__`.
+
+### 4. Protecting .env Files
+
+When the user wants to secure project secrets:
+
+1. **Call** scan_and_protect:
+   ```
+   scan_and_protect(project_dir="/path/to/project")
+   ```
+2. **For cleaner per-project organisation**, pass a `project_name`:
+   ```
+   scan_and_protect(project_dir="/path/to/project", project_name="myapp")
+   ```
+   Keys are stored as `myapp/.env/KEY_NAME` — filterable later with `list_api_keys(project_name="myapp")`.
+   (**0.5.4 and later.** On 0.5.3 and earlier the server's router dropped `project_name`, so keys were
+   stored under `env/` with or without the argument — upgrade before relying on the namespace.)
+3. **Inform** the user what was found and encrypted
+4. **Recommend** [pv-dotenv](https://pypi.org/project/pv-dotenv/) for runtime resolution:
+   ```
+   pip install pv-dotenv
+   # Then replace:
+   from dotenv import load_dotenv  # → from pv_dotenv import load_dotenv
+   ```
+5. **Nothing else needed** — the `.env` file now has `psamvault:KEY` placeholders and pv-dotenv resolves them at runtime
+
+### 5. Vault Discovery
+
+When the user asks "What credentials do I have?":
+
+1. **Call** `list_vault_sites()` to see all stored credential sites
+2. **Call** `list_api_keys()` to see all stored API keys
+3. **For each site**, optionally `get_username_for_site(site_name)` to show usernames
+4. Present the information as a clean list to the user
+
+### 6. Exporting a Key into an Agent `.env`
+
+When the user asks "put my Tavily key in the agent's .env" or "make <tool> see my key without pasting it":
+
+1. **Call** `list_api_keys()` to get the exact vault key name
+2. **Call** `export_key_to_env_file(key_name=..., env_var_name=...)` — writes into the target host's `.env`
+   (default `agent="hermes"` → `HERMES_HOME/.env`; pass `env_path` for any other host)
+3. **Read the result**: `action` (`added` / `updated` / `appended`), `line`, `backup_path` — never the key value
+4. **Restart the agent host** (new session) so its tools pick the variable up — hosts read `.env` at process start
+5. **Verify with the consumer, not the file** — e.g. `web_extract` for `TAVILY_API_KEY`, not by reading `.env`
+
+Notes:
+
+- The variable's line is **updated in place** on re-runs. Duplicate `KEY=` lines are a real hazard because different dotenv loaders pick different winners
+- Providers with a bundled verify recipe are probed first; an unverifiable provider requires `skip_verify=true` or an explicit `verify_url`
+- **An invalid key is never written.** A probe that CAN be attempted is always attempted, and a provider rejecting the key blocks the write (`verification: failed`) — `skip_verify=true` does not override it; it covers only providers that cannot be probed at all (then `verification: skipped`)
+- The `.env` is plaintext by design: it is the agent's local working copy, never the source of truth
 
 <!-- /section:usage/workflows -->
 ## The rules that do not bend
@@ -132,40 +233,52 @@ for keys, presented as a clean list. Both return names only.
 ## Common pitfalls
 <!-- section:usage/pitfalls -->
 
-1. **Assuming a tool exists.** Call `search_vault_tools("")` first.
-2. **Ignoring `captcha_detected`.** The browser is paused; the user must solve it.
-3. **Wrong injection mode.** `api_key_header` needs `header_name`; `basic_auth` uses username:password;
-   `bearer_token` sends the stored password as the token.
-4. **Not using `fields`.** A full GitHub user response is ~40 fields; ask for three.
-5. **Site name vs API key name.** `use_credential` checks API key entries first, then vault password
-   entries — a key stored as a site password still resolves.
-6. **Vault session expired.** The server can start while the session is dead. Ask the user to run
-   `psamvault login` in their terminal; do not go looking for a secret via the CLI to "test" it.
-7. **Long-idle token.** Access tokens last about an hour; the client refreshes on 401 and retries
-   automatically, so a first call after a long idle may simply take a refresh cycle.
-8. **Install-side failures are not usage problems** — `ModuleNotFoundError: pydantic`, tools missing after
-   a config edit, a wrong binary on PATH: see [Install](./install.md) and
-   [MCP install & connect](../troubleshooting/MCP-INSTALL-AND-CONNECT.md).
+1. **Forgetting to call `search_vault_tools("")` first** — always discover available tools before assuming what's available
+2. **Not checking `captcha_detected`** — if a CAPTCHA appears, the browser pauses. You must inform the user to solve it and click Sign in.
+3. **Calling wrong injection mode** — `api_key_header` needs a `header_name` parameter; `basic_auth` uses username:password; `bearer_token` uses the password as the token
+4. **Not using `fields` on large API responses** — a full GitHub user response is ~40 fields. Use `fields=["login","id","public_repos"]` to return only what's needed.
+5. **Exporting to an unknown agent without `env_path`** — only `hermes` has a verified default `.env` location. `agent="grok"` (or any host without a verified path) is rejected on purpose: guessing a location would write the secret where nothing reads it.
+6. **Expecting an exported variable to appear mid-session** — the host reads `.env` at process start. Restart the session before testing the consumer, and verify with a real call rather than by reading the file.
+7. **Expecting a duplicate on re-export** — `export_key_to_env_file` updates in place, so a second run returns `action: updated`. Two `KEY=` lines in the file means something else wrote them.
+8. **Mixing up site name vs API key name** — `use_credential` checks API key entries first, then vault password entries. If you need an API key but stored it as a site password, it still works as fallback.
+9. **Server not running** — MCP tools return connection errors if the server is not started. If using stdio, Hermes starts it automatically on connect. If using HTTP/SSE, start with `psamvault-mcp --http --port 8433` in a terminal.
+10. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
 
 <!-- /section:usage/pitfalls -->
 ## Prompts you can suggest to the user
 <!-- section:usage/agent-prompts -->
 
-"What credentials do I have stored?" · "Log me into github.com" · "Check my GitHub profile info" · "Get my
-top 10 starred repositories" · "Protect the secrets in my project directory" · "Check if I have a
-credential for z.ai" · "What's my username for Kaggle?"
+Tell users they can say things like:
+
+- "What credentials do I have stored?"
+- "Log me into github.com"
+- "Check my GitHub profile info"
+- "Get my top 10 starred repositories"
+- "What API keys do I have stored?"
+- "Upload my package to PyPI"
+- "Docker login"
+- "Push to my private repo"
+- "Protect the secrets in my project directory"
+- "Put my Tavily key into my agent's .env"
+- "Export my Render key into my MCP config"
+- "Check if I have a credential for z.ai"
+- "What's my username for Kaggle?"
 
 <!-- /section:usage/agent-prompts -->
 ## Verification checklist
 <!-- section:usage/verification -->
 
-- [ ] `get_version()` returns a version
-- [ ] `search_vault_tools("")` returns the tool list
-- [ ] `list_vault_sites()` returns sites (or an empty list) — this is also the `psamvault login` check
-- [ ] `check_credential_exists("<site>")` returns the expected result
-- [ ] `use_credential` completes an authenticated HTTP call
-- [ ] no secret appeared anywhere in your output
-
+- [ ] MCP server is connected (stdio, managed by Hermes automatically)
+- [ ] `search_vault_tools("")` returns all 13 tools (v0.5.0+; `verify_api_key`, `export_key_to_mcp_config` and `export_key_to_env_file` present; `capture_stripe_credentials` REMOVED in v0.5.0)
+- [ ] `get_version()` returns a version string, quoted from the server (not from memory or this file), and
+      the reported `tool_surface_matches_newest` / `expected_tool_count` agree with the tool list above
+- [ ] "Are you connected?" answered by calling the server (that plus one read-only list tool), never from
+      `config.yaml` or recall
+- [ ] `list_vault_sites()` returns stored sites (or empty list)
+- [ ] `list_api_keys()` returns stored API keys (or empty list)
+- [ ] `check_credential_exists("github.com")` returns expected result
+- [ ] `use_credential` makes authenticated HTTP calls successfully
+- [ ] `run_with_credential` runs CLI commands with credential injection
 <!-- /section:usage/verification -->
 ## See also
 
