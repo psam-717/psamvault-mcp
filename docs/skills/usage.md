@@ -18,23 +18,29 @@ HTTP status, an exit code) — and **no secret appears in your output, your file
 ## What the server gives you
 <!-- section:usage/overview -->
 
+[psamvault-mcp](https://pypi.org/project/psamvault-mcp/) is an MCP server for [psamvault](https://pypi.org/project/psamvault/) — a zero-knowledge credential vault for AI agents. It lets agents use stored credentials (site passwords, API keys, tokens) without ever seeing their plaintext values.
 
-A zero-knowledge vault for agents: the credential is decrypted server-side and used where it is needed, so
-it never enters your context window. Three flows cover almost everything:
+The server provides four complementary flows:
 
-| Flow | Tools | What happens |
-|---|---|---|
-| Log into a website | `browser_login` | A real Chromium browser opens and the credential is filled in **in the browser process**. You learn only whether the login succeeded. |
-| Make an authenticated request | `use_credential`, `run_with_credential` | The credential is injected into an HTTP request or a CLI command's environment — into the header or the env var, never into your output. |
-| Secure a project's secrets | `scan_and_protect` | `.env` files are scanned, secrets encrypted into the vault, and the plaintext replaced with `psamvault:KEY_NAME` placeholders. |
+- **`browser_login`** — Opens a real Chromium browser, navigates to the site, fills credentials directly in the browser process. The agent only sees whether login succeeded.
+- **`use_credential`** — Makes authenticated HTTP requests using stored API keys. Credential is decrypted locally, the HTTP request is made, and only the response is returned.
+- **`run_with_credential`** — Runs a shell command with a credential injected as an environment variable or stdin. Output is auto-redacted of the credential value.
+- **`scan_and_protect`** — Scans a project directory for `.env` files, detects secrets using pattern matching, encrypts them into the psamvault vault, and replaces plaintext with `psamvault:KEY_NAME` placeholders.
 
-**Never** read `~/.psamvault/` files, read the keychain, or ask the user to paste a credential instead.
-Those defeat the point, and the tools are the only supported path.
+This is the **key differentiator**: credentials are never in the agent's context window, never in training data, and never accidentally leaked in a prompt.
 
 <!-- /section:usage/overview -->
 ## When to use this
 <!-- section:usage/when-to-use -->
-(synced from the installed skill)
+
+- User asks you to interact with psamvault-mcp tools
+- User wants to log into a website via agent (`browser_login`)
+- User needs authenticated API calls via agent (`use_credential`)
+- User needs to run CLI commands with credentials (twine upload, docker login, git push — `run_with_credential`)
+- User wants to secure their project's `.env` files (`scan_and_protect`)
+- Any task involving credential lookup or use — prefer MCP tools over terminal-based CLI
+- **Do not use for**: reading credentials directly (always use `use_credential` instead)
+
 <!-- /section:usage/when-to-use -->
 
 
@@ -50,34 +56,41 @@ Neither of these needs credential access, so start here when you are unsure whic
 ## The tool catalogue
 <!-- section:usage/tools -->
 
+Once connected, these tools become available (prefixed `mcp_psamvault_*` in Hermes):
 
-The authoritative catalogue — every parameter and every returned field — is
-[Tool reference](../reference/tools.md). The short form, by purpose:
+| Tool | Parameters | Description | Security |
+|------|-----------|-------------|----------|
+| `get_version` | None | Return installed version | No secrets involved |
+| `search_vault_tools` | `query: str` | Discover which tool to use (call this first) | No secrets involved |
+| `list_vault_sites` | None | List stored credential sites | Returns names only, no passwords |
+| `list_api_keys` | `project_name: str (optional)` | List stored API key names with service hints | Returns names only, no key values |
+| `check_credential_exists` | `site_name: str` | Check if credential exists | Returns boolean + username hint |
+| `get_username_for_site` | `site_name: str` | Get stored username | Returns username, never password |
+| `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Make authenticated HTTP request | ❗ Credential stays server-side |
+| `browser_login` | `site_name, login_url, selectors, timeout_ms` | Log into website via browser | ❗ Fills directly in browser |
+| `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run CLI command with credential injected | ❗ Output redacted of credential |
+| `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
+| `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a vault API key into a host MCP config (e.g. Hermes `config.yaml`) — auto-verifies HTTP keys | ❗ Key value never returned |
+| `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a vault API key into an agent `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up first, **never writes an invalid key** | ❗ Key value never returned |
+| `verify_api_key` | `key_name, verify_url (optional)` | Verify a vault API key by probing the provider's read-only endpoint | No secrets involved — key value never returned |
 
-### Site authentication
+### Bundled verify recipes (no `verify_url` needed)
 
-| Tool | Parameters | What it does | Security |
-|---|---|---|---|
-| `list_vault_sites` | — | Stored sites, with username hints | Names only, no passwords |
-| `check_credential_exists` | `site_name` | Whether a credential exists | Boolean + username hint |
-| `get_username_for_site` | `site_name` | The stored username | Username only, never the password |
-| `browser_login` | `site_name, login_url, selectors, timeout_ms` | Log into a site in a real browser | Fills directly in the browser process |
+`verify_api_key` and both export tools probe the provider's read-only whoami endpoint when the provider
+is one of the bundled recipes. If the vault entry's service hint matches, you pass **nothing extra**:
 
-### API keys
+| Provider (service hint) | Probe | Expect |
+|---|---|---|
+| `render` | `GET https://api.render.com/v1/owners` | 200 |
+| `openrouter` | `GET https://openrouter.ai/api/v1/auth/key` | 200 |
+| `tavily` | `GET https://api.tavily.com/usage` | 200 |
+| `github` | `GET https://api.github.com/user` | 200 |
 
-| Tool | Parameters | What it does | Security |
-|---|---|---|---|
-| `list_api_keys` | `project_name` (optional) | Stored key names, with service hints | Names only, no values |
-| `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Authenticated HTTP request | Credential stays server-side |
-| `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run a CLI command with the credential injected | Output redacted of the credential |
-| `scan_and_protect` | `project_dir, patterns, project_name` | Scan and encrypt `.env` secrets | Encrypts into the vault |
-| `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a key into a host MCP config; auto-verifies HTTP keys | Key value never returned |
-| `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a key into an agent `.env` (updates in place, backs up first) | Key value never returned |
-| `verify_api_key` | `key_name, verify_url` (optional) | Probe the provider's read-only endpoint | Key value never returned |
-
-> **Invalid keys are never written.** A probe that can be attempted is always attempted, and a provider
-> rejecting the key blocks the write — `skip_verify=true` cannot override it. It covers only providers that
-> cannot be probed at all, and the result then records `verification: skipped`.
+Anything else needs `verify_url=<read-only whoami endpoint>` or `skip_verify=true` — and `skip_verify`
+covers only *cannot probe*, never *probe said no* (a rejected key is definitively invalid and blocks the
+write). PyPI/TestPyPI upload tokens are deliberately absent: no read-only endpoint can validate them, so
+a recipe there would "verify" an invalid key. When adding a provider, probe it with a real key first and
+record the date — the recipe store's docstring holds that rule.
 
 <!-- /section:usage/tools -->
 
@@ -235,15 +248,15 @@ Notes:
 ## The rules that do not bend
 <!-- section:usage/security-rules -->
 
-
-| Rule | Why |
-|---|---|
-| Use the MCP tools for every credential operation | Never read `~/.psamvault/` or the keychain directly |
-| Never print a raw credential — not even to "check" it | Keeps secrets out of the context window, the transcript and any log |
-| Never ask the user to paste a credential | `browser_login` / `use_credential` exist precisely for this |
-| Prefer `fields` on large responses | Fewer tokens, less data, nothing sensitive echoed |
-| Relay the `message` field verbatim | It contains the instructions the user needs |
-| Classify every call before making it | Read-only and verification are always safe; exports get `dry_run` or a throwaway path; `browser_login` uses a real account, so confirm first; nothing irreversible without approval |
+| Rule | Rationale |
+|------|-----------|
+| **Always use MCP tools** for credential ops | Never read `~/.psamvault/` files or env vars directly |
+| **Never print raw credentials** | Keeps secrets out of context window and transcript |
+| **Never ask user to paste credentials** | Use `browser_login`, `use_credential`, or `run_with_credential` instead |
+| **Use `fields` parameter** | Reduces token usage and avoids returning unnecessary data |
+| **Relay `message` field verbatim** | Browser login messages contain user-facing instructions |
+| **Never run `psamvault` CLI commands** | Always use MCP tools for credential access |
+| **Remember exports write plaintext into `.env`** | The variable is the agent's local working copy; the vault stays the source of truth — rotate from the vault, not the file |
 
 <!-- /section:usage/security-rules -->
 
@@ -299,12 +312,25 @@ Tell users they can say things like:
 <!-- /section:usage/verification -->
 ## Architecture notes
 <!-- section:usage/architecture -->
-(synced from the installed skill)
+
+- **Single-process Playwright**: The browser lives in-process with the MCP server. No subprocess daemon chain. If the browser crashes, the next call auto-restarts it.
+- **Stdio transport (default)**: Hermes manages the process lifecycle. No manual server start needed.
+- **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
+- **No consent dialog**: The v0.4.0+ architecture removed the consent dialog requirement. Credentials are used on demand.
+- **Output redaction**: `run_with_credential` scans all output for the credential value and redacts it before returning to the agent.
+
 <!-- /section:usage/architecture -->
 
 ## Related projects
 <!-- section:usage/related -->
-(synced from the installed skill)
+
+| Package | What It Does |
+|---------|-------------|
+| [`psamvault`](https://pypi.org/project/psamvault/) | CLI — store, list, manage credentials |
+| [`psamvault-mcp`](https://pypi.org/project/psamvault-mcp/) | MCP server for AI agents |
+| [`pv-dotenv`](https://pypi.org/project/pv-dotenv/) | Drop-in python-dotenv replacement — resolves `psamvault:` placeholders |
+| [`psamvault-cli`](https://github.com/psam-717/psamvault-cli) | CLI + vault management |
+
 <!-- /section:usage/related -->
 
 ## See also
