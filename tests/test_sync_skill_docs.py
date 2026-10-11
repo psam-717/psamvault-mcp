@@ -216,3 +216,47 @@ def test_init_refuses_when_the_docs_pages_are_uncommitted(tmp_path):
     (repo / "docs" / "skills" / "usage.md").write_text(
         _PAGE.format(page="usage").replace("usage/one", "usage/two"), encoding="utf-8")
     assert _run(repo, installed, "--init")[0] == 2
+
+
+# ── the distribution mirror ───────────────────────────────────────────────────────────────────────
+
+
+def _mirror_case(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo, installed = _make_case(tmp_path)
+    mirror = tmp_path / "private-skills" / "psamvault-mcp" / "SKILL.md"
+    mirror.parent.mkdir(parents=True)
+    mirror.write_text("a stale distribution copy\n", encoding="utf-8")
+    return repo, installed, mirror
+
+
+def test_a_stale_mirror_fails_the_check(tmp_path):
+    repo, installed, mirror = _mirror_case(tmp_path)
+    assert _run(repo, installed, "--init", "--mirror", str(mirror))[0] == 0
+    code, out = _run(repo, installed, "--check")
+    assert code == 1
+    assert "mirror" in out and "stale" in out
+
+
+def test_publish_regenerates_the_mirror_from_the_installed_skill(tmp_path):
+    repo, installed, mirror = _mirror_case(tmp_path)
+    _run(repo, installed, "--init", "--mirror", str(mirror))
+    assert _run(repo, installed, "--publish")[0] == 0
+    normalise = lambda t: t.replace("\r\n", "\n")
+    assert normalise(mirror.read_text(encoding="utf-8")) == normalise(installed.read_text(encoding="utf-8"))
+    assert _run(repo, installed, "--check")[0] == 0
+
+
+def test_publish_is_a_no_op_when_docs_and_mirror_are_in_step(tmp_path):
+    repo, installed, mirror = _mirror_case(tmp_path)
+    _run(repo, installed, "--init", "--mirror", str(mirror))
+    _run(repo, installed, "--publish")
+    code, out = _run(repo, installed, "--publish")
+    assert code == 0 and "already in step" in out
+
+
+def test_no_mirror_configured_is_not_a_problem(tmp_path):
+    repo, installed = _make_case(tmp_path)
+    _run(repo, installed, "--init")
+    code, out = _run(repo, installed, "--check")
+    # match the report line, not the word: the tmp path can contain "mirror" too
+    assert code == 0 and "mirror          :" not in out
