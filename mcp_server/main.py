@@ -29,9 +29,13 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from mcp_server.log import get_logger
-from mcp_server.session import is_logged_in, load_config
-
-load_config()
+from mcp_server.session import (
+    is_logged_in,
+    keyring_problem,
+    load_config,
+    probe_keyring,
+    user_facing_keyring_error,
+)
 
 from mcp_server import tools
 
@@ -805,6 +809,12 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = _TOOL_REGISTRY
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
+    # A missing or locked keyring is not "please log in": login cannot succeed,
+    # and the message has to say what to do instead of a traceback.
+    problem = probe_keyring()
+    if problem:
+        return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
+
     if not is_logged_in():
         result = {
             "error": (
@@ -914,7 +924,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
     
     except Exception as e:
         logger.error("tool '%s' raised an unexpected error: %s", name, e)
-        result = {"error": "Tool execution failed. Check the terminal for details."}
+        keyring_message = user_facing_keyring_error(e)
+        result = {
+            "error": keyring_message or "Tool execution failed. Check the terminal for details."
+        }
         
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -966,6 +979,10 @@ def _print_cli_help() -> None:
         "Note: running without flags waits for MCP JSON-RPC on stdin. That is expected.\n"
         "      Use --version for a non-blocking smoke test. Prefer absolute pipx paths\n"
         "      in MCP client config and set PYTHONPATH=\"\" to avoid import contamination.\n"
+        "      --version, --help, and startup do not require an OS keyring. Vault tools\n"
+        "      do; a missing keyring is reported and secrets are never stored in plaintext.\n"
+        "      On Linux, Secret Service needs DBUS_SESSION_BUS_ADDRESS. When it is unset\n"
+        "      the server uses /run/user/<uid>/bus if that socket exists and is ours.\n"
     )
 
 
@@ -1034,7 +1051,14 @@ def main() -> None:
 
     logger.info("MCP server starting")
 
-    if not is_logged_in():
+    # After --version / --help, so those smoke tests never touch the keychain.
+    # A failure is a warning, not a crash: the server still starts, and vault tools
+    # return the same message.
+    load_config()
+    problem = keyring_problem()
+    if problem:
+        logger.warning("%s", problem)
+    elif not is_logged_in():
         logger.warning("not logged in — run 'psamvault login' before using vault tools")
 
     # A diagnostic child (psamvault-mcp selfcheck spawning a server) must not consume the one-shot
