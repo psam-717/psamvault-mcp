@@ -600,14 +600,50 @@ def test_the_tool_handler_does_not_block_the_loop_on_the_probe(monkeypatch):
     assert payload["error"].startswith("✗ the OS keyring is locked — ")
 
 
-def test_a_chainer_containing_secret_service_is_recognised():
+def test_child_environment_disables_autolaunch_and_drops_the_pepper(monkeypatch):
+    """Unset bus address plus DISPLAY is what makes libdbus run dbus-launch.
+    The pepper is in this process's environment because load_config puts it there."""
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1/bus")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("PSAMVAULT_PEPPER", "pepper-must-not-leak")
+    monkeypatch.setenv("PSAMVAULT_VEK", "vek-must-not-leak")
+    monkeypatch.setenv("PSAMVAULT_TOKEN", "token-must-not-leak")
+    monkeypatch.setenv("PSAMVAULT_API_URL", "https://api.example.com")
+
+    env = session.child_environment(None)
+
+    assert env["DBUS_SESSION_BUS_ADDRESS"] == "disabled:"
+    assert env["DISPLAY"] == ":0"
+    assert "PSAMVAULT_PEPPER" not in env
+    assert "PSAMVAULT_VEK" not in env
+    assert "PSAMVAULT_TOKEN" not in env
+    assert env["PSAMVAULT_API_URL"] == "https://api.example.com"
+    assert "pepper-must-not-leak" not in env.values()
+
+    passed = session.child_environment({
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/explicit-bus",
+        "PSAMVAULT_PEPPER": "pepper-explicitly-passed",
+    })
+    assert passed["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/tmp/explicit-bus"
+    assert passed["PSAMVAULT_PEPPER"] == "pepper-explicitly-passed"
+    assert "PSAMVAULT_VEK" not in passed
+
+
+def test_a_chainer_containing_secret_service_is_recognised(monkeypatch):
+    """The negative case is a keyring this test builds. The machine's backend
+    is irrelevant: a desktop Secret Service used to fail the assertion."""
     from keyring.backends.SecretService import Keyring as SecretServiceKeyring
+    from keyring.backends.null import Keyring as NullKeyring
 
     class Chain:
         backends = [SecretServiceKeyring()]
 
+    null = NullKeyring()
+    monkeypatch.setattr(keyring, "get_keyring", lambda: null)
+
     assert session._backend_uses_secret_service(SecretServiceKeyring()) is True
     assert session._backend_uses_secret_service(Chain()) is True
+    assert session._backend_uses_secret_service(null) is False
     assert session._backend_uses_secret_service(keyring.get_keyring()) is False
 
 
@@ -622,7 +658,12 @@ def test_adopted_bus_is_not_visible_to_a_child_command(monkeypatch, tmp_path):
         "    'GNOME_KEYRING_CONTROL',\n"
         "    'DBUS_STARTER_ADDRESS',\n"
         "    'HOME',\n"
+        "    'DISPLAY',\n"
         "    'PSAMVAULT_CHILD_MARKER',\n"
+        "    'PSAMVAULT_PEPPER',\n"
+        "    'PSAMVAULT_VEK',\n"
+        "    'PSAMVAULT_TOKEN',\n"
+        "    'PSAMVAULT_API_URL',\n"
         ")\n"
         "for name in names:\n"
         "    print(name + '=' + os.environ.get(name, ''))\n",
@@ -634,7 +675,12 @@ def test_adopted_bus_is_not_visible_to_a_child_command(monkeypatch, tmp_path):
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.setenv("GNOME_KEYRING_CONTROL", str(tmp_path / "keyring"))
         monkeypatch.setenv("DBUS_STARTER_ADDRESS", f"unix:path={tmp_path / 'bus'}")
+        monkeypatch.setenv("DISPLAY", ":99")
         monkeypatch.setenv("PSAMVAULT_CHILD_MARKER", "kept")
+        monkeypatch.setenv("PSAMVAULT_PEPPER", "pepper-must-not-leak")
+        monkeypatch.setenv("PSAMVAULT_VEK", "vek-must-not-leak")
+        monkeypatch.setenv("PSAMVAULT_TOKEN", "token-must-not-leak")
+        monkeypatch.setenv("PSAMVAULT_API_URL", "https://api.example.com")
         adopted = session.adopt_session_bus()
         assert "DBUS_SESSION_BUS_ADDRESS" in adopted
         assert os.environ["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={tmp_path / 'bus'}"
@@ -652,13 +698,23 @@ def test_adopted_bus_is_not_visible_to_a_child_command(monkeypatch, tmp_path):
 
     assert result["exit_code"] == 0, result
     out = result["stdout"]
-    assert "DBUS_SESSION_BUS_ADDRESS=\n" in out
+    # Unset would let libdbus autolaunch via DISPLAY. disabled: closes that.
+    assert "DBUS_SESSION_BUS_ADDRESS=disabled:" in out
+    assert "DISPLAY=:99" in out
     assert "XDG_RUNTIME_DIR=\n" in out
     assert "GNOME_KEYRING_CONTROL=\n" in out
     assert "DBUS_STARTER_ADDRESS=\n" in out
+    assert "PSAMVAULT_PEPPER=\n" in out
+    assert "PSAMVAULT_VEK=\n" in out
+    assert "PSAMVAULT_TOKEN=\n" in out
+    assert "PSAMVAULT_API_URL=https://api.example.com" in out
     assert f"unix:path={tmp_path / 'bus'}" not in out
+    assert "pepper-must-not-leak" not in out
+    assert "vek-must-not-leak" not in out
+    assert "token-must-not-leak" not in out
     assert "PSAMVAULT_CHILD_MARKER=kept" in out
     assert "HOME=" in out and out.split("HOME=", 1)[1].splitlines()[0].strip()
+    assert os.environ["PSAMVAULT_PEPPER"] == "pepper-must-not-leak"
 
 
 def test_extra_env_can_pass_the_bus_through(monkeypatch, tmp_path):
@@ -666,22 +722,29 @@ def test_extra_env_can_pass_the_bus_through(monkeypatch, tmp_path):
     script.write_text(
         "import os\n"
         "print('BUS=' + os.environ.get('DBUS_SESSION_BUS_ADDRESS', ''))\n"
-        "print('XDG=' + os.environ.get('XDG_RUNTIME_DIR', ''))\n",
+        "print('XDG=' + os.environ.get('XDG_RUNTIME_DIR', ''))\n"
+        "print('PEPPER=' + os.environ.get('PSAMVAULT_PEPPER', ''))\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1/bus")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1")
+    monkeypatch.setenv("PSAMVAULT_PEPPER", "pepper-must-not-leak")
     result = asyncio.run(
         run_command_with_credential(
             command=f'"{sys.executable}" "{script}"',
             credential_value="not-printed",
             inject_as="env",
             env_var_name="TWINE_PASSWORD",
-            extra_env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/explicit-bus"},
+            extra_env={
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/explicit-bus",
+                "PSAMVAULT_PEPPER": "pepper-explicitly-passed",
+            },
             timeout=30,
         )
     )
     assert result["exit_code"] == 0, result
     assert "BUS=unix:path=/tmp/explicit-bus" in result["stdout"]
+    assert "PEPPER=pepper-explicitly-passed" in result["stdout"]
     assert "XDG=\n" in result["stdout"]
     assert "/run/user/1" not in result["stdout"]
+    assert "pepper-must-not-leak" not in result["stdout"]

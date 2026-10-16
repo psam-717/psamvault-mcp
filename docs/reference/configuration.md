@@ -133,10 +133,15 @@ must pass the real values (the SDK does not expand `${...}`):
 
 Replace `1000` with the output of `id -u`. `run_with_credential` removes
 `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `GNOME_KEYRING_CONTROL`, and
-`DBUS_STARTER_ADDRESS` from the command. GDBus finds the same bus through
-`$XDG_RUNTIME_DIR/bus` when only the address is missing, and the control socket
-is a second way into the login keyring. Pass a variable back through `extra_env`
-when the command itself needs the bus.
+`DBUS_STARTER_ADDRESS` from the command, then sets
+`DBUS_SESSION_BUS_ADDRESS=disabled:` so an unset address cannot autolaunch a
+bus (`dbus-launch --autolaunch` when `DISPLAY` is set). `DISPLAY` itself stays,
+so a command can still open a window. The same child does not inherit
+`PSAMVAULT_PEPPER` or any other `PSAMVAULT_*` name that carries pepper, vek,
+token, secret, password, session, or kdf material. `load_config` puts the
+pepper in this process's environment for the API client; it is not a value a
+command should see. Pass a variable back through `extra_env` when the command
+itself needs the bus or that value.
 
 KWallet is not the backend this package installs: it
 needs `dbus-python`, which is not a dependency. On KDE, Secret Service is still what keyring

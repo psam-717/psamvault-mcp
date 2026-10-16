@@ -52,6 +52,24 @@ _CHILD_ENV_DENY = (
     "DBUS_STARTER_BUS_TYPE",
 )
 
+# libdbus autolaunches a session bus when DBUS_SESSION_BUS_ADDRESS is unset and
+# DISPLAY is set (`dbus-launch --autolaunch`). Leaving the variable unset after
+# stripping the real address is what opens that path. "disabled:" is the value
+# libdbus and GDBus treat as "do not connect and do not autolaunch".
+_NO_SESSION_BUS = "disabled:"
+
+# load_config() copies PSAMVAULT_PEPPER into os.environ for this process.
+# Session tokens stay in the keyring, but a PSAMVAULT_* name that carries one
+# of these words is secret material and must not ride along in a child.
+_SECRET_ENV_MARKERS = ("PEPPER", "VEK", "TOKEN", "SECRET", "PASSWORD", "SESSION", "KDF")
+
+
+def _is_inherited_secret(name: str) -> bool:
+    if not name.startswith("PSAMVAULT_"):
+        return False
+    upper = name.upper()
+    return any(marker in upper for marker in _SECRET_ENV_MARKERS)
+
 
 class _UninitialisedKeyring(keyring.errors.KeyringError):
     """Secret Service is up, but the default collection does not exist.
@@ -222,15 +240,22 @@ def adopt_session_bus() -> list[str]:
 def child_environment(extra: dict | None = None) -> dict[str, str]:
     """Environment for a command the agent asked the server to run.
 
-    The session bus this process uses to reach Secret Service is removed.
-    ``extra`` is applied afterwards, so an explicit ``extra_env`` entry is how
-    a caller passes the bus through. Everything else in the environment stays.
+    The session bus this process uses to reach Secret Service is removed, and
+    ``DBUS_SESSION_BUS_ADDRESS`` is set to ``disabled:`` so the child cannot
+    autolaunch a bus of its own. ``PSAMVAULT_PEPPER`` and other secret-shaped
+    ``PSAMVAULT_*`` names are removed. ``extra`` is applied first, so an
+    explicit ``extra_env`` entry is how a caller passes any of those through.
+    ``DISPLAY`` stays: commands that open a window still can, and they still
+    cannot autolaunch a bus.
     """
     env = os.environ.copy()
-    for name in _CHILD_ENV_DENY:
-        env.pop(name, None)
+    for name in list(env):
+        if name in _CHILD_ENV_DENY or _is_inherited_secret(name):
+            env.pop(name, None)
     if extra:
         env.update(extra)
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["DBUS_SESSION_BUS_ADDRESS"] = _NO_SESSION_BUS
     return env
 
 
