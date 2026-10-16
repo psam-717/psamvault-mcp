@@ -96,6 +96,45 @@ Setting `PYTHONPATH` to the empty string for the server subprocess tells the hos
 confirm you are affected, is in
 [PYTHONPATH conflict](./../troubleshooting/PYTHONPATH-CONFLICT.md).
 
+## OS keyring
+
+The pepper and the vault session live in the OS keyring. `--version`, `--help`, and `selfcheck` do
+not touch it. Startup does not crash when it is missing or locked; a vault tool returns
+`✗ <what failed> — <what to do next>`. The server never falls back to a file or to plaintext.
+
+Which variables matter was checked against the libraries this package installs (keyring 25's Secret
+Service backend → secretstorage → jeepney 0.9) and against the stdio clients that strip the
+environment (the Python MCP SDK 1.30 `get_default_environment`, and the same allow-list in the
+TypeScript SDK):
+
+| Platform | Backend | Variables the backend reads | SDK default environment |
+|---|---|---|---|
+| Linux | Secret Service | **`DBUS_SESSION_BUS_ADDRESS` only.** jeepney 0.9 does not read `XDG_RUNTIME_DIR` (that fallback is still a TODO in jeepney). | POSIX allow-list: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`. The bus address is not in it. Your `env` block is merged on top, so `PYTHONPATH=""` does not add the bus address. |
+| macOS | Login keychain | Nothing beyond `HOME`, which is already on the allow-list. `KEYCHAIN_PATH` is an optional override. | Same POSIX allow-list. |
+| Windows | Credential Manager | Nothing beyond the Windows allow-list (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `SYSTEMROOT`, and the rest the SDK already copies). | Windows allow-list. The TypeScript SDK also copies `PROGRAMFILES`; the Python SDK also copies `PATHEXT`. Neither is required for Credential Manager. |
+
+On Linux, before the first keyring call, the server adopts the per-user bus when
+`DBUS_SESSION_BUS_ADDRESS` is unset and `/run/user/<uid>/bus` is a socket owned by this user. It
+also sets `XDG_RUNTIME_DIR` to `/run/user/<uid>` when that directory exists and the variable is
+unset, because dbus activation of Secret Service uses the runtime directory even though jeepney
+does not read it. An explicit value is never replaced. A container that cannot see the socket
+must pass the real values (the SDK does not expand `${...}`):
+
+```json
+"env": {
+  "PYTHONPATH": "",
+  "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+  "XDG_RUNTIME_DIR": "/run/user/1000"
+}
+```
+
+Replace `1000` with the output of `id -u`. KWallet is not the backend this package installs: it
+needs `dbus-python`, which is not a dependency. On KDE, Secret Service is still what keyring
+selects unless that extra package is installed.
+
+A host with no Secret Service, no login keychain, and no Credential Manager can run the smoke
+tests. Vault tools cannot run there. This server does not read `PSAMVAULT_VEK` or `PSAMVAULT_TOKEN`.
+
 ## Environment variables the server reads
 
 | Variable | Default | Meaning |
@@ -105,7 +144,7 @@ confirm you are affected, is in
 | `PSAMVAULT_PEPPER` | — (keychain) | The pepper used by the CLI's key derivation. Read from the OS keychain under the `psamvault` service (`config.pepper`), loaded into the process environment at config-load time. A legacy value found in `config.env` is migrated to the keychain and removed from the file. |
 | `PSAMVAULT_MCP_SKIP_UPDATE_CHECK` | unset | When set, the startup "update available" check is skipped and the PyPI index is not contacted. `psamvault-mcp selfcheck` sets this for the diagnostic child it spawns, so a check cannot consume the one-shot notice meant for the next real session. |
 | `PSAMVAULT_MCP_VENV` | — | Overrides the venv path used by the install/upgrade helper when it needs to act on a specific environment. |
-| `PSAMVAULT_SKILL_CLONE` | — | Overrides where `compat` looks for the local skill clone (the source `--sync-skill` installs from). Without it the clone is `private-skills` **beside the discovered checkout**. |
+| `PSAMVAULT_SKILL_CLONE` | — | Optional. Where `--sync-skill` reads a local skill checkout you already have. Without it, compat looks for a `private-skills` directory beside the discovered psamvault-mcp checkout. That directory is a maintainer mirror, not a public install step. A missing skill is not drift; see below. |
 | `PSAMVAULT_MCP_REPO` | — | Overrides the checkout `compat --from-git` installs from and whose git state `--apply` reports. Without it the checkout is **discovered**: the one this process runs from, else the one the current directory is inside — so `--from-git` in the repo you are standing in works with no configuration. Nothing found raises, naming this variable. |
 | `HERMES_HOME` | `~/.hermes` | Base directory for the Hermes export targets: `config.yaml` (`export_key_to_mcp_config`) and `.env` (`export_key_to_env_file`), and the base for the installed skill path the compatibility check reads. On Windows the platform default is `%LOCALAPPDATA%\hermes`. |
 
@@ -228,8 +267,8 @@ that documents it, and any skill at or above that floor is healthy:
 | State | Meaning |
 |---|---|
 | skill ≥ floor | fine — the skill may legitimately move **ahead** of the MCP |
-| skill < floor | drift — the skill is older than the server it documents; `--sync-skill` repairs it |
-| skill missing | drift (same remedy) |
+| skill < floor | drift — the skill is older than the server it documents; `--sync-skill` repairs it when a local checkout exists |
+| skill missing | not drift — the Hermes skill is optional. Public procedures are in [docs/skills/](../skills/README.md). `doctor` and `compat --check` exit 0 for this on an otherwise healthy install |
 
 ### The compatibility block returned by `get_version`
 

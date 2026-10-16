@@ -154,7 +154,13 @@ These rules are non-negotiable:
 psamvault uses OS keychain auth by default. The user must have:
 - `psamvault` CLI installed (`pipx install psamvault`)
 - Run `psamvault configure && psamvault login` at least once
-- For headless/CI: `PSAMVAULT_VEK` and `PSAMVAULT_TOKEN` env vars
+- A working OS keyring (Linux: Secret Service; macOS: login keychain; Windows: Credential Manager)
+
+`--version`, `--help`, and `selfcheck` do not need a keyring. Vault tools do. This server does not
+read `PSAMVAULT_VEK` or `PSAMVAULT_TOKEN`, and it does not fall back to a plaintext file. On Linux
+the server adopts `/run/user/<uid>/bus` when `DBUS_SESSION_BUS_ADDRESS` is unset and that socket
+belongs to this user; otherwise the host `env` must pass the bus address. See
+[OS keyring](docs/reference/configuration.md#os-keyring).
 
 ## Common Workflows
 
@@ -199,19 +205,22 @@ The MCP server runs as a local process. Install:
 
 ```bash
 pipx install psamvault-mcp
-playwright install chromium
-psamvault-mcp  # stdio mode for most clients
-# OR
-psamvault-mcp --http --port 8433  # HTTP/SSE for MCP clients that support it
+# `playwright` is not on PATH after pipx install. Use the venv interpreter.
+VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium
+psamvault-mcp --version   # smoke test: prints and exits; does not need a keyring
 ```
 
-**Stdio mode** (most MCP clients including Claude Code, Cline):
+**Stdio mode** (most MCP clients including Claude Code, Cline). Clear `PYTHONPATH`. On Linux the
+server adopts the per-user session bus; pass `DBUS_SESSION_BUS_ADDRESS` only when
+`/run/user/<uid>/bus` is not visible:
 ```json
 {
   "mcpServers": {
     "psamvault": {
       "command": "psamvault-mcp",
-      "args": []
+      "args": [],
+      "env": { "PYTHONPATH": "" }
     }
   }
 }
