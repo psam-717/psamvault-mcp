@@ -258,6 +258,12 @@ reachable. The server still starts. Vault tools then return an error of the form
 a `PSAMVAULT_PEPPER` line left in `config.env` stays in that file and is not loaded when the
 keyring cannot store it.
 
+A locked Secret Service collection, or a daemon with no default collection yet, does not
+open a GUI prompt and does not block startup. The server reads the `default` alias and
+whether that collection is locked. It does not call `Unlock` or `CreateCollection`. The
+next vault tool call looks again, so unlocking the keyring takes effect without restarting
+the host.
+
 | Platform | What the keyring backend reads | What you put in `env` |
 |---|---|---|
 | Linux | Secret Service, via jeepney, which reads **only** `DBUS_SESSION_BUS_ADDRESS` | `PYTHONPATH=""`. The server fills in `DBUS_SESSION_BUS_ADDRESS` from `/run/user/<uid>/bus` when that socket exists and is owned by this user, and sets `XDG_RUNTIME_DIR` when the directory exists and the variable is unset. Pass both explicitly when the socket is not visible (some containers). The MCP SDK does not expand `${...}`. |

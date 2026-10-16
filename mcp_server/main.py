@@ -29,11 +29,11 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from mcp_server.log import get_logger
+from mcp_server import session as vault_session
 from mcp_server.session import (
     is_logged_in,
     keyring_problem,
     load_config,
-    probe_keyring,
     user_facing_keyring_error,
 )
 
@@ -809,13 +809,20 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = _TOOL_REGISTRY
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-    # A missing or locked keyring is not "please log in": login cannot succeed,
-    # and the message has to say what to do instead of a traceback.
-    problem = probe_keyring()
+    # A missing, locked, or uninitialised keyring is not "please log in".
+    # The probe runs on a worker thread: a Secret Service round trip must not
+    # block the stdio loop, and it must not be the call that opens a prompt.
+    problem = await asyncio.to_thread(vault_session.probe_keyring)
     if problem:
         return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
 
-    if not is_logged_in():
+    logged_in = await asyncio.to_thread(is_logged_in)
+    # is_logged_in can discover a lock the cached successful probe did not see.
+    problem = vault_session.keyring_problem()
+    if problem:
+        return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
+
+    if not logged_in:
         result = {
             "error": (
                 "psamvault session not found. "

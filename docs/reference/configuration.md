@@ -99,8 +99,11 @@ confirm you are affected, is in
 ## OS keyring
 
 The pepper and the vault session live in the OS keyring. `--version`, `--help`, and `selfcheck` do
-not touch it. Startup does not crash when it is missing or locked; a vault tool returns
-`✗ <what failed> — <what to do next>`. The server never falls back to a file or to plaintext.
+not touch it. Startup does not crash, and does not open a desktop prompt, when the keyring is
+missing, locked, or has no default collection yet. A vault tool returns
+`✗ <what failed> — <what to do next>`. A failure is checked again on the next vault tool call,
+so unlocking the keyring takes effect without restarting the host. The server never falls back
+to a file or to plaintext.
 
 Which variables matter was checked against the libraries this package installs (keyring 25's Secret
 Service backend → secretstorage → jeepney 0.9) and against the stdio clients that strip the
@@ -128,7 +131,14 @@ must pass the real values (the SDK does not expand `${...}`):
 }
 ```
 
-Replace `1000` with the output of `id -u`. KWallet is not the backend this package installs: it
+Replace `1000` with the output of `id -u`. `run_with_credential` removes
+`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `GNOME_KEYRING_CONTROL`, and
+`DBUS_STARTER_ADDRESS` from the command. GDBus finds the same bus through
+`$XDG_RUNTIME_DIR/bus` when only the address is missing, and the control socket
+is a second way into the login keyring. Pass a variable back through `extra_env`
+when the command itself needs the bus.
+
+KWallet is not the backend this package installs: it
 needs `dbus-python`, which is not a dependency. On KDE, Secret Service is still what keyring
 selects unless that extra package is installed.
 

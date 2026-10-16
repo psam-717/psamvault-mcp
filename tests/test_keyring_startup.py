@@ -12,12 +12,14 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import keyring
 import pytest
 
 from mcp_server import session
+from mcp_server.cmd_runner import run_command_with_credential
 from mcp_server.main import handle_call_tool
 from mcp_server.upgrade_safety import SMOKE_CODE
 from mcp_server.version_check import SKIP_UPDATE_CHECK_ENV
@@ -375,3 +377,311 @@ def test_server_startup_warns_instead_of_crashing(tmp_path):
     assert "NoKeyringError" not in proc.stderr
     assert "keyrings.alt" not in proc.stderr
     assert "✗ no OS keyring reachable — " in proc.stderr
+
+
+# ── locked / uninitialised: never Unlock, never CreateCollection ──────────────
+def test_collection_inspection_does_not_unlock_or_create(monkeypatch):
+    """The call that used to hang is collection.unlock / create_collection."""
+    import secretstorage
+
+    events: list[object] = []
+
+    class Conn:
+        def close(self):
+            events.append("close")
+
+    class Coll:
+        def is_locked(self):
+            events.append("is_locked")
+            return True
+
+        def unlock(self):
+            events.append("unlock")
+
+    def dbus_init():
+        events.append("dbus_init")
+        return Conn()
+
+    def get_alias(connection, alias):
+        events.append(("alias", alias))
+        return Coll()
+
+    def banned(*_a, **_k):
+        events.append("banned")
+        raise AssertionError("this call opens a GUI prompt")
+
+    monkeypatch.setattr(secretstorage, "dbus_init", dbus_init)
+    monkeypatch.setattr(secretstorage, "check_service_availability", lambda _c: True)
+    monkeypatch.setattr(secretstorage, "get_collection_by_alias", get_alias)
+    monkeypatch.setattr(secretstorage, "get_default_collection", banned)
+    monkeypatch.setattr(secretstorage, "create_collection", banned)
+
+    risk = session._collection_prompt_risk()
+
+    assert isinstance(risk, keyring.errors.KeyringLocked)
+    assert not isinstance(risk, session._UninitialisedKeyring)
+    assert "unlock" not in events
+    assert "banned" not in events
+    assert ("alias", "default") in events
+    assert "close" in events
+    text = session.explain_keyring_failure(risk)
+    assert text.startswith("✗ the OS keyring is locked — ")
+    assert "will not open an unlock prompt" in text
+
+
+def test_a_missing_default_collection_is_not_created(monkeypatch):
+    import secretstorage
+    from secretstorage.exceptions import ItemNotFoundException
+
+    events: list[object] = []
+
+    class Conn:
+        def close(self):
+            events.append("close")
+
+    def banned(*_a, **_k):
+        events.append("banned")
+        raise AssertionError("create_collection opens a prompt")
+
+    monkeypatch.setattr(secretstorage, "dbus_init", lambda: Conn())
+    monkeypatch.setattr(secretstorage, "check_service_availability", lambda _c: True)
+    def missing(_connection, _alias):
+        raise ItemNotFoundException("no default alias")
+
+    monkeypatch.setattr(secretstorage, "get_collection_by_alias", missing)
+    monkeypatch.setattr(secretstorage, "get_default_collection", banned)
+    monkeypatch.setattr(secretstorage, "create_collection", banned)
+
+    risk = session._collection_prompt_risk()
+
+    assert isinstance(risk, session._UninitialisedKeyring)
+    assert "banned" not in events
+    assert "close" in events
+    text = session.explain_keyring_failure(risk)
+    assert text.startswith("✗ the OS keyring has no default collection — ")
+    assert "will not create one" in text
+    assert "no plaintext fallback" in text
+
+
+def test_an_unlocked_collection_is_safe_to_hand_to_keyring(monkeypatch):
+    import secretstorage
+
+    class Conn:
+        def close(self):
+            pass
+
+    class Coll:
+        def is_locked(self):
+            return False
+
+    monkeypatch.setattr(secretstorage, "dbus_init", lambda: Conn())
+    monkeypatch.setattr(secretstorage, "check_service_availability", lambda _c: True)
+    monkeypatch.setattr(
+        secretstorage, "get_collection_by_alias", lambda _c, _a: Coll()
+    )
+
+    assert session._collection_prompt_risk() is None
+
+
+def test_a_missing_bus_does_not_become_a_locked_keyring(monkeypatch):
+    """No session bus is the existing NoKeyringError path. keyring raises it at once."""
+    import secretstorage
+    from secretstorage.exceptions import SecretServiceNotAvailableException
+
+    called = {"n": 0}
+
+    def get_password(service, username):
+        called["n"] += 1
+        raise keyring.errors.NoKeyringError("no backend")
+
+    def dbus_init():
+        raise SecretServiceNotAvailableException("unset")
+
+    monkeypatch.setattr(session, "adopt_session_bus", lambda: [])
+    monkeypatch.setattr(session, "_backend_uses_secret_service", lambda _kr: True)
+    monkeypatch.setattr(keyring, "get_keyring", lambda: object())
+    monkeypatch.setattr(secretstorage, "dbus_init", dbus_init)
+    monkeypatch.setattr(keyring, "get_password", get_password)
+
+    assert session._keyring_get("config.pepper") is session._UNAVAILABLE
+    assert called["n"] == 1
+    text = session.keyring_problem()
+    assert text.startswith("✗ no OS keyring reachable — ")
+    assert "default collection" not in text
+
+
+def test_a_locked_collection_never_calls_get_password(monkeypatch):
+    monkeypatch.setattr(session, "adopt_session_bus", lambda: [])
+    monkeypatch.setattr(
+        session,
+        "_prompt_risk",
+        lambda: keyring.errors.KeyringLocked("the default collection is locked"),
+    )
+
+    def hang(service, username, password=None):
+        raise AssertionError("get_password would open the unlock prompt")
+
+    monkeypatch.setattr(keyring, "get_password", hang)
+    started = time.monotonic()
+    session.load_config()
+    assert time.monotonic() - started < 2
+    assert session.keyring_problem().startswith("✗ the OS keyring is locked — ")
+
+
+def test_update_and_clear_do_not_prompt_when_the_collection_is_locked(monkeypatch, tmp_path):
+    marker = tmp_path / "session.json"
+    marker.write_text("{}")
+    monkeypatch.setattr(session, "SESSION_FILE", marker)
+    monkeypatch.setattr(
+        session,
+        "_prompt_risk",
+        lambda: keyring.errors.KeyringLocked("the default collection is locked"),
+    )
+    def refuse_set(*_a, **_k):
+        raise AssertionError("set would prompt")
+
+    def refuse_delete(*_a, **_k):
+        raise AssertionError("delete would prompt")
+
+    monkeypatch.setattr(keyring, "set_password", refuse_set)
+    monkeypatch.setattr(keyring, "delete_password", refuse_delete)
+
+    with pytest.raises(RuntimeError, match="✗ the OS keyring is locked — "):
+        session.update_tokens("access", "refresh")
+    session.clear_session()
+    assert marker.exists()
+
+
+def test_unlocking_is_visible_on_the_next_probe(monkeypatch):
+    monkeypatch.setattr(session, "_prompt_risk", lambda: None)
+    state = {"locked": True}
+
+    def get_password(service, username):
+        if state["locked"]:
+            raise keyring.errors.KeyringLocked("locked")
+        return "pepper-from-keyring"
+
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    first = session.probe_keyring()
+    assert first is not None and first.startswith("✗ the OS keyring is locked — ")
+    state["locked"] = False
+    assert session.probe_keyring() is None
+    assert session.keyring_problem() is None
+
+
+def test_the_tool_handler_does_not_block_the_loop_on_the_probe(monkeypatch):
+    def slow():
+        time.sleep(0.3)
+        return "✗ the OS keyring is locked — worker"
+
+    monkeypatch.setattr(session, "probe_keyring", slow)
+    ticks = {"n": 0}
+
+    async def tick():
+        while True:
+            ticks["n"] += 1
+            await asyncio.sleep(0.05)
+
+    async def run():
+        task = asyncio.create_task(tick())
+        await asyncio.sleep(0)
+        try:
+            return await handle_call_tool("list_vault_sites", {})
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    result = asyncio.run(run())
+    assert ticks["n"] >= 2, "the probe ran on the event loop and froze it"
+    payload = json.loads(result[0].text)
+    assert payload["error"].startswith("✗ the OS keyring is locked — ")
+
+
+def test_a_chainer_containing_secret_service_is_recognised():
+    from keyring.backends.SecretService import Keyring as SecretServiceKeyring
+
+    class Chain:
+        backends = [SecretServiceKeyring()]
+
+    assert session._backend_uses_secret_service(SecretServiceKeyring()) is True
+    assert session._backend_uses_secret_service(Chain()) is True
+    assert session._backend_uses_secret_service(keyring.get_keyring()) is False
+
+
+def test_adopted_bus_is_not_visible_to_a_child_command(monkeypatch, tmp_path):
+    sock = _bind_socket(tmp_path / "bus")
+    script = tmp_path / "show_env.py"
+    script.write_text(
+        "import os\n"
+        "names = (\n"
+        "    'DBUS_SESSION_BUS_ADDRESS',\n"
+        "    'XDG_RUNTIME_DIR',\n"
+        "    'GNOME_KEYRING_CONTROL',\n"
+        "    'DBUS_STARTER_ADDRESS',\n"
+        "    'HOME',\n"
+        "    'PSAMVAULT_CHILD_MARKER',\n"
+        ")\n"
+        "for name in names:\n"
+        "    print(name + '=' + os.environ.get(name, ''))\n",
+        encoding="utf-8",
+    )
+    try:
+        monkeypatch.setattr(session, "runtime_dir_candidates", lambda: [tmp_path])
+        monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        monkeypatch.setenv("GNOME_KEYRING_CONTROL", str(tmp_path / "keyring"))
+        monkeypatch.setenv("DBUS_STARTER_ADDRESS", f"unix:path={tmp_path / 'bus'}")
+        monkeypatch.setenv("PSAMVAULT_CHILD_MARKER", "kept")
+        adopted = session.adopt_session_bus()
+        assert "DBUS_SESSION_BUS_ADDRESS" in adopted
+        assert os.environ["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={tmp_path / 'bus'}"
+        result = asyncio.run(
+            run_command_with_credential(
+                command=f'"{sys.executable}" "{script}"',
+                credential_value="not-printed",
+                inject_as="env",
+                env_var_name="TWINE_PASSWORD",
+                timeout=30,
+            )
+        )
+    finally:
+        sock.close()
+
+    assert result["exit_code"] == 0, result
+    out = result["stdout"]
+    assert "DBUS_SESSION_BUS_ADDRESS=\n" in out
+    assert "XDG_RUNTIME_DIR=\n" in out
+    assert "GNOME_KEYRING_CONTROL=\n" in out
+    assert "DBUS_STARTER_ADDRESS=\n" in out
+    assert f"unix:path={tmp_path / 'bus'}" not in out
+    assert "PSAMVAULT_CHILD_MARKER=kept" in out
+    assert "HOME=" in out and out.split("HOME=", 1)[1].splitlines()[0].strip()
+
+
+def test_extra_env_can_pass_the_bus_through(monkeypatch, tmp_path):
+    script = tmp_path / "show_env.py"
+    script.write_text(
+        "import os\n"
+        "print('BUS=' + os.environ.get('DBUS_SESSION_BUS_ADDRESS', ''))\n"
+        "print('XDG=' + os.environ.get('XDG_RUNTIME_DIR', ''))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1")
+    result = asyncio.run(
+        run_command_with_credential(
+            command=f'"{sys.executable}" "{script}"',
+            credential_value="not-printed",
+            inject_as="env",
+            env_var_name="TWINE_PASSWORD",
+            extra_env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/explicit-bus"},
+            timeout=30,
+        )
+    )
+    assert result["exit_code"] == 0, result
+    assert "BUS=unix:path=/tmp/explicit-bus" in result["stdout"]
+    assert "XDG=\n" in result["stdout"]
+    assert "/run/user/1" not in result["stdout"]

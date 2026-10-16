@@ -33,9 +33,32 @@ class _Unavailable:
 
 _UNAVAILABLE = _Unavailable()
 
-# First failure in this process. Cleared only by tests.
+# A working keyring is remembered so later tool calls do not reopen the bus.
+# A failure is not: the next probe looks again, so unlocking takes effect
+# without restarting the server. Tests clear both.
 _KEYRING_PROBLEM: str | None = None
 _KEYRING_PROBED = False
+
+# What an agent-chosen child must not inherit. jeepney reads only
+# DBUS_SESSION_BUS_ADDRESS, but GDBus (secret-tool, libsecret) falls back to
+# $XDG_RUNTIME_DIR/bus when that address is unset. GNOME_KEYRING_CONTROL is the
+# keyring control socket. DBUS_STARTER_* is how a bus-activated process finds
+# the bus that started it. extra_env is applied after this list.
+_CHILD_ENV_DENY = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+    "GNOME_KEYRING_CONTROL",
+    "DBUS_STARTER_ADDRESS",
+    "DBUS_STARTER_BUS_TYPE",
+)
+
+
+class _UninitialisedKeyring(keyring.errors.KeyringError):
+    """Secret Service is up, but the default collection does not exist.
+
+    ``keyring`` would call ``create_collection``, which opens a GUI prompt and
+    blocks. This process does not create a collection.
+    """
 
 
 def keyring_problem() -> str | None:
@@ -44,7 +67,7 @@ def keyring_problem() -> str | None:
 
 
 def clear_keyring_problem() -> None:
-    """Forget a recorded keyring failure. Tests only — a server process keeps the first one."""
+    """Forget a recorded keyring failure and the remembered success."""
     global _KEYRING_PROBLEM, _KEYRING_PROBED
     _KEYRING_PROBLEM = None
     _KEYRING_PROBED = False
@@ -59,12 +82,19 @@ def user_facing_keyring_error(exc: BaseException) -> str | None:
 
 def explain_keyring_failure(exc: BaseException) -> str:
     """``✗ <what failed> — <what to do next>``. Never recommends plaintext storage."""
+    if isinstance(exc, _UninitialisedKeyring):
+        return (
+            "✗ the OS keyring has no default collection — create and unlock the "
+            "default keyring in your desktop session, then retry. The server will "
+            "not create one, because that opens a prompt. Secrets stay in the OS "
+            "keyring; there is no plaintext fallback."
+        )
     if isinstance(exc, keyring.errors.KeyringLocked):
         return (
             "✗ the OS keyring is locked — unlock it and retry "
             "(Linux: Secret Service / gnome-keyring; macOS: the login keychain; "
-            "Windows: Credential Manager). Secrets stay in the OS keyring; "
-            "there is no plaintext fallback."
+            "Windows: Credential Manager). The server will not open an unlock prompt. "
+            "Secrets stay in the OS keyring; there is no plaintext fallback."
         )
     if sys.platform.startswith("linux"):
         bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
@@ -189,6 +219,119 @@ def adopt_session_bus() -> list[str]:
     return adopted
 
 
+def child_environment(extra: dict | None = None) -> dict[str, str]:
+    """Environment for a command the agent asked the server to run.
+
+    The session bus this process uses to reach Secret Service is removed.
+    ``extra`` is applied afterwards, so an explicit ``extra_env`` entry is how
+    a caller passes the bus through. Everything else in the environment stays.
+    """
+    env = os.environ.copy()
+    for name in _CHILD_ENV_DENY:
+        env.pop(name, None)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _backend_uses_secret_service(kr: object) -> bool:
+    """True when ``kr`` is Secret Service, or a chainer that will call it."""
+    seen: set[int] = set()
+
+    def walk(obj: object) -> bool:
+        ident = id(obj)
+        if ident in seen:
+            return False
+        seen.add(ident)
+        module = getattr(type(obj), "__module__", "") or ""
+        if module.startswith("keyring.backends.SecretService"):
+            return True
+        backends = getattr(obj, "backends", None)
+        if backends is None:
+            return False
+        try:
+            items = list(backends)
+        except Exception:
+            return False
+        return any(walk(item) for item in items)
+
+    return walk(kr)
+
+
+def _collection_prompt_risk() -> BaseException | None:
+    """What would make the next Secret Service call open a GUI prompt.
+
+    Reads the ``default`` alias and its ``Locked`` property. Does not call
+    ``Unlock``, ``CreateCollection``, or ``get_default_collection`` (that last
+    one creates the collection, which prompts). Returns None when Secret
+    Service is not reachable: ``keyring`` then raises ``NoKeyringError``
+    without a prompt. Returns an exception when calling ``keyring`` would
+    block on a prompt; the caller must not call ``keyring`` in that case.
+    """
+    try:
+        import secretstorage
+        from secretstorage.exceptions import (
+            ItemNotFoundException,
+            SecretServiceNotAvailableException,
+        )
+    except ImportError:  # pragma: no cover - secretstorage is a dependency
+        return None
+    connection = None
+    try:
+        try:
+            connection = secretstorage.dbus_init()
+        except Exception:
+            return None
+        try:
+            available = secretstorage.check_service_availability(connection)
+        except SecretServiceNotAvailableException:
+            return None
+        if not available:
+            return None
+        try:
+            collection = secretstorage.get_collection_by_alias(connection, "default")
+        except ItemNotFoundException:
+            return _UninitialisedKeyring("no default collection")
+        except Exception as exc:
+            return keyring.errors.KeyringLocked(
+                f"could not read the default collection ({type(exc).__name__})"
+            )
+        try:
+            locked = bool(collection.is_locked())
+        except Exception as exc:
+            return keyring.errors.KeyringLocked(
+                f"could not read the lock state ({type(exc).__name__})"
+            )
+        if locked:
+            return keyring.errors.KeyringLocked("the default collection is locked")
+        return None
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+
+def _prompt_risk() -> BaseException | None:
+    """An exception when the next keyring call would open a GUI prompt, else None.
+
+    None means "call keyring". That includes macOS, Windows, any backend other
+    than Secret Service, a missing session bus, and a default collection that
+    is already unlocked (its ``Unlock`` returns without a prompt).
+    """
+    adopt_session_bus()
+    if os.name == "nt" or sys.platform == "darwin":
+        return None
+    try:
+        kr = keyring.get_keyring()
+    except Exception:
+        return None
+    if not _backend_uses_secret_service(kr):
+        return None
+    return _collection_prompt_risk()
+
+
 def _keyring_get(username: str):
     """Read one keychain entry.
 
@@ -196,7 +339,11 @@ def _keyring_get(username: str):
     keyring itself cannot be used. The failure is recorded; this function does not raise.
     """
     global _KEYRING_PROBED
-    adopt_session_bus()
+    risk = _prompt_risk()
+    if risk is not None:
+        _record_keyring_problem(risk)
+        _KEYRING_PROBED = True
+        return _UNAVAILABLE
     try:
         value = keyring.get_password(_SERVICE, username)
     except Exception as exc:
@@ -207,9 +354,29 @@ def _keyring_get(username: str):
     return value
 
 
+def _keyring_delete(username: str) -> bool:
+    """Delete one keychain entry. False when that would open a prompt — the caller
+    must not drop the only remaining copy of the session."""
+    risk = _prompt_risk()
+    if risk is not None:
+        _record_keyring_problem(risk)
+        return False
+    try:
+        keyring.delete_password(_SERVICE, username)
+    except keyring.errors.PasswordDeleteError:
+        return True
+    except Exception as exc:
+        _record_keyring_problem(exc)
+        return False
+    return True
+
+
 def _keyring_set(username: str, password: str) -> bool:
     """Store one keychain entry. False when the keyring refused — nothing is written elsewhere."""
-    adopt_session_bus()
+    risk = _prompt_risk()
+    if risk is not None:
+        _record_keyring_problem(risk)
+        return False
     try:
         keyring.set_password(_SERVICE, username, password)
     except Exception as exc:
@@ -221,14 +388,16 @@ def _keyring_set(username: str, password: str) -> bool:
 def probe_keyring() -> str | None:
     """The ``✗`` message if the OS keyring cannot be used, else None.
 
-    A missing entry is a working keyring. The result of the first probe is reused so
-    every tool call does not open the session bus again.
+    A missing entry is a working keyring. A working keyring is remembered so later
+    tool calls do not reopen the session bus. A failure is not remembered: the next
+    call looks again, so unlocking or creating the default collection takes effect
+    without restarting the server.
     """
-    global _KEYRING_PROBED
-    if _KEYRING_PROBLEM is not None:
-        return _KEYRING_PROBLEM
-    if _KEYRING_PROBED:
+    global _KEYRING_PROBLEM, _KEYRING_PROBED
+    if _KEYRING_PROBED and _KEYRING_PROBLEM is None:
         return None
+    _KEYRING_PROBLEM = None
+    _KEYRING_PROBED = False
     _keyring_get(_PEPPER_KEY)
     _KEYRING_PROBED = True
     return _KEYRING_PROBLEM
@@ -405,8 +574,12 @@ def update_tokens(access_token: str, refresh_token: str) -> None:
     is persisted — without this the old revoked token gets reused on
     the next request, causing a permanent 401 loop.
     """
-    keyring.set_password(_SERVICE, "session.access_token", access_token)
-    keyring.set_password(_SERVICE, "session.refresh_token", refresh_token)
+    if not _keyring_set("session.access_token", access_token) or not _keyring_set(
+        "session.refresh_token", refresh_token
+    ):
+        raise RuntimeError(keyring_problem() or explain_keyring_failure(
+            keyring.errors.KeyringLocked("unavailable")
+        ))
 
 
 def update_access_token(access_token: str) -> None:
@@ -414,18 +587,21 @@ def update_access_token(access_token: str) -> None:
     Overwrite just the access_token in the keychain.
     Called automatically after a successful token refresh.
     """
-    keyring.set_password(_SERVICE, "session.access_token", access_token)
+    if not _keyring_set("session.access_token", access_token):
+        raise RuntimeError(keyring_problem() or explain_keyring_failure(
+            keyring.errors.KeyringLocked("unavailable")
+        ))
 
 
 def clear_session() -> None:
     """
     Delete all session data from the keychain and remove the presence marker.
+    A locked keyring leaves the marker in place: deleting it would drop the
+    only sign that a session exists, and the delete itself would prompt.
     """
     for key in _SESSION_KEYS:
-        try:
-            keyring.delete_password(_SERVICE, key)
-        except keyring.errors.PasswordDeleteError:
-            pass
+        if not _keyring_delete(key):
+            return
     if SESSION_FILE.exists():
         SESSION_FILE.unlink()
 
