@@ -158,8 +158,21 @@ def check(
         known = ", ".join(rel["mcp"] for rel in releases(contract))
         findings.append(f"no contract entry for server {mcp} (known: {known})")
 
-    skill_below_floor = skill_current is None or _vkey(str(skill_current)) < _vkey(skill_floor)
-    skill_ahead = (not skill_below_floor) and str(skill_current) != str(skill_floor)
+    # A skill file that was never installed is optional. The Hermes usage skill is not
+    # part of a public install, and the copy `compat --sync-skill` reads lives in a
+    # maintainer checkout the public cannot obtain. Failing doctor/check for its
+    # absence tells a new user their install is broken and points them at a command
+    # that cannot succeed. A file that exists but is unversioned or below the floor
+    # is still drift.
+    try:
+        skill_file_present = Path(skill_location).is_file()
+    except OSError:
+        skill_file_present = False
+    skill_absent = skill_current is None and not skill_file_present
+    skill_below_floor = (not skill_absent) and (
+        skill_current is None or _vkey(str(skill_current)) < _vkey(skill_floor)
+    )
+    skill_ahead = (not skill_below_floor) and (not skill_absent) and str(skill_current) != str(skill_floor)
     skill_drift = skill_below_floor  # name kept: drift means "worse than required", never "newer"
     if skill_below_floor:
         findings.append(
@@ -228,6 +241,7 @@ def check(
         "skill_source": clone_version,
         "skill_source_stale": skill_source_stale,
         "installed_skill": skill_current,
+        "skill_absent": skill_absent,
         "skill_drift": skill_drift,
         "skill_path": skill_location,
         "tool_drift": {"missing": missing, "unexpected": unexpected},
@@ -261,9 +275,16 @@ def render(report: dict) -> str:
             else "no"
         ),
         f"  effective release: {report['effective_release']}",
-        f"  skill installed  : {report['installed_skill']}"
-        + ("  [ahead of the floor — fine]" if report.get("skill_ahead")
-           else ("  [BELOW the floor]" if report["skill_drift"] else "")),
+        "  skill installed  : "
+        + (
+            "not installed (optional — Hermes only)"
+            if report.get("skill_absent")
+            else str(report["installed_skill"])
+            + (
+                "  [ahead of the floor — fine]" if report.get("skill_ahead")
+                else ("  [BELOW the floor]" if report["skill_drift"] else "")
+            )
+        ),
         f"  skill floor      : {report['skill_floor']}  (minimum this server requires)",
         f"  tools            : {'+%d/-%d vs contract' % (len(report['tool_drift']['unexpected']), len(report['missing'])) if not report['in_sync'] else 'match contract'}",
     ]
@@ -518,6 +539,24 @@ def clone_skill_path() -> Path:
     return clone_path() / load_contract()["skill"]["path"]
 
 
+# Public procedures. Not the private distribution mirror.
+_PUBLIC_SKILL_DOCS = "https://github.com/psam-717/psamvault-mcp/blob/main/docs/skills/README.md"
+
+
+def _missing_skill_source_reason(source: Path) -> str:
+    """``✗ <what failed> — <what to do next>`` when `--sync-skill` has nothing to install.
+
+    The Hermes usage skill is optional. The message points at the public docs in this
+    repository and does not tell the reader to clone a private repo.
+    """
+    return (
+        "✗ no local skill checkout — the Hermes usage skill is optional and is not a public "
+        f"install. Follow the procedures at {_PUBLIC_SKILL_DOCS}. "
+        "Set PSAMVAULT_SKILL_CLONE only when you already have a local checkout; "
+        f"nothing was found at {source}."
+    )
+
+
 def clone_skill_branch() -> str | None:
     """Branch the clone is checked out on — the reason its skill version is what it is."""
     try:
@@ -558,7 +597,7 @@ def _sync_skill(entry: dict, allow_downgrade: bool = False) -> dict:
     version, text = read_clone_skill()
     source = clone_skill_path()
     if text is None:
-        return {"ok": False, "reason": f"no skill at {source} (clone {clone_path()})"}
+        return {"ok": False, "reason": _missing_skill_source_reason(source)}
     if version is None:
         return {"ok": False, "reason": f"{source} has no 'version:' in its frontmatter"}
     if _vkey(version) < _vkey(floor):

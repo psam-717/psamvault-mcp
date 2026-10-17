@@ -179,10 +179,22 @@ psamvault configure
 psamvault login
 ```
 
-- Playwright Chromium browser
+- Playwright Chromium browser (only for `browser_login`)
+
+`pipx` puts `psamvault-mcp` on PATH and does not put `playwright` there. Run the copy
+inside the pipx venv, and let pipx say where that venv is (current pipx uses
+`~/.local/share/pipx` on Linux, `~/Library/Application Support/pipx` on macOS, and
+`%LOCALAPPDATA%\pipx\pipx` on Windows; an older install keeps `~/.local/pipx` or
+`%USERPROFILE%\pipx` when that directory is already there):
 
 ```bash
-playwright install chromium
+VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium          # Linux / macOS
+```
+
+```powershell
+$venvs = (pipx environment --value PIPX_LOCAL_VENVS).Trim()
+& "$venvs\psamvault-mcp\Scripts\python.exe" -m playwright install chromium   # Windows
 ```
 
 ## Installation
@@ -236,6 +248,19 @@ tool_timeout_sec = 300
 [mcp_servers.psamvault.env]
 PYTHONPATH = ""
 ```
+
+On Linux the OS keyring is Secret Service, and the library this package uses
+(jeepney 0.9) reads only `DBUS_SESSION_BUS_ADDRESS`. The official MCP SDKs do not
+include that variable in the environment they pass to a stdio server, so
+`PYTHONPATH=""` alone used to make a working keyring look missing. The server
+fills the variable in from `/run/user/<uid>/bus` when that socket exists and is
+owned by this user. It does not replace a value you set, and it does not store
+secrets anywhere else. A container that cannot see that socket must pass
+`DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` explicitly — the SDK does not
+expand `${...}`. macOS Keychain and Windows Credential Manager need nothing
+beyond the variables those SDKs already pass (`HOME`, and on Windows
+`USERPROFILE` / `APPDATA` / `SYSTEMROOT`). Details:
+[Configuration](docs/reference/configuration.md#os-keyring).
 
 Then **restart the agent session** (or refresh MCP). Config edits do not always
 reload tools mid-chat. Verify with `get_version`, then `list_vault_sites`.
@@ -475,9 +500,11 @@ release the contract calls newest, so a release that forgets the roll-over canno
 
 ## Version lockstep (MCP ↔ skill)
 
-The server and its [usage skill](https://github.com/psam-717/private-skills) are a **pinned pair**, and
-the pairing ships *inside the wheel* as `mcp_server/compatibility.json` (each MCP release → the skill
-version that documents it, plus the expected tool fingerprint).
+The server and its usage skill are a **pair with a floor**. The pairing ships *inside the wheel* as
+`mcp_server/compatibility.json` (each MCP release → the minimum skill version that documents it, plus
+the expected tool fingerprint). The skill is the optional Hermes copy at
+`HERMES_HOME/skills/psam-custom/psamvault-mcp/SKILL.md`. Public procedures are in this repository under
+[docs/skills/](docs/skills/README.md). A fresh install with no Hermes skill is healthy.
 
 ```bash
 psamvault-mcp compat --check                     # exit 0 in sync, 1 drift (advisory: a newer published release never changes this)
@@ -517,11 +544,12 @@ documents it, and any skill at or above that floor is healthy:
 | State | Meaning |
 |---|---|
 | skill ≥ floor | ✅ fine — the skill may legitimately move **ahead** of the MCP |
-| skill < floor | drift — the skill is older than the server it documents; `--sync-skill` repairs it |
-| skill missing | drift (same remedy) |
+| skill < floor | drift — the skill is older than the server it documents; `--sync-skill` repairs it when you already have a local skill checkout |
+| skill missing | not drift — the Hermes skill is optional; follow [docs/skills/](docs/skills/README.md) |
 
 That is what makes a **skill-only update** possible: improving the description of an existing tool is a
-skill change with no MCP release behind it. Edit the skill in the clone, then:
+skill change with no MCP release behind it. With a local skill checkout (maintainers; override the
+path with `PSAMVAULT_SKILL_CLONE`), edit it, then:
 
 ```bash
 psamvault-mcp compat --sync-skill     # installs the clone's working-tree skill, if it meets the floor
@@ -606,13 +634,16 @@ Once connected, you can ask your agent things like:
 ## Testing
 
 ```bash
-# From the repo root
+pip install -e .
+pip install pytest pytest-asyncio pytest-httpx pytest-timeout
 pytest
 ```
 
-Tests live in `tests/` and cover crypto primitives, session management, consent
-logic, the API client (with httpx mocking), and MCP tool behaviour. The test suite
-requires no real network access or OS keychain — all external dependencies are mocked.
+CI runs that with `PSAMVAULT_PEPPER` set to 64 `a` characters, `PSAMVAULT_API_URL=https://test.example.com`,
+and `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring`. Tests live in `tests/` and cover crypto
+primitives, session management, the API client (with httpx mocking), and MCP tool behaviour. The suite
+requires no real network access or OS keychain — external dependencies are mocked, and a missing keyring
+is exercised with `keyring.backends.fail.Keyring` rather than a live Secret Service.
 
 ## Security
 

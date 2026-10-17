@@ -70,7 +70,9 @@ your own notes:
 
 ```bash
 pipx install psamvault-mcp
-playwright install chromium
+# `playwright` is not on PATH. Ask pipx where the venv is.
+VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium
 ```
 
 The user must also have the psamvault CLI installed and logged in:
@@ -163,6 +165,11 @@ by the server subprocess and outranks its own `site-packages`, which is how a pi
 up crashing on `ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'`. Clearing it for
 this subprocess is the fix — see [PYTHONPATH conflict](../troubleshooting/PYTHONPATH-CONFLICT.md).
 
+On Linux that minimal environment does not include `DBUS_SESSION_BUS_ADDRESS`. The server adopts
+`/run/user/<uid>/bus` when the socket exists and belongs to this user. When it does not, add the
+real bus address to `env` — see [OS keyring](../reference/configuration.md#os-keyring). macOS and
+Windows need no extra variable. `--version` and `--help` do not need a keyring.
+
 ## Step 4 — reload the host
 
 Editing config does **not** inject tools into a session that is already running.
@@ -179,7 +186,7 @@ Editing config does **not** inject tools into a session that is already running.
 
 ```bash
 psamvault-mcp selfcheck    # installed version vs what a NEW session gets (exit 1 on mismatch)
-psamvault-mcp compat --check   # server ↔ usage-skill pairing (exit 1 = drift)
+psamvault-mcp compat --check   # server ↔ usage-skill pairing (exit 1 = drift; a missing Hermes skill is not drift)
 ```
 
 Then, from a new session:
@@ -202,6 +209,8 @@ A tool count is **not** a version check: v0.5.0 removed one tool and added anoth
 | `psamvault-mcp` with no arguments "hangs" | not a bug — that is the stdio server waiting on stdin | use `--version` / `--help` for smoke tests |
 | Tools missing although config is right | the session predates the config edit | reload the host (Step 4) |
 | Every tool errors with "run psamvault login" | no/expired vault session | user runs `psamvault login` |
+| A tool returns `✗ … no OS keyring reachable` | Secret Service, the login keychain, or Credential Manager did not answer. On Linux the usual cause is a missing session bus | start and unlock the OS keyring; on Linux pass `DBUS_SESSION_BUS_ADDRESS` when `/run/user/<uid>/bus` is not visible. No plaintext fallback |
+| `compat --check` on a fresh install | a missing Hermes skill is optional and is not drift | exit 0 when nothing else is wrong. Public procedures are in [docs/skills/](./README.md) |
 
 ## Rules for the agent
 

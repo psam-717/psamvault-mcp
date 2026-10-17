@@ -54,7 +54,9 @@ Playwright's Python API is async. `browser_login` must be `async def`. Since `ha
 ## Post-implementation steps
 After code changes:
 1. `pipx install . --force` — reinstall the package with playwright dependency
-2. `playwright install chromium` — download the Chromium browser binary inside the pipx venv
+2. Install Chromium with the pipx venv's interpreter — `playwright` is not on PATH:
+   `VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"` then
+   `"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium`
 
 ## Implementation Todos
 - [ ] Add `playwright>=1.40.0` to `pyproject.toml` dependencies
@@ -62,4 +64,4 @@ After code changes:
 - [ ] Implement `async def browser_login()` in `mcp_server/tools.py`
 - [ ] Register `browser_login` Tool definition in `mcp_server/main.py` TOOL_DEFINITIONS
 - [ ] Add `await tools.browser_login(...)` routing in `handle_call_tool` in `mcp_server/main.py`
-- [ ] Run `pipx install . --force` and `playwright install chromium`
+- [ ] Run `pipx install . --force`, then `"$(pipx environment --value PIPX_LOCAL_VENVS)/psamvault-mcp/bin/python" -m playwright install chromium`

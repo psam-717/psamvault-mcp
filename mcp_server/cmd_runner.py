@@ -96,10 +96,12 @@ async def run_command_with_credential(
             "error": blocked,
         }
 
-    # Build environment
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
+    # Build environment. The session bus the server adopted (and the variables
+    # GDBus would use to find that same bus) are not copied in. extra_env is
+    # applied after that removal, which is the explicit pass-through.
+    from mcp_server.session import child_environment
+
+    env = child_environment(extra_env)
 
     stdin_data: Optional[bytes] = None
 

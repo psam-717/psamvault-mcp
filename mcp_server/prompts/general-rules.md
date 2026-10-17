@@ -103,8 +103,9 @@ Do not invent shell workarounds that print secrets. Follow the install playbook:
 Typical causes and fixes:
 - **Missing binary in config** → `pipx install psamvault-mcp`; point config at the absolute path under `~/.local/bin/`
 - **Broken system Python shim on PATH** (`ModuleNotFoundError: pydantic`) → use absolute pipx path; do not prefer `Python3xx\Scripts\psamvault-mcp.exe`
-- **Corrupt pipx metadata** → delete `~/pipx/venvs/psamvault-mcp` and reinstall
-- **PYTHONPATH contamination** → set `env.PYTHONPATH=""` on the MCP server entry (see `docs/troubleshooting/PYTHONPATH-CONFLICT.md`)
+- **Corrupt pipx metadata** → delete the venv `pipx environment --value PIPX_LOCAL_VENVS` names (`…/psamvault-mcp`) and reinstall. Do not hardcode `~/.local/pipx/venvs`
+- **PYTHONPATH contamination** → set `env.PYTHONPATH=""` on the MCP server entry (see `docs/troubleshooting/PYTHONPATH-CONFLICT.md`). On Linux the server adopts `/run/user/<uid>/bus` for Secret Service; pass `DBUS_SESSION_BUS_ADDRESS` only when that socket is not visible
+- **`✗` keyring error** → the OS keyring is missing or locked. Relay the message. Do not store the secret in a file. `--version` and `--help` do not need a keyring
 - **Config fixed but tools still absent** → restart/reload the agent session so MCP is rediscovered
 - **Smoke-test hang** → `psamvault-mcp` without flags waits on stdio; use `--version` or `--help` instead
 

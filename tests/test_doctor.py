@@ -367,6 +367,24 @@ class TestDoctorDoesNotAdvertiseFixForWhatItCannotRepair:
         assert rc == 0  # a no-op, not a failure
         assert "psamvault-mcp compat --apply --latest --allow-breaking" in out
 
+    def test_an_absent_skill_is_not_a_finding(self, fake_machine, monkeypatch):
+        """No Hermes skill on a fresh public install must not fail doctor."""
+        import mcp_server.compat as compat
+
+        self._no_install_drift(fake_machine)
+        monkeypatch.setattr(compat, "check", lambda **k: {
+            "installed_skill": None, "skill_floor": "1.9.1", "skill_drift": False,
+            "skill_absent": True, "latest_published": "0.5.2", "published_newer": None,
+            "apply_command": None,
+        })
+        report = doctor.diagnose(probe_index=False)
+        assert report["exit_code"] == 0
+        assert report["findings"] == []
+        text = doctor.render(report)
+        assert "not installed (optional)" in text
+        assert "sync-skill" not in text
+        assert "healthy" in text
+
     def test_a_skill_only_gap_points_at_sync_skill(self, fake_machine, monkeypatch, capsys):
         import mcp_server.compat as compat
 

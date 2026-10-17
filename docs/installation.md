@@ -25,8 +25,20 @@ psamvault login
 
 - Playwright Chromium browser (needed only for `browser_login`)
 
+`pipx` does not put `playwright` on PATH. Use the interpreter inside the pipx venv, and ask pipx
+where that venv is. Current pipx (1.7 and later) uses `~/.local/share/pipx` on Linux,
+`~/Library/Application Support/pipx` on macOS, and `%LOCALAPPDATA%\pipx\pipx` on Windows. An older
+install keeps `~/.local/pipx` (or `%USERPROFILE%\pipx` on Windows) when that directory already
+exists. Do not hardcode either path.
+
 ```bash
-playwright install chromium
+VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium          # Linux / macOS
+```
+
+```powershell
+$venvs = (pipx environment --value PIPX_LOCAL_VENVS).Trim()
+& "$venvs\psamvault-mcp\Scripts\python.exe" -m playwright install chromium   # Windows
 ```
 
 The server needs an active vault session. If the session is missing or expired, the fix is
@@ -238,6 +250,39 @@ or, in YAML/TOML hosts, the equivalent `env.PYTHONPATH = ""` / `[mcp_servers.psa
 root-cause write-up, including how to confirm you are affected, is in
 [PYTHONPATH conflict](./troubleshooting/PYTHONPATH-CONFLICT.md).
 
+## OS keyring
+
+`--version`, `--help`, and `selfcheck` do not need a keyring and do not crash when none is
+reachable. The server still starts. Vault tools then return an error of the form
+`✗ <what failed> — <what to do next>` instead of a traceback. There is no plaintext fallback:
+a `PSAMVAULT_PEPPER` line left in `config.env` stays in that file and is not loaded when the
+keyring cannot store it.
+
+A locked Secret Service collection, or a daemon with no default collection yet, does not
+open a GUI prompt and does not block startup. The server reads the `default` alias and
+whether that collection is locked. It does not call `Unlock` or `CreateCollection`. The
+next vault tool call looks again, so unlocking the keyring takes effect without restarting
+the host.
+
+| Platform | What the keyring backend reads | What you put in `env` |
+|---|---|---|
+| Linux | Secret Service, via jeepney, which reads **only** `DBUS_SESSION_BUS_ADDRESS` | `PYTHONPATH=""`. The server fills in `DBUS_SESSION_BUS_ADDRESS` from `/run/user/<uid>/bus` when that socket exists and is owned by this user, and sets `XDG_RUNTIME_DIR` when the directory exists and the variable is unset. Pass both explicitly when the socket is not visible (some containers). The MCP SDK does not expand `${...}`. |
+| macOS | The login keychain. `HOME` is enough; `KEYCHAIN_PATH` is an optional override | `PYTHONPATH=""` |
+| Windows | Credential Manager. The SDK already passes `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `SYSTEMROOT` | `PYTHONPATH=""` |
+
+The official Python MCP SDK (1.30) and the TypeScript SDK both build that environment from a short
+allow-list — POSIX: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`; Windows adds the Credential
+Manager set above and, in the TypeScript SDK, `PROGRAMFILES` — then overlay your `env` block.
+`DBUS_SESSION_BUS_ADDRESS` is not on the list, which is why a working Secret Service used to raise
+`NoKeyringError` under the documented config. macOS and Windows do not need an extra variable.
+
+A headless machine with no Secret Service, no login keychain, or no Credential Manager can run the
+smoke tests. It cannot use vault tools until one of those is available. This server does not read
+`PSAMVAULT_VEK` or `PSAMVAULT_TOKEN`.
+
+Full table and the explicit Linux `env` block:
+[Configuration — OS keyring](./reference/configuration.md#os-keyring).
+
 ## Confirm the tools loaded
 
 Editing config **does not** always inject tools into an already-running agent session. Restart or
@@ -285,13 +330,15 @@ the server crashes at import — `ModuleNotFoundError: No module named 'ruamel'`
 discovers **zero** psamvault tools. Reinstall **with** deps against the venv's own Python:
 
 ```bash
-# Windows (pipx home under %LOCALAPPDATA% on this setup)
-uv pip install --python "$LOCALAPPDATA/pipx/pipx/venvs/psamvault-mcp/Scripts/python.exe" \
+# Linux / macOS — pipx reports the venv; do not hardcode ~/.local/pipx or ~/.local/share/pipx
+uv pip install --python "$(pipx environment --value PIPX_LOCAL_VENVS)/psamvault-mcp/bin/python" \
   --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+```
 
-# Linux/macOS
-uv pip install --python ~/.local/pipx/venvs/psamvault-mcp/bin/python \
-  --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+```powershell
+# Windows
+$py = "$((pipx environment --value PIPX_LOCAL_VENVS).Trim())\psamvault-mcp\Scripts\python.exe"
+uv pip install --python $py --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
 ```
 
 Verify afterwards with `psamvault-mcp --version` (it must print a version and exit cleanly, with no
@@ -301,7 +348,7 @@ The server also exposes an upgrade path that keeps the **usage skill** in lockst
 release:
 
 ```bash
-psamvault-mcp compat --check              # exit 0 in sync, 1 drift
+psamvault-mcp compat --check              # exit 0 in sync, 1 drift; a missing Hermes skill is not drift
 psamvault-mcp compat --apply              # install the target release and update the skill
 psamvault-mcp compat --apply --latest     # ...or the newest release published on PyPI
 ```

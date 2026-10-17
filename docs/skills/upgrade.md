@@ -33,7 +33,7 @@ psamvault-mcp compat --check    # server ↔ usage-skill pairing (exit 1 = drift
 | `--version` | which code is on disk |
 | `selfcheck` | whether a **new** session will actually load it (it spawns a fresh server) |
 | `doctor` | *why* an install looks wrong: PATH shims, pipx metadata drift, `venv_holders` |
-| `compat --check` | whether the installed usage skill matches the installed server |
+| `compat --check` | whether an installed Hermes usage skill matches the server. A missing skill is not drift |
 
 ⚠️ **A running agent session cannot answer "which version am I running?"** — it serves the code loaded
 when it started. `pipx list` is also unreliable (its metadata lags); trust `selfcheck` and
@@ -56,8 +56,10 @@ from the index directly.
 Direct index install, into the existing venv (no venv recreation, so nothing is locked out):
 
 ```powershell
-# Windows (PowerShell) — note $env:, a bare $LOCALAPPDATA expands to nothing here
-uv pip install --python "$env:LOCALAPPDATA\pipx\pipx\venvs\psamvault-mcp\Scripts\python.exe" --refresh psamvault-mcp
+# Windows (PowerShell) — ask pipx. Do not hardcode %LOCALAPPDATA%\pipx\pipx
+# (current default) or %USERPROFILE%\pipx (legacy, only if that directory already exists).
+$py = "$((pipx environment --value PIPX_LOCAL_VENVS).Trim())\psamvault-mcp\Scripts\python.exe"
+uv pip install --python $py --refresh psamvault-mcp
 ```
 
 ```bash
@@ -68,10 +70,13 @@ uv pip install --python "$(pipx environment --value PIPX_LOCAL_VENVS)/psamvault-
 `pipx upgrade psamvault-mcp` also works (it upgrades inside the venv rather than recreating it) — its
 displayed metadata is the only part that lags.
 
-> In PowerShell, `$LOCALAPPDATA` is an ordinary undefined variable and expands to the empty string, so
-> the path silently loses its drive and uv answers *"No virtual environment or system Python installation
-> found for path `/pipx/pipx/venvs/...`"*. A path with no drive letter **is** this mistake: use
-> `$env:LOCALAPPDATA` there, `$LOCALAPPDATA` in bash.
+> Prefer `pipx environment`, above. If you construct the path by hand in PowerShell, `$LOCALAPPDATA`
+> is an ordinary undefined variable and expands to the empty string, so the path silently loses its
+> drive and uv answers *"No virtual environment or system Python installation found for path
+> `/pipx/pipx/venvs/...`"*. A path with no drive letter **is** this mistake: use `$env:LOCALAPPDATA`
+> there, `$LOCALAPPDATA` in bash. Current pipx on Windows stores venvs under
+> `%LOCALAPPDATA%\pipx\pipx\venvs`; an older install keeps `%USERPROFILE%\pipx\venvs` only when that
+> directory already exists.
 
 > The simple index caches for ~10 minutes. Right after a release is published, keep `--refresh`, or
 > install the wheel URL from the registry JSON.
@@ -169,7 +174,8 @@ it. Any skill at or above that floor is healthy — the skill may legitimately m
 - `get_version` reports the pairing (`compatibility.paired_skill_version`, newest release, whether a
   breaking release is pending) — check it before trusting this file.
 - **`psamvault-mcp compat --check`** — diagnose the pair (`--json` for machines). Exit `0` in sync,
-  `1` drift. A skill **newer** than the floor reports `skill installed: <v> [ahead of the floor — fine]`
+  `1` drift. A missing Hermes skill is not drift (the skill is optional; public procedures are in
+  this directory). A skill **newer** than the floor reports `skill installed: <v> [ahead of the floor — fine]`
   and stays in sync — that is not a problem to fix. It also reports what PyPI has
   (`newest published`, `update available`), because the contract inside the installed wheel can only
   ever describe its own release.

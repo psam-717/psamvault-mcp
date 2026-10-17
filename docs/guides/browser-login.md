@@ -88,8 +88,16 @@ Recommended sequence (from the shipped `how-to-login` prompt):
   username/password). It is not a way to use an API key against a website; that is `use_credential`.
 - **The site must exist in the vault.** If it does not, the answer is to tell the user — never to
   substitute a different `site_name`.
-- **Playwright Chromium must be installed**, or the browser cannot launch:
-  `playwright install chromium`.
+- **Playwright Chromium must be installed**, or the browser cannot launch. `pipx` does not put
+  `playwright` on PATH. Ask pipx for the venv and use its interpreter:
+
+  ```bash
+  VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+  "$VENVS/psamvault-mcp/bin/python" -m playwright install chromium
+  ```
+
+  On Windows PowerShell: `$venvs = (pipx environment --value PIPX_LOCAL_VENVS).Trim()` then
+  `& "$venvs\psamvault-mcp\Scripts\python.exe" -m playwright install chromium`.
 - **Never invent CSS selectors.** Pass `login_url` / `username_selector` / `password_selector` /
   `submit_selector` only if the user supplies them exactly; auto-detection is the default and guessed
   selectors are a documented "what not to do". Never modify a `login_url` you receive — pass it

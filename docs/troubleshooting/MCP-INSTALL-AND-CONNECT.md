@@ -51,11 +51,15 @@ psamvault login
 # MCP server
 pipx install psamvault-mcp
 
-# Browser for browser_login
-# Use the Playwright that ships with the pipx venv when possible:
-#   ~/.local/pipx/venvs/psamvault-mcp/...  (Linux/macOS)
-#   %USERPROFILE%\pipx\venvs\psamvault-mcp\Scripts\playwright.exe  (Windows)
-playwright install chromium
+# Browser for browser_login. `playwright` is NOT on PATH after pipx install.
+# Ask pipx for the venv. Current defaults: Linux ~/.local/share/pipx,
+# macOS ~/Library/Application Support/pipx, Windows %LOCALAPPDATA%\pipx\pipx.
+# Legacy, only if that directory already exists: ~/.local/pipx or %USERPROFILE%\pipx.
+VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+"$VENVS/psamvault-mcp/bin/python" -m playwright install chromium   # Linux / macOS
+# Windows PowerShell:
+#   $venvs = (pipx environment --value PIPX_LOCAL_VENVS).Trim()
+#   & "$venvs\psamvault-mcp\Scripts\python.exe" -m playwright install chromium
 ```
 
 **Upgrading an existing install (0.4.4 → 0.4.5+): never install the wheel with `--no-deps`.**
@@ -65,13 +69,15 @@ playwright install chromium
 Fix — reinstall the wheel **with** deps against the venv's own Python (path varies by OS/pipx home):
 
 ```bash
-# Windows (pipx home under %LOCALAPPDATA% on this setup)
-uv pip install --python "$LOCALAPPDATA/pipx/pipx/venvs/psamvault-mcp/Scripts/python.exe" \
+# Linux / macOS
+uv pip install --python "$(pipx environment --value PIPX_LOCAL_VENVS)/psamvault-mcp/bin/python" \
   --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+```
 
-# Linux/macOS
-uv pip install --python ~/.local/pipx/venvs/psamvault-mcp/bin/python \
-  --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
+```powershell
+# Windows
+$py = "$((pipx environment --value PIPX_LOCAL_VENVS).Trim())\psamvault-mcp\Scripts\python.exe"
+uv pip install --python $py --force-reinstall dist/psamvault_mcp-0.4.5-py3-none-any.whl
 ```
 
 Or, where pip is available, a plain `pipx reinstall psamvault-mcp` / fresh `pipx install psamvault-mcp` also restores the dep. Verify afterwards: `psamvault-mcp --version` prints `0.4.5` and exits cleanly (no traceback), then restart the agent host session.
@@ -158,6 +164,14 @@ Linux/macOS: use `/home/YOU/.local/bin/psamvault-mcp` (no `.exe`).
 
 Setting `PYTHONPATH: ""` prevents another app’s venv (e.g. Hermes) from contaminating imports. See [PYTHONPATH-CONFLICT.md](./PYTHONPATH-CONFLICT.md).
 
+On Linux that same minimal environment (what the Python and TypeScript MCP SDKs pass through) does
+not include `DBUS_SESSION_BUS_ADDRESS`, which is the only variable Secret Service's client library
+reads. The server adopts `/run/user/<uid>/bus` when the socket exists and belongs to this user.
+When it does not (a container, a different user namespace), add the real values to `env` — see
+[OS keyring](../reference/configuration.md#os-keyring). macOS and Windows need no extra variable.
+A missing keyring does not crash `--version` / `--help`; vault tools return an `✗ … — …` error and
+the server does not store secrets in a file instead.
+
 ### 5. Reload the host session
 
 Editing config **does not** always inject tools into an already-running agent session.
@@ -209,6 +223,7 @@ or uninstall crashes (`pyvenv.cfg` missing, JSON decode errors).
 ```powershell
 pipx uninstall psamvault-mcp
 # If uninstall fails, remove the broken venv manually:
+# Legacy pipx only. Current pipx: (pipx environment --value PIPX_LOCAL_VENVS)
 Remove-Item -Recurse -Force "$env:USERPROFILE\pipx\venvs\psamvault-mcp" -ErrorAction SilentlyContinue
 pipx install psamvault-mcp
 pipx list   # should show a healthy package version
@@ -324,6 +339,29 @@ more processes.)
 **Not for:** changing which version is installed. The record is bookkeeping, not code. To move versions,
 use the upgrade path (`compat --apply`, or an install from the index).
 
+### H. `--version` used to traceback, or a vault tool says the keyring is unreachable
+
+**Symptom:** `psamvault-mcp --version` or `--help` printed a `NoKeyringError` traceback, or a vault
+tool returns a line starting with `✗` about the OS keyring. `compat --apply` then rolled a good
+upgrade back, because its smoke import hit the same crash.
+
+**Cause:** the server used to touch the OS keyring while importing, before it looked at the flags.
+On Linux the Secret Service client (jeepney) reads **only** `DBUS_SESSION_BUS_ADDRESS`. The Python
+and TypeScript MCP SDKs do not pass that variable, so `env: {PYTHONPATH: ""}` hid a working keyring.
+
+**Fix:** `--version`, `--help`, and `selfcheck` no longer touch the keyring. The server still
+starts. On Linux it adopts `/run/user/<uid>/bus` when that socket exists and is owned by this user.
+When the socket is not visible, put the real bus address in the host `env` — see
+[OS keyring](../reference/configuration.md#os-keyring). A vault tool that cannot reach a keyring
+returns `✗ <what failed> — <what to do next>` (locked keyring, unset bus, or a bus that does not
+answer). It does not store the secret in a file. This server does not read `PSAMVAULT_VEK` or
+`PSAMVAULT_TOKEN`.
+
+`doctor` and `compat --check` exit 0 on a fresh install that has no Hermes usage skill. That skill
+is optional. A skill file that is present but below the floor is still drift. `--sync-skill` only
+works from a local checkout you already have; without one it points at
+[docs/skills/](../skills/README.md) in this repository.
+
 ---
 
 ## Agent decision tree (copy this)
@@ -340,6 +378,8 @@ User wants psamvault MCP connected
      1. pipx install psamvault-mcp  (force clean reinstall if metadata broken)
      2. Resolve absolute path to pipx binary (ignore broken system Scripts copy)
      3. Write host config with that absolute path + PYTHONPATH=""
+        On Linux the server adopts /run/user/<uid>/bus when that socket is this user's.
+        If it is not visible, also pass DBUS_SESSION_BUS_ADDRESS (see OS keyring).
      4. Ask user to reload/restart host MCP
      5. Verify doctor/handshake + get_version
      6. If tools fail auth → psamvault login
