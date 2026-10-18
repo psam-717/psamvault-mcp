@@ -218,6 +218,7 @@ def diagnose(probe_index: bool = True) -> dict:
             "installed_skill": report.get("installed_skill"),
             "skill_floor": report.get("skill_floor"),
             "skill_drift": report.get("skill_drift"),
+            "skill_absent": report.get("skill_absent"),
             "latest_published": report.get("latest_published"),
             "published_newer": report.get("published_newer"),
             # The command compat already worked out, --allow-breaking included when the target is newer
@@ -380,8 +381,13 @@ def render(report: dict) -> str:
     ]
     skill = report.get("skill") or {}
     if skill and not skill.get("error"):
+        installed_shown = (
+            "not installed (optional)"
+            if skill.get("skill_absent")
+            else skill.get("installed_skill")
+        )
         lines.append(
-            f"  skill floor      : {skill.get('skill_floor')}  (installed {skill.get('installed_skill')})"
+            f"  skill floor      : {skill.get('skill_floor')}  (installed {installed_shown})"
         )
         lines.append(
             f"  newest published : {skill.get('latest_published') or 'unknown (PyPI unreachable — advisory)'}"

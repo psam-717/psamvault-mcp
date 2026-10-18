@@ -245,8 +245,9 @@ in the repo docs: `docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md`.
 Typical causes and fixes:
 - **Missing binary in config** → `pipx install psamvault-mcp`; point config at the absolute path under `~/.local/bin/`
 - **Broken system Python shim on PATH** (`ModuleNotFoundError: pydantic`) → use absolute pipx path
-- **Corrupt pipx metadata** → delete `~/pipx/venvs/psamvault-mcp` and reinstall
-- **PYTHONPATH contamination** → set `env.PYTHONPATH=""` on the MCP server entry
+- **Corrupt pipx metadata** → delete the venv `pipx environment --value PIPX_LOCAL_VENVS` names (`…/psamvault-mcp`) and reinstall
+- **PYTHONPATH contamination** → set `env.PYTHONPATH=""` on the MCP server entry. On Linux the server adopts `/run/user/<uid>/bus`; pass `DBUS_SESSION_BUS_ADDRESS` only when that socket is not visible
+- **`✗` keyring error** → the OS keyring is missing or locked. Relay the message. There is no plaintext fallback
 - **Config fixed but tools still absent** → restart/reload the agent session
 - **Smoke-test hang** → bare `psamvault-mcp` waits on stdio; use `--version` or `--help` instead
 

@@ -41,6 +41,16 @@ keyring.set_password = _mock_set_password
 keyring.get_password = _mock_get_password
 keyring.delete_password = _mock_delete_password
 
+# The in-memory functions above replace get/set/delete, but _prompt_risk() asks
+# keyring.get_keyring() which backend is active. On a desktop that is Secret
+# Service, so a bare pytest would talk to the real keyring (and one test
+# asserted that it was not). CI sets PYTHON_KEYRING_BACKEND; pin the same null
+# backend here so the suite does not depend on the machine.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+from keyring.backends.null import Keyring as _NullKeyring
+
+keyring.set_keyring(_NullKeyring())
+
 # Redirect ~/.psamvault to a temp directory so module-level _migrate_legacy_session()
 # in session.py never touches the real user config.
 import tempfile as _tempfile

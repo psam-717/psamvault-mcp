@@ -170,14 +170,53 @@ def test_skill_below_the_floor_points_at_sync_skill():
     assert any("--sync-skill" in finding for finding in report["findings"]), report["findings"]
 
 
-def test_missing_skill_counts_as_below_the_floor(monkeypatch):
+def test_missing_skill_is_optional_not_drift(tmp_path):
+    """A public install has no Hermes skill. That is not a broken install."""
     latest = compat.latest_release()
-    # a missing skill file reads as None; that is below any floor
-    monkeypatch.setattr(compat, "read_skill_version", lambda path=None: None)
+    missing = tmp_path / "no-such" / "SKILL.md"
     report = compat.check(
-        installed_version=latest["mcp"], tools=list(latest["tools"]), skill_version=None
+        installed_version=latest["mcp"],
+        tools=list(latest["tools"]),
+        skill_path=missing,
     )
-    assert report["skill_drift"] is True and report["exit_code"] == 1
+    assert report["skill_absent"] is True
+    assert report["skill_drift"] is False
+    assert report["skill_ahead"] is False
+    assert report["exit_code"] == 0
+    assert report["findings"] == [], report["findings"]
+    text = compat.render(report)
+    assert "not installed (optional — Hermes only)" in text
+    assert "BELOW the floor" not in text
+    assert "in sync — nothing to do" in text
+    assert "private-skills" not in text
+
+
+def test_an_unversioned_skill_file_is_still_drift(tmp_path):
+    """A skill that is installed but has no version is broken, unlike a skill that is absent."""
+    skill = tmp_path / "SKILL.md"
+    skill.write_text("# no frontmatter\n", encoding="utf-8")
+    latest = compat.latest_release()
+    report = compat.check(
+        installed_version=latest["mcp"],
+        tools=list(latest["tools"]),
+        skill_path=skill,
+    )
+    assert report["skill_absent"] is False
+    assert report["skill_drift"] is True
+    assert report["exit_code"] == 1
+    assert any("--sync-skill" in finding for finding in report["findings"]), report["findings"]
+
+
+def test_sync_skill_without_a_checkout_points_at_the_public_docs(tmp_path, monkeypatch):
+    monkeypatch.setattr(compat, "clone_path", lambda: tmp_path / "missing-clone")
+    out = compat._sync_skill({"mcp": "0.5.5", "skill": "1.9.1"})
+    assert out["ok"] is False
+    reason = out["reason"]
+    assert reason.startswith("✗ no local skill checkout — "), reason
+    assert "docs/skills/README.md" in reason
+    assert "github.com/psam-717/private-skills" not in reason
+    assert "clone private-skills" not in reason
+    assert not (tmp_path / "missing-clone").exists()
 
 
 def test_render_shows_the_floor_and_the_ahead_marker():

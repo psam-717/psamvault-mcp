@@ -13,9 +13,9 @@ Do **not** improvise with `pip install` into system Python or bare `psamvault ge
 ### Short install playbook
 
 1. **Install with pipx only:** `pipx install psamvault-mcp`
-2. If pipx reports **missing metadata** or uninstall fails, delete the broken venv under `~/pipx/venvs/psamvault-mcp` (Windows: `%USERPROFILE%\pipx\venvs\psamvault-mcp`) and reinstall.
+2. If pipx reports **missing metadata** or uninstall fails, delete the broken venv. Ask pipx where it is: `pipx environment --value PIPX_LOCAL_VENVS` (current pipx: `~/.local/share/pipx/venvs` on Linux, `~/Library/Application Support/pipx/venvs` on macOS, `%LOCALAPPDATA%\pipx\pipx\venvs` on Windows). Then reinstall.
 3. **Resolve the absolute path** to the pipx binary (`~/.local/bin/psamvault-mcp` or `%USERPROFILE%\.local\bin\psamvault-mcp.exe`). If PATH has multiple copies, **ignore** system `Python3xx\Scripts\` shims — they often lack deps (`ModuleNotFoundError: pydantic`).
-4. Write host config with that **absolute path** and `env: { PYTHONPATH: "" }` (avoids Hermes/global PYTHONPATH contamination).
+4. Write host config with that **absolute path** and `env: { PYTHONPATH: "" }` (avoids Hermes/global PYTHONPATH contamination). On Linux the server adopts `/run/user/<uid>/bus` when that socket belongs to this user; if it is not visible, also pass `DBUS_SESSION_BUS_ADDRESS`. macOS and Windows need no extra variable. See [OS keyring](docs/reference/configuration.md#os-keyring).
 5. **Reload the host** (restart session / refresh MCP). Mid-session config edits often do not expose tools until reload.
 6. Smoke-test the binary with `psamvault-mcp --version` or `psamvault-mcp --help` (safe — print and exit). Do **not** leave a bare `psamvault-mcp` process running in a shell — it waits on stdio for MCP.
 7. Ask the user to run `psamvault login` if vault tools report session timeout / not logged in.
@@ -101,7 +101,7 @@ host session so its tools pick the variable up, then verify with the consumer (e
 `breaking_pending`). If it disagrees with the skill you loaded, run `psamvault-mcp compat --check` — never
 hand-edit `compatibility.json` or the skill frontmatter to make a check pass. The recorded skill version
 is a **floor**: a newer skill is fine, and a skill-only improvement ships with
-`psamvault-mcp compat --sync-skill` (no MCP release needed). On Windows the shim is `psamvault-mcp.exe`.
+`psamvault-mcp compat --sync-skill` (no MCP release needed) when you already have a local skill checkout. A missing Hermes skill is not drift — `doctor` and `compat --check` exit 0 for that on an otherwise healthy install. Public procedures are in [docs/skills/](docs/skills/README.md). On Windows the shim is `psamvault-mcp.exe`.
 
 **Protect secrets:** `scan_and_protect(project_dir="/path")` → recommend `pip install pv-dotenv` for runtime resolution.
 
