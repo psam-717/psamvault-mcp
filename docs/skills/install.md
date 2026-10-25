@@ -83,13 +83,9 @@ psamvault configure
 psamvault login
 ```
 
-### HTTP/SSE alternative (for non-Hermes clients)
+### Clients that cannot speak stdio
 
-For clients that don't support stdio MCP transport:
-
-```bash
-psamvault-mcp --http --port 8433
-```
+Stdio is the only transport. The entry point has no `--http`, `--port`, or `--host` flag, and nothing in the package serves HTTP. A client that cannot spawn `psamvault-mcp` and speak MCP on stdin/stdout cannot connect.
 
 <!-- /section:install/prerequisites -->
 ## Step 1 — install the server
