@@ -53,11 +53,14 @@ async def run_command_with_credential(
     extra_env: Optional[dict[str, str]] = None,
     workdir: Optional[str] = None,
     timeout: int = 120,
+    username: str | None = None,
 ) -> dict:
     """Run a shell command with a credential injected via env var or stdin.
 
-    The credential value NEVER appears in the returned dict — all output
-    is scanned for the credential value and replaced with ``[REDACTED]``.
+    Output is scanned for the credential and its common encodings and replaced
+    with ``[REDACTED]``. That scan is defence in depth, not a boundary: a form
+    it does not know about can still come back, and a command can contact a
+    host that was not written in the command string.
 
     Args:
         command:          Shell command to run (e.g. ``"twine upload dist/*"``).
@@ -154,8 +157,8 @@ async def run_command_with_credential(
                 "stderr": str(e),
                 "error": str(e),
             }
-    stdout_text = _redact(stdout_text, credential_value)
-    stderr_text = _redact(stderr_text, credential_value)
+    stdout_text = _redact(stdout_text, credential_value, username=username)
+    stderr_text = _redact(stderr_text, credential_value, username=username)
 
     if timed_out:
         # Hand back whatever the command managed to print — a partial result is evidence, an empty
@@ -239,14 +242,18 @@ def _read_output_file(path: str) -> str:
         return ""
 
 
-def _redact(text: str, credential_value: str) -> str:
-    """Replace the credential (and its 8-char prefix) so it can never reach the caller."""
-    if not credential_value or not text:
-        return text
-    text = text.replace(credential_value, "[REDACTED]")
-    if len(credential_value) > 8:
-        text = text.replace(credential_value[:8], "[REDACTED]")
-    return text
+def _redact(text: str, credential_value: str, *, username: str | None = None) -> str:
+    """Replace the credential, its encodings, and its reverse.
+
+    Defence in depth only. The raw value, an 8-character prefix, the reversed
+    text, base64 (standard and urlsafe, padded and unpadded), URL-encoding,
+    hex, and the basic-auth ``username:value`` blob are removed. A form this
+    list does not know about can still come back. Binding the destination is
+    the boundary; this is the second pass.
+    """
+    from mcp_server.redact import redact_text
+
+    return redact_text(text, credential_value, username=username)
 
 
 def _kill_process_tree(pid: int) -> None:

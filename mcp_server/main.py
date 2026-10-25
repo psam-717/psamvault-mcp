@@ -62,6 +62,8 @@ server = Server(
         "the browser fields. Do not attempt any other login method.\n\n"
 
         "3. To make an authenticated API call, use use_credential(). "
+        "The secret is sent only to that entry's own site or the API key's service. "
+        "Any other host is refused, including a redirect. "
         "Do not ask the user to provide their API key or password — psamvault will inject it.\n\n"
         "Pass the `fields` parameter to return only the response keys you need — "
         "this reduces token usage significantly for large API responses.\n\n"
@@ -85,8 +87,8 @@ server = Server(
          "\n"
          "🔑  API Key Operations — use and protect API keys:\n"
         "- list_api_keys            → list stored API keys (no key values)\n"
-        "- use_credential           → make an authenticated HTTP/API request\n"
-        "- run_with_credential      → run a CLI command with credential injected (env/stdin)\n"
+        "- use_credential           → authenticated HTTP, only to the entry's site or the key's service\n"
+        "- run_with_credential      → CLI with the credential in env or stdin; URLs in the command are host-checked\n"
         "- scan_and_protect         → scan project .env files for exposed secrets and protect them\n"
         "- export_key_to_mcp_config → export a vault key into an agent MCP config (never returns the key)\n"
         "- export_key_to_env_file    → export a vault key into an agent .env as an env var (never returns the key)\n"
@@ -141,15 +143,19 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Use before use_credential to discover API keys."
     ),
     "use_credential": (
-        "Make an authenticated HTTP request using a stored credential. "
-        "Params: site_name, target_url, method, inject_as, fields (optional — "
-        "pass field names to trim the response and save tokens, e.g. [\"login\", \"id\"])."
+        "Make an authenticated HTTP request with a stored credential, only to that "
+        "entry's own site or the API key's service hosts (or a host a human allowed "
+        "in ~/.psamvault/policy.json). Other hosts, including redirects, are refused. "
+        "Params: site_name, target_url (absolute http or https URL), method, inject_as, "
+        "fields (optional — pass field names to trim the response, e.g. [\"login\", \"id\"])."
     ),
     "run_with_credential": (
-        "Run an arbitrary shell command with a credential injected as an env var "
-        "or stdin. Use for twine upload, git push, docker login, npm publish, "
-        "pip install, or any CLI tool that needs an API key or password. "
-        "The credential is never returned to you — output is redacted automatically. "
+        "Run a shell command with a credential injected as an env var or stdin. "
+        "Use for twine upload, git push, docker login, npm publish, pip install, "
+        "or any CLI that reads a token from the environment or stdin. "
+        "http(s) URLs in the command are limited to the entry's site or the key's "
+        "service, same as use_credential. Output is scrubbed of the secret and its "
+        "encodings; that scrub is defence in depth, not a boundary. "
         "Params: site_name (required), command (required), inject_as='env', "
         "env_var_name, extra_env, workdir, timeout=120."
     ),
@@ -364,7 +370,22 @@ TOOL_DEFINITIONS = [
             "[🔑 API Key Operations] Make an authenticated HTTP request using a credential stored in psamvault. "
             "The lookup checks API key entries first, then vault (site password) entries — "
             "so you can use both API keys and site passwords. "
-            "The credential value is NEVER returned to you — only the HTTP response from the target is returned. "
+            "Use it when target_url is that entry's own site, or the API key's service. "
+            "A site password is sent only to the registrable domain of its site name or login URL, and to subdomains of that domain. "
+            "An API key is sent only to hosts its service already names — a bundled verify recipe matched from the service, the service hint, or the key name, or a hostname written in those fields — including that host's registrable domain and subdomains, "
+            "or to hosts a human has listed for the entry. "
+            "Any other host is refused, including a redirect that leaves an allowed host. "
+            "An API key with no known service host is refused until a human allows one. "
+            "Loopback and private addresses stay blocked, and allow_hosts cannot override that block. "
+            "target_url must be an absolute http or https URL.\n\n"
+            "A human allows a host by editing ~/.psamvault/policy.json (mode 0600) under entries[\"<entry>\"].allow_hosts. "
+            "Example: {\"entries\": {\"ledger-key\": {\"allow_hosts\": [\"api.ledger.example\"]}}}. "
+            "A leading \"*.\" allows that domain and its subdomains; any other value is one host. "
+            "There is no MCP parameter that grants a host.\n\n"
+            "The credential value is not returned. Response bodies and headers are scrubbed of the secret "
+            "in its raw form, reversed text, 8-character prefix, and common encodings "
+            "(base64 and urlsafe base64, with and without padding, URL-encoding, hex, and the basic-auth user:pass blob). "
+            "Scrubbing is defence in depth. The host check is the boundary.\n\n"
             "Supported injection modes: bearer_token, api_key_header, basic_auth.\n\n"
             "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
             "Example: fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). "
@@ -379,7 +400,11 @@ TOOL_DEFINITIONS = [
                 },
                 "target_url": {
                     "type": "string",
-                    "description": "The  URL to send the authenticated request to"
+                    "description": (
+                        "Absolute http or https URL. The secret is sent only to this entry's "
+                        "own site, its API service hosts, or a host a human allowed in "
+                        "~/.psamvault/policy.json."
+                    )
                 },
                 "method": {
                     "type": "string",
@@ -428,11 +453,23 @@ TOOL_DEFINITIONS = [
     Tool(
         name="run_with_credential",
         description=(
-            "[🔑 API Key Operations] Run an arbitrary shell command with a credential injected as an "
+            "[🔑 API Key Operations] Run a shell command with a credential injected as an "
             "environment variable or stdin pipe. "
-            "The credential is decrypted locally, injected into the subprocess, "
-            "and all output is scanned for the credential value and redacted "
-            "before being returned — the credential NEVER enters the agent's context.\n\n"
+            "Use this for a CLI that reads a token from the environment or stdin "
+            "(twine upload, docker login, npm publish, git push, pip install), "
+            "not for an HTTP API — that is use_credential.\n\n"
+            "The credential is decrypted locally and injected into the subprocess. "
+            "Stdout and stderr are scrubbed of the raw value, its 8-character prefix, the reversed text, "
+            "and the common encodings (base64 and urlsafe base64, with and without padding, URL-encoding, hex, "
+            "and the basic-auth user:pass blob). "
+            "Scrubbing is defence in depth, not a boundary: a form the scrubber does not know, "
+            "or a program that contacts a host never written in the command, can still move the value.\n\n"
+            "Every http(s) URL written in the command is checked the same way as use_credential. "
+            "A site password may only be used when those URLs stay on that site. "
+            "An API key may only be used when they stay on its service hosts, or on hosts a human allowed "
+            "for that entry in ~/.psamvault/policy.json under entries[\"<entry>\"].allow_hosts. "
+            "Any other URL is refused before the command runs. Loopback and private URLs stay blocked. "
+            "A command with no URL is not host-checked, because the destination is not in the command.\n\n"
             "Use cases:\n"
             "- twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'\n"
             "- docker login: inject_as='stdin' (password piped to stdin)\n"

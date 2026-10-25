@@ -71,28 +71,39 @@ See [`list_api_keys`](./reference/tools.md#list_api_keys).
 
 ### HTTP calls with credentials (`use_credential`)
 
-**What it is.** Makes an authenticated HTTP request using a credential stored in psamvault, returning
-only the HTTP response from the target. The lookup checks API key entries first, then vault (site
-password) entries — so both API keys and site passwords work. Supported injection modes:
-`bearer_token`, `api_key_header`, and `basic_auth`. The `fields` parameter returns only the response
-keys you need, which cuts token usage on large responses.
+**What it is.** Makes an authenticated HTTP request using a credential stored in psamvault. The lookup
+checks API key entries first, then vault (site password) entries. A site password is sent only to that
+site's registrable domain and its subdomains. An API key is sent only to its service's hosts (a
+bundled verify recipe, or a hostname in the service, the service hint, or the key name) or to a host a
+human listed for that entry in `~/.psamvault/policy.json`. Any other host is refused, including a
+redirect that leaves an allowed host, and an API key with no known service host is refused until a
+human allows one. Loopback and private addresses stay blocked. The response is what comes back, with
+the secret scrubbed out of the body and headers. That scrub is defence in depth; the host check is the
+boundary. Supported injection modes: `bearer_token`, `api_key_header`, and `basic_auth`. The `fields`
+parameter returns only the response keys you need.
 
-**When to reach for it.** **Always** for API calls that need auth — "check my GitHub profile",
-"get my top 10 starred repos", or any authenticated request the agent should make on the user's
-behalf.
+**When to reach for it.** When the API host is that entry's own site or the key's service — "check my
+GitHub profile", "get my top 10 starred repos". Do not use it to send a stored secret to an unrelated
+host. That call is refused, and the error tells the user how to allow the host by editing the policy
+file. There is no MCP parameter that grants a host.
 
 Guide: [Credential injection](./guides/credential-injection.md). Tool:
 [`use_credential`](./reference/tools.md#use_credential).
 
 ### Credential injection into commands (`run_with_credential`)
 
-**What it is.** Runs an arbitrary shell command with a credential injected as an environment variable
-or stdin pipe. The credential is decrypted locally, injected into the subprocess, and all output is
-scanned for the credential value and redacted before being returned.
+**What it is.** Runs a shell command with a credential injected as an environment variable or stdin
+pipe. Use it for a CLI that reads a token from the environment or stdin. Every `http(s)` URL written
+in the command is checked the same way as `use_credential`; a URL on any other host is refused before
+the command runs. A command with no URL is not host-checked, because the destination is not in the
+command. Stdout and stderr are scrubbed of the raw secret, its reversed text, its 8-character prefix,
+and the common encodings (base64, urlsafe base64, URL-encoding, hex, and the basic-auth blob).
+Scrubbing is defence in depth, not a boundary.
 
 **When to reach for it.** For `twine upload`, `git push`, `docker login`, `npm publish`, `pip install`
-against a private repo, or any CLI tool that needs an API key or password and that you would otherwise
-have to feed a secret from chat.
+against a private repo, or any CLI that needs an API key or password and that you would otherwise have
+to feed a secret from chat. Do not use it as a way to POST a secret to an arbitrary URL — put that
+request in `use_credential`, and only when the host is allowed.
 
 Guide: [Credential injection](./guides/credential-injection.md). Tool:
 [`run_with_credential`](./reference/tools.md#run_with_credential).

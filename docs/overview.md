@@ -19,10 +19,11 @@ push to a private repo, log into a website, call an authenticated API. The obvio
 agent reads the secret, then pastes it into a command — puts the plaintext into the agent's context
 window, where it can be echoed in a prompt, written into a transcript, or sent to a model provider.
 
-psamvault-mcp inverts that. The credential is decrypted locally by the MCP server, injected into a
-subprocess, an HTTP request, or a browser login, and the output is redacted before it reaches the
-agent's context. This is the key differentiator: credentials are never in the agent's context window,
-never in training data, and never accidentally leaked in a prompt.
+psamvault-mcp inverts that. The credential is decrypted locally by the MCP server and injected into a
+subprocess, an HTTP request, or a browser login. A stored secret is sent only to that entry's own site
+or the API key's service (or a host a human has allowed); the response or command output is then
+scrubbed of the secret and its common encodings. The host check is the boundary. Scrubbing is defence
+in depth, not a promise that no encoding can ever come back.
 
 ## How it works
 
@@ -31,10 +32,12 @@ Windows Credential Manager, Linux Secret Service) by the psamvault CLI at login 
 reads the VEK from the keychain on every credential access — no key derivation happens in the server.
 The CLI did all the derivation work (HMAC → PBKDF2 → AES-GCM-decrypt → VEK) at login time.
 
-The credential value never crosses back to the agent. Concretely:
+The credential value is not a tool result. Concretely:
 
 - `browser_login` fills credentials inside a browser — you never see them.
-- `use_credential` injects credentials into HTTP requests — only the response comes back to you.
+- `use_credential` injects a credential into an HTTP request to that entry's own site or the API key's
+  service, and returns the response after scrubbing the secret out of the body and headers. A request
+  to any other host is refused. The host check is the boundary; the scrub is defence in depth.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 - `export_key_to_mcp_config` writes the key into an agent MCP config file — only a summary (paths,
@@ -42,8 +45,10 @@ The credential value never crosses back to the agent. Concretely:
 - `export_key_to_env_file` writes the key into an agent `.env` as an environment variable — only a
   summary (path, line, action, backup) comes back to you, never the value.
 - `verify_api_key` returns pass/fail + status only — never the key.
-- `run_with_credential` runs a subprocess with the credential injected and returns its output with
-  the credential value redacted.
+- `run_with_credential` runs a subprocess with the credential injected. `http(s)` URLs in the command
+  are limited to the same hosts as `use_credential`. Stdout and stderr are scrubbed of the secret and
+  its common encodings, including the reversed text. That scrub is defence in depth: a command with no
+  URL is not host-checked, and an encoding the scrubber does not know can still appear.
 
 ### The three flows
 
@@ -51,15 +56,20 @@ Browser login (`browser_login`) — when an AI agent needs to log you into a web
 a real Chromium browser, navigates to the site, and fills in the credentials directly inside that
 browser process. The agent never sees the credentials; it only sees whether the login succeeded.
 
-API credential flow (`use_credential`) — psamvault decrypts the API key locally, makes the HTTP
-request, and returns only the response. The credential is never in the agent's context. Supported
-injection modes: `bearer_token` (`Authorization: Bearer ***`), `api_key_header`
-(`<header_name>: <value>`), and `basic_auth` (`Authorization: Basic ***`).
+API credential flow (`use_credential`) — psamvault decrypts the credential locally and sends it only
+to that entry's own site (a site password: the registrable domain and its subdomains) or to the API
+key's service hosts, or to a host a human has listed for the entry in `~/.psamvault/policy.json`.
+Anything else is refused, including a redirect off an allowed host. An API key with no known service
+host is refused until a human allows one. The response comes back with the secret scrubbed out.
+Supported injection modes: `bearer_token` (`Authorization: Bearer ***`), `api_key_header`
+(`<header_name>: <value>`), and `basic_auth` (`Authorization: Basic ***`). `target_url` must be an
+absolute `http` or `https` URL.
 
-CLI command flow (`run_with_credential`) — psamvault decrypts the credential locally, spawns the
-subprocess with the credential injected as an env var (or piped via stdin), then scans all stdout and
-stderr for the credential value and redacts it before returning. Supports `env` (default) and `stdin`
-injection.
+CLI command flow (`run_with_credential`) — psamvault decrypts the credential locally and spawns the
+subprocess with it injected as an env var (or piped via stdin). Every `http(s)` URL in the command is
+held to the same host rule; a command with no URL is not host-checked. Stdout and stderr are scrubbed
+of the raw value, the reversed text, and the common encodings before they return. Supports `env`
+(default) and `stdin` injection. Use this for a CLI, not for an HTTP API.
 
 See [Credential injection](guides/credential-injection.md) and [Browser login](guides/browser-login.md)
 for the guides, and [Tool reference](reference/tools.md) for the exact parameters.

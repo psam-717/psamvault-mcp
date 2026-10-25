@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: MCP host config, PYTHONPATH, vault endpoints and env vars, vault state locations, and the version-lockstep contract.
+description: MCP host config, PYTHONPATH, vault endpoints and env vars, the policy.json destination allow-list, vault state locations, and the version-lockstep contract.
 order: 70
 ---
 
@@ -172,6 +172,41 @@ To point at a self-hosted backend, set the variable in `~/.psamvault/config.env`
 PSAMVAULT_API_URL=https://your-backend.example.com
 ```
 
+## Destination allow list
+
+`use_credential` and `run_with_credential` send a stored secret only to hosts that entry already owns,
+plus hosts a human has allowed for it. The allow-list is not an MCP argument. It is a key in the CLI
+policy file, which this server only reads:
+
+```json
+{
+  "entries": {
+    "ledger-key": {
+      "allow_hosts": ["api.ledger.example"]
+    },
+    "github.com": {
+      "allow_hosts": ["*.ghcr.io"]
+    }
+  }
+}
+```
+
+| Piece | Meaning |
+|---|---|
+| File | `~/.psamvault/policy.json`, mode `0600`. The same file the psamvault CLI uses for reveal policy. |
+| `entries` | Map of entry name → object. Matched against the name the caller passed, the stored name, and the leaf (the last `/` segment). |
+| `allow_hosts` | Hosts that entry may also receive the secret. One host, or a leading `*.` meaning that domain and its subdomains (`*.ghcr.io` allows `ghcr.io` and `uploads.ghcr.io`). A URL is accepted and the hostname is used. |
+| Who writes it | A human, in an editor, outside the agent. No MCP tool writes this file, and no tool parameter grants a host. |
+| What it does not do | It does not override the loopback / private-address block. `allow_commands` and `allow_inject` from the agent-safe vault plan are not enforced. |
+
+What is allowed without this file:
+
+- A **site password** may go to the registrable domain of its site name or login URL, and to subdomains of that domain. A name that is not a hostname and has no login URL has no implicit host.
+- An **API key** may go to hosts its service already names: a bundled verify recipe (`github`, `render`, `openrouter`, `tavily`) matched from the service, the service hint, or the key name, or a hostname written in those fields, including that host's registrable domain and subdomains.
+- An API key with no recipe and no hostname has **no known service host**. Every target is refused until a human adds one here. The error says "no known service host".
+
+A missing file allows nothing extra. A file that is not valid JSON allows nothing extra, and the refusal says the file was not applied. The psamvault CLI (0.7.3) reads `reveal`, `allow_entries`, `approval_ttl_seconds`, and `audit`, ignores unknown keys, and does not rewrite the file on load — so a hand-added `entries` object survives a CLI read. The CLI does not yet validate `entries.<name>.allow_hosts`, and there is no `psamvault policy allow-host` command. Both are follow-up work in psamvault-cli. `allow_entries` in that file is the reveal allow-list, not a list of destination hosts.
+
 ## Where vault state lives
 
 The server itself stores **no credentials**. All state is written and owned by the psamvault CLI, and
@@ -183,6 +218,7 @@ the server reads it:
 | `~/.psamvault/session.json` | A **presence marker** only. A live session is confirmed by the keychain entry, not this file: the file holds `{}` after migration, and a mere file creation by another process cannot fake a session because the keychain entry must also exist. |
 | OS keychain, service name `psamvault` | Every sensitive session value: `config.pepper`, `session.access_token`, `session.refresh_token`, `session.kdf_salt`, `session.vek`, `session.encrypted_vek`, `session.vek_iv`. On macOS Keychain, Windows Credential Manager, or Linux Secret Service. |
 | The psamvault backend | Encrypted vault entries and API key entries (encrypted blobs + IVs). The server decrypts them locally with the VEK; the plaintext never goes back to the backend. |
+| `~/.psamvault/policy.json` | CLI policy file. This server reads `entries.<name>.allow_hosts` to decide which extra hosts may receive a stored secret. It does not write the file. See [Destination allow list](#destination-allow-list). |
 
 The VEK is the direct AES-256 key used to decrypt every vault entry. It is stored in the keychain
 after being decrypted locally at login time (login_password → HMAC → PBKDF2 → AES-GCM-decrypt → VEK).

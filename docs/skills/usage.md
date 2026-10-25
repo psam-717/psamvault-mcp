@@ -23,8 +23,8 @@ HTTP status, an exit code) — and **no secret appears in your output, your file
 The server provides four complementary flows:
 
 - **`browser_login`** — Opens a real Chromium browser, navigates to the site, fills credentials directly in the browser process. The agent only sees whether login succeeded.
-- **`use_credential`** — Makes authenticated HTTP requests using stored API keys. Credential is decrypted locally, the HTTP request is made, and only the response is returned.
-- **`run_with_credential`** — Runs a shell command with a credential injected as an environment variable or stdin. Output is auto-redacted of the credential value.
+- **`use_credential`** — Authenticated HTTP, only to that entry's own site or the API key's service (or a host a human allowed in `~/.psamvault/policy.json`). Any other host is refused. The response is scrubbed of the secret; that scrub is defence in depth.
+- **`run_with_credential`** — A CLI that reads a token from the environment or stdin. `http(s)` URLs in the command follow the same host rule. Output is scrubbed of the secret and its common encodings, including reversed text. A command with no URL is not host-checked.
 - **`scan_and_protect`** — Scans a project directory for `.env` files, detects secrets using pattern matching, encrypts them into the psamvault vault, and replaces plaintext with `psamvault:KEY_NAME` placeholders.
 
 This is the **key differentiator**: credentials are never in the agent's context window, never in training data, and never accidentally leaked in a prompt.
@@ -66,9 +66,9 @@ Once connected, these tools become available (prefixed `mcp_psamvault_*` in Herm
 | `list_api_keys` | `project_name: str (optional)` | List stored API key names with service hints | Returns names only, no key values |
 | `check_credential_exists` | `site_name: str` | Check if credential exists | Returns boolean + username hint |
 | `get_username_for_site` | `site_name: str` | Get stored username | Returns username, never password |
-| `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Make authenticated HTTP request | ❗ Credential stays server-side |
+| `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Authenticated HTTP to the entry's site or the key's service. `target_url` is an absolute http(s) URL. Other hosts are refused | ❗ Secret is not a result field; response is scrubbed. Host check is the boundary |
 | `browser_login` | `site_name, login_url, selectors, timeout_ms` | Log into website via browser | ❗ Fills directly in browser |
-| `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | Run CLI command with credential injected | ❗ Output redacted of credential |
+| `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | CLI with the credential in env or stdin. URLs in the command are host-checked | ❗ Output scrubbed (raw, reversed, encodings). Scrub is not the boundary |
 | `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
 | `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a vault API key into a host MCP config (e.g. Hermes `config.yaml`) — auto-verifies HTTP keys | ❗ Key value never returned |
 | `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a vault API key into an agent `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up first, **never writes an invalid key** | ❗ Key value never returned |
@@ -143,6 +143,14 @@ Supported injection modes:
 - `api_key_header` — Custom header name with API key value
 - `basic_auth` — `Authorization: Basic base64(user:pass)`
 
+The call is refused unless the host is that entry's own site (a site password: its registrable domain
+and subdomains) or the API key's service hosts, or a host a human listed under
+`entries["<entry>"].allow_hosts` in `~/.psamvault/policy.json`. There is no parameter that grants a
+host. An API key with no known service host stays refused until a human allows one. A redirect off an
+allowed host is refused and not followed. `target_url` must include `https://` (or `http://`). Do not
+send the secret to an echo service or any other unrelated host to read it back. The response body and
+headers are scrubbed of the secret and its common encodings; that scrub is defence in depth.
+
 ### 3. CLI Command with Credential (run_with_credential)
 
 When the user needs to run a CLI tool that requires credentials:
@@ -185,7 +193,7 @@ When the user needs to run a CLI tool that requires credentials:
    )
    ```
 
-3. **The credential value NEVER enters your context** — all output is scanned and redacted before being returned.
+3. **Stdout and stderr are scrubbed** of the raw secret, the reversed text, the 8-character prefix, and the common encodings (base64, urlsafe base64, URL-encoding, hex, the basic-auth blob) before they are returned. That scrub is defence in depth. Every `http(s)` URL in the command must stay on the entry's site or the key's service, or on a host a human allowed; any other URL is refused and the command does not run. A command with no URL (`twine upload`, `git push`, `npm publish`) is not host-checked.
 
 Supported injection modes:
 - `env` — Set credential as an environment variable. Requires `env_var_name`.
@@ -271,8 +279,9 @@ Notes:
 6. **Expecting an exported variable to appear mid-session** — the host reads `.env` at process start. Restart the session before testing the consumer, and verify with a real call rather than by reading the file.
 7. **Expecting a duplicate on re-export** — `export_key_to_env_file` updates in place, so a second run returns `action: updated`. Two `KEY=` lines in the file means something else wrote them.
 8. **Mixing up site name vs API key name** — `use_credential` checks API key entries first, then vault password entries. If you need an API key but stored it as a site password, it still works as fallback.
-9. **Server not running** — MCP tools return connection errors if the server is not started. If using stdio, Hermes starts it automatically on connect. If using HTTP/SSE, start with `psamvault-mcp --http --port 8433` in a terminal.
-10. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
+9. **Sending a secret to a host it does not belong to** — `use_credential("github.com", "https://httpbin.org/anything")` is refused. Relay the error. A human allows the host by editing `~/.psamvault/policy.json`; you do not edit that file and you do not retry against another host. A key with no known service host (no verify recipe, no hostname in its name or service) is refused until they do.
+10. **Server not running** — MCP tools return connection errors if the server is not started. If using stdio, Hermes starts it automatically on connect. If using HTTP/SSE, start with `psamvault-mcp --http --port 8433` in a terminal.
+11. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
 
 <!-- /section:usage/pitfalls -->
 ## Prompts you can suggest to the user
@@ -317,7 +326,8 @@ Tell users they can say things like:
 - **Stdio transport (default)**: Hermes manages the process lifecycle. No manual server start needed.
 - **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
 - **No consent dialog**: The v0.4.0+ architecture removed the consent dialog requirement. Credentials are used on demand.
-- **Output redaction**: `run_with_credential` scans all output for the credential value and redacts it before returning to the agent.
+- **Host binding**: a stored secret goes only to the entry's own site, the API key's service hosts, or `allow_hosts` in `~/.psamvault/policy.json`. Redirects are checked one hop at a time.
+- **Output scrubbing**: `use_credential` responses and `run_with_credential` stdout/stderr are scrubbed of the secret in its raw form, reversed text, and common encodings. That is defence in depth. The host check is the boundary.
 
 <!-- /section:usage/architecture -->
 

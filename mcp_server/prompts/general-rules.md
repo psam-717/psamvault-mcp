@@ -22,10 +22,25 @@ This includes trigger phrases like "log into", "log in to", "sign into",
 "enter my password for", "fill in credentials for", or "login to".
 
 ### Rule 3: use_credential for API requests
-Use `use_credential` for all authenticated HTTP/API requests. It looks up API
-key entries first, then falls back to vault (site password) entries if no API
-key is found. The credential value is **never returned** — only the HTTP
-response from the target is returned to you.
+Use `use_credential` for an authenticated HTTP request to that entry's own site
+or the API key's service. It looks up API key entries first, then falls back to
+vault (site password) entries if no API key is found. A site password is sent
+only to the registrable domain of its site name or login URL, and to subdomains
+of that domain. An API key is sent only to hosts its service already names (a
+bundled verify recipe, or a hostname in the service, the service hint, or the
+key name), or to a host a human has listed for the entry. Any other host is
+refused, including a redirect that leaves an allowed host. An API key with no
+known service host is refused until a human allows one. `target_url` must be an
+absolute http or https URL. Loopback and private addresses stay blocked.
+
+A human allows a host by editing `~/.psamvault/policy.json` (mode 0600) under
+`entries["<entry>"].allow_hosts`. There is no MCP parameter that grants a host.
+Relay the error. Do not edit the policy file, and do not send the secret to
+another host to read it back.
+
+The credential value is not a result field. The response body and headers are
+scrubbed of the secret and its common encodings. Scrubbing is defence in depth.
+The host check is the boundary.
 
 Supported injection modes:
 - `bearer_token` — Authorization: Bearer <key> (default)
@@ -44,8 +59,14 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 
 ### Rule 6: Credential values are never returned to you
 - `browser_login` fills credentials inside a browser — you never see them.
-- `use_credential` injects credentials into HTTP requests — only the response
-  comes back to you.
+- `use_credential` injects a credential into an HTTP request to that entry's own
+  site or the key's service, and returns the response after scrubbing the secret
+  out of the body and headers. Any other host is refused.
+- `run_with_credential` injects a credential into a CLI subprocess. `http(s)` URLs
+  in the command follow the same host rule. Stdout and stderr are scrubbed of the
+  raw value, the reversed text, and the common encodings. That scrub is defence
+  in depth: a command with no URL is not host-checked. Use it for a CLI that
+  reads a token from the environment or stdin, not to call an arbitrary URL.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 - `export_key_to_mcp_config` writes the key into an agent MCP config file —
@@ -144,9 +165,9 @@ add `.env` to their `.gitignore`.
 | `check_credential_exists` | Check if a site has a credential | Before any credential-dependent tool |
 | `get_username_for_site` | Get username only | When username is needed in a form/API |
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
-| `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
+| `use_credential` | Authenticated HTTP to the entry's site or the key's service | When that host is the one you are calling. Other hosts are refused |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
-| `run_with_credential` | Run a CLI command with the credential injected (env or stdin; output redacted) | For twine/docker/npm/git and any CLI needing a secret |
+| `run_with_credential` | CLI with the credential in env or stdin; URLs in the command are host-checked; output scrubbed | twine, docker login, npm, git, pip — not an arbitrary HTTP call |
 | `export_key_to_mcp_config` | Write a vault key into an agent MCP config (auto-verifies) | When an agent host needs an MCP server authenticated by a vault key |
 | `export_key_to_env_file` | Write a vault key into an agent `.env` as an env var (in place, backed up) | When an agent **tool** reads its credential from a dotenv file |
 | `verify_api_key` | Probe a stored key against its provider | Before exporting, or to prove a key still works |

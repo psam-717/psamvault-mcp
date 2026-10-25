@@ -52,6 +52,9 @@ Issues = "https://github.com/psam-717/psamvault-mcp/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["mcp_server"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"mcp_server/public_suffix_list.dat" = "mcp_server/public_suffix_list.dat"
+
 [tool.hatch.build.targets.sdist]
 # Keep the sdist lean — never ship local venvs or agent temp dirs
 exclude = [

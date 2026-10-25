@@ -234,6 +234,25 @@ async def resolve_api_key_name(access_token: str, name: str) -> str:
     raise _not_found(name)
 
 
+class _ResolvedEntry(dict):
+    """API-key response plus the stored name the lookup resolved.
+
+    Equality stays the response body. ``resolved_name`` is not a key, so callers
+    that compare the dict to the JSON payload are unchanged, and destination
+    binding can still match a policy entry written against the stored name.
+    """
+
+    def __init__(self, data: dict, resolved_name: str):
+        super().__init__(data)
+        self.resolved_name = resolved_name
+
+
+def _with_resolved_name(result, resolved: str):
+    if isinstance(result, dict) and not isinstance(result, _ResolvedEntry):
+        return _ResolvedEntry(result, resolved)
+    return result
+
+
 async def get_api_key_entry(access_token: str, name: str) -> dict:
     """
     GET /apikeys/{name} — return the encrypted blob and iv for an API key.
@@ -259,8 +278,8 @@ async def get_api_key_entry(access_token: str, name: str) -> dict:
 
     result = await _call(access_token)
     if result is None:
-        return await _refresh_and_retry(_call)
-    return result
+        result = await _refresh_and_retry(_call)
+    return _with_resolved_name(result, resolved)
 
 
 async def add_api_key_entry(

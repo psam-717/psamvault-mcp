@@ -72,8 +72,8 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | Tool | Description |
 |---|---|
 | `list_api_keys` | List stored API key names (never key values) — optionally filter by project |
-| `use_credential` | Make authenticated HTTP request — only the response is returned |
-| `run_with_credential` | Run a CLI command with credential injected via env var or stdin |
+| `use_credential` | Authenticated HTTP to the entry's own site or the API key's service. Other hosts, including redirects, are refused. The response is scrubbed; that scrub is defence in depth |
+| `run_with_credential` | CLI with the credential in env or stdin. `http(s)` URLs in the command follow the same host rule. Output is scrubbed of the secret and its common encodings |
 | `scan_and_protect` | Encrypt project `.env` secrets into psamvault |
 | `export_key_to_mcp_config` | Export a vault API key into an agent's MCP config (Hermes) — auto-verifies, key never returned |
 | `export_key_to_env_file` | Export a vault API key into an agent's `.env` as an env var (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
@@ -85,11 +85,11 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 
 **Browser login:** `browser_login(site_name="github.com")` → relay result message to user. If CAPTCHA detected, tell user to solve it in browser.
 
-**API call:** `use_credential(site_name="github.com", target_url=..., inject_as="bearer_token")` → use `fields` parameter to return only needed data.
+**API call:** `use_credential(site_name="github.com", target_url="https://api.github.com/user/repos", inject_as="bearer_token")` → use `fields` to return only needed data. `target_url` must be an absolute http or https URL on that entry's site or the key's service. A site named `github.com`, or a key whose name or service matches the bundled `github` recipe, may call `api.github.com`. A call to any other host is refused. An API key with no known service host stays refused until a human adds it under `entries["<name>"].allow_hosts` in `~/.psamvault/policy.json`. There is no MCP parameter that grants a host. Do not edit that file. The response is scrubbed of the secret; the host check is the boundary.
 
 **Run a command with a credential:**
 `run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="env", env_var_name="TWINE_PASSWORD")`
-→ Use for twine upload, docker login, npm publish, git push, or any CLI tool that needs an API key or password. The credential value is **redacted** from all output returned to you.
+→ Use for twine upload, docker login, npm publish, git push, or any CLI that reads a token from the environment or stdin. Every `http(s)` URL in the command is host-checked the same way; a command with no URL is not. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings. That scrub is defence in depth.
 
 **Give a tool a credential without pasting it** (most tools read a dotenv file, not MCP config):
 `export_key_to_env_file(key_name="tavily", env_var_name="TAVILY_API_KEY")` → writes `HERMES_HOME/.env`,
