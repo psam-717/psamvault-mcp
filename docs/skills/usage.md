@@ -280,7 +280,7 @@ Notes:
 7. **Expecting a duplicate on re-export** — `export_key_to_env_file` updates in place, so a second run returns `action: updated`. Two `KEY=` lines in the file means something else wrote them.
 8. **Mixing up site name vs API key name** — `use_credential` checks API key entries first, then vault password entries. If you need an API key but stored it as a site password, it still works as fallback.
 9. **Sending a secret to a host it does not belong to** — `use_credential("github.com", "https://httpbin.org/anything")` is refused. Relay the error. A human allows the host by editing `~/.psamvault/policy.json`; you do not edit that file and you do not retry against another host. A key with no known service host (no verify recipe, no hostname in its name or service) is refused until they do.
-10. **Server not running** — MCP tools return connection errors if the server is not started. If using stdio, Hermes starts it automatically on connect. If using HTTP/SSE, start with `psamvault-mcp --http --port 8433` in a terminal.
+10. **Server not running** — MCP tools return connection errors if the host has not started the server. Stdio is the only transport: Hermes starts `psamvault-mcp` on connect and speaks MCP on stdin/stdout. The entry point has no `--http`, `--port`, or `--host` flag, and nothing in the package serves HTTP. A bare `psamvault-mcp` in a terminal waits on stdin; use `--version` or `--help` for a smoke test.
 11. **Token expiry** — The access token has ~1 hour lifetime. psamvault-mcp auto-refreshes via `api_client.py`, but if the server has been running for hours without use, the initial call might need a refresh cycle. The `api_client` handles 401 → refresh → retry automatically.
 
 <!-- /section:usage/pitfalls -->
