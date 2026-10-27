@@ -1,6 +1,6 @@
 ---
 title: Credential injection
-description: How an agent uses a credential it never sees — run_with_credential, use_credential, env vs stdin, redaction, and the failure modes.
+description: How an agent uses a credential it never sees — which host may receive it, run_with_credential, use_credential, env vs stdin, scrubbing, and the failure modes.
 order: 40
 ---
 
@@ -34,10 +34,22 @@ instead.
 
 The tool description, verbatim:
 
-> Run an arbitrary shell command with a credential injected as an environment variable or stdin pipe.
-> The credential is decrypted locally, injected into the subprocess, and all output is scanned for the
-> credential value and redacted before being returned — the credential NEVER enters the agent's
-> context.
+> Run a shell command with a credential injected as an environment variable or stdin pipe. Use this
+> for a CLI that reads a token from the environment or stdin (twine upload, docker login, npm publish,
+> git push, pip install), not for an HTTP API — that is use_credential.
+>
+> The credential is decrypted locally and injected into the subprocess. Stdout and stderr are scrubbed
+> of the raw value, its 8-character prefix, the reversed text, and the common encodings (base64 and
+> urlsafe base64, with and without padding, URL-encoding, hex, and the basic-auth user:pass blob).
+> Scrubbing is defence in depth, not a boundary: a form the scrubber does not know, or a program that
+> contacts a host never written in the command, can still move the value.
+>
+> Every http(s) URL written in the command is checked the same way as use_credential. A site password
+> may only be used when those URLs stay on that site. An API key may only be used when they stay on
+> its service hosts, or on hosts a human allowed for that entry in ~/.psamvault/policy.json under
+> entries["<entry>"].allow_hosts. Any other URL is refused before the command runs. Loopback and
+> private URLs stay blocked. A command with no URL is not host-checked, because the destination is
+> not in the command.
 
 ```
 Agent: "Upload my package to PyPI"
@@ -75,19 +87,32 @@ the subprocess working directory (default: the MCP server's own cwd).
 
 ### What comes back
 
-A dict with `exit_code`, `stdout`, and `stderr`; `error` is added when the command could not run. The
-redaction is applied to both streams before they are returned: every occurrence of the credential
-value is replaced with `[REDACTED]`, and for credentials longer than 8 characters the 8-character
-prefix is redacted too (so a log line that prints a truncated token still leaks nothing).
+A dict with `exit_code`, `stdout`, and `stderr`; `error` is added when the command could not run. Both
+streams are scrubbed before they are returned. The replacement is `[REDACTED]`. The forms covered are
+the raw value (any length), the reversed text when the secret is at least 4 characters, the first 8
+characters when it is longer than 8, and — when the encoded form is at least 8 characters — standard
+and urlsafe base64 with and without padding, URL-encoding, hex, and the basic-auth `username:secret`
+base64 blob. A short encoding is left alone so the scrubber does not eat ordinary tokens.
 
-Two security guards run before the subprocess starts:
+Scrubbing is defence in depth. It is not the boundary. A transform the scrubber does not know (a
+cipher, a secret split across lines, a value the program hashes) can still appear in the output, and
+only if the command was allowed to run.
+
+Three checks run before the subprocess starts:
 
 - **SSRF guard.** Every `http(s)://` URL in the command is extracted and checked; a URL pointing at a
   loopback, private, or link-local address is rejected, so a command like
-  `curl http://169.254.169.254/$KEY` cannot be used to exfiltrate the credential to an internal
-  endpoint.
+  `curl http://169.254.169.254/$KEY` cannot be used to send the credential to an internal endpoint.
+  Listing that address in `allow_hosts` does not override this.
+- **Destination check.** The same URLs must stay on the entry's own site, the API key's service
+  hosts, or a host a human listed for that entry. A command with no `http(s)` URL is not host-checked:
+  `twine upload` and `git push` name no URL, so the tool cannot see where they connect. That is a
+  limit of reading the command text, not a grant to send the secret anywhere.
 - **Blocked-command guard.** As above — the psamvault read commands and `.psamvault` file reads are
   refused.
+
+A refused URL returns `exit_code: -1` and the reason in `error` and `stderr`. The command does not
+run.
 
 ## Making an authenticated HTTP request (`use_credential`)
 
@@ -95,15 +120,27 @@ The tool description, verbatim:
 
 > Make an authenticated HTTP request using a credential stored in psamvault. The lookup checks API key
 > entries first, then vault (site password) entries — so you can use both API keys and site passwords.
-> The credential value is NEVER returned to you — only the HTTP response from the target is returned.
+> Use it when target_url is that entry's own site, or the API key's service. A site password is sent
+> only to the registrable domain of its site name or login URL, and to subdomains of that domain. An
+> API key is sent only to hosts its service already names — a bundled verify recipe matched from the
+> service, the service hint, or the key name, or a hostname written in those fields — including that
+> host's registrable domain and subdomains, or to hosts a human has listed for the entry. Any other
+> host is refused, including a redirect that leaves an allowed host. An API key with no known service
+> host is refused until a human allows one. Loopback and private addresses stay blocked, and
+> allow_hosts cannot override that block. target_url must be an absolute http or https URL.
+>
+> The credential value is not returned. Response bodies and headers are scrubbed of the secret in its
+> raw form, reversed text, 8-character prefix, and common encodings (base64 and urlsafe base64, with
+> and without padding, URL-encoding, hex, and the basic-auth user:pass blob). Scrubbing is defence in
+> depth. The host check is the boundary.
 
 ```
 Agent: "Get my top 10 starred repos"
          ↓
 use_credential("github.com", target_url="https://api.github.com/users/psam-717/starred")
          ↓
-psamvault decrypts the key locally, makes the HTTP request,
-returns only the response
+psamvault decrypts the key locally, checks the host, makes the HTTP request,
+returns the response with the secret scrubbed out
 ```
 
 Injection modes, as documented in the schema:
@@ -113,17 +150,49 @@ Injection modes, as documented in the schema:
 - `basic_auth` — `Authorization: Basic ***`; for a vault entry the username:password pair is used, for
   an API key entry the service name is the username and the key is the password
 
-The response is parsed as JSON where possible (falling back to text), and sensitive response headers —
-`set-cookie`, `authorization`, `www-authenticate`, `proxy-authenticate`, `set-cookie2` — are stripped
-before the response reaches the agent. Requests to loopback, private, or link-local addresses are
-rejected by the same SSRF guard. Redirects are followed.
+`target_url` must be an absolute `http` or `https` URL. `api.github.com/users/...` with no scheme is
+refused.
+
+### Where the secret may go
+
+This is the boundary. Scrubbing the response is not.
+
+- **Site password.** The host must be the registrable domain of the site name or of the entry's login
+  URL, or a subdomain of that domain. `leakcheck.example` may be sent to `leakcheck.example` and
+  `api.leakcheck.example`. It may not be sent to `notleakcheck.example` or to `httpbin.org`. A name
+  that is not a hostname (`MyBank`) has no implicit host unless the entry has a login URL; until a
+  human allows a host, every target is refused. Registrable domains follow the Public Suffix List,
+  including private suffixes, so `bank.co.uk` does not cover `attacker.co.uk` and `psam.github.io`
+  does not cover `other.github.io`.
+- **API key.** The host must belong to the service, or be listed for that entry. Service hosts come
+  from a bundled verify recipe (`github` → `api.github.com`, and then `github.com` and its other
+  subdomains; likewise `render`, `openrouter`, `tavily`) when the service, the service hint, or the
+  key name matches that recipe, and from any hostname written in those fields. A key whose name,
+  service, and hint match nothing — no recipe, no hostname — has **no known service host** and is
+  refused until a human allows one. A token inside the name can select a recipe: a key called
+  `github-backup` is treated as GitHub.
+- **Human allow-list.** `~/.psamvault/policy.json`, key `entries["<entry>"].allow_hosts`. One host, or
+  `*.example.com` for that domain and its subdomains. A human edits the file (mode 0600). There is no
+  MCP parameter and no MCP tool that adds a host. See
+  [Configuration](../reference/configuration.md#destination-allow-list). The psamvault CLI does not
+  validate this key yet; writing it by hand is the supported step.
+- **Redirects.** Each hop is checked before the secret is sent there. A redirect from an allowed host
+  to a disallowed host is refused, and so is a redirect to a loopback or private address. At most 5
+  redirects are followed. `http` to an allowed public host is still accepted; only the host is bound.
+- **SSRF.** Loopback, private, link-local, and `.local` / `.internal` targets are still refused, and
+  `allow_hosts` cannot override that.
+
+The response is parsed as JSON where possible (falling back to text). Sensitive response headers —
+`set-cookie`, `authorization`, `www-authenticate`, `proxy-authenticate`, `set-cookie2` — are stripped,
+and the body and the remaining headers are scrubbed with the same encodings as command output, before
+the response reaches the agent. `fields` is applied after that scrub.
 
 **Use `fields` to cut tokens.** A full GitHub user object is around 40 fields; asking for
 `fields=["login", "id", "public_repos"]` returns three. It works on dict responses and on
 lists-of-dicts.
 
-Returns: `success`, `status_code`, `headers` (minus the sensitive set), and `data` (the possibly
-filtered body).
+Returns: `success`, `status_code`, `headers` (minus the sensitive set, and scrubbed), and `data` (the
+possibly filtered body).
 
 ## Failure modes and what to do
 
@@ -164,6 +233,16 @@ running `psamvault get`.
 or vault entries.` — the entry is not stored. Use `list_api_keys()` / `list_vault_sites()` to find the
 right name, and tell the user they need to add it (via the psamvault CLI) if it is genuinely absent.
 Do not substitute a different site.
+
+### The host was refused
+
+`use_credential` returns `{"error": ...}` and `run_with_credential` returns `exit_code: -1` when the
+target is not this entry's site or the key's service. The error names the host and tells the user to
+add it under `entries["<entry>"].allow_hosts` in `~/.psamvault/policy.json`. Relay that. Do not edit
+the policy file, do not invent an MCP argument for it, and do not point the same secret at another
+host to read it back. An API key with no known service host says so explicitly ("no known service
+host") and stays refused until a human allows one. A redirect off an allowed host is the same refusal,
+and the request to the second host is not made.
 
 ### Unknown injection mode
 

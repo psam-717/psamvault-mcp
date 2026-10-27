@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from pytest_httpx import HTTPXMock
@@ -26,6 +27,20 @@ def _echo(var: str) -> str:
     working directory instead of printing the value. Quote it.
     """
     return f"echo %{var}%" if _os.name == "nt" else f'echo "${var}"'
+
+
+def _allow_host(entry: str, host: str) -> None:
+    """Human allow-list for a test whose target is not the entry's own site.
+
+    Destination binding refuses that request unless policy.json names the host.
+    The fixture redirects home, so this file is the test's policy, not a real one.
+    """
+    path = Path.home() / ".psamvault" / "policy.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"entries": {entry: {"allow_hosts": [host]}}}),
+        encoding="utf-8",
+    )
 
 
 def _add_api_key_list(httpx_mock: HTTPXMock, *names: str) -> None:
@@ -418,6 +433,7 @@ class TestUseCredential:
             json={"result": "success", "data": [1, 2, 3]},
         )
 
+        _allow_host("test-key", "api.example.com")
         result = await tools.use_credential(
             "test-key",
             "https://api.example.com/data",
@@ -459,6 +475,7 @@ class TestUseCredential:
             json={"status": "authenticated"},
         )
 
+        _allow_host("test-site", "api.example.com")
         result = await tools.use_credential(
             "test-site",
             "https://api.example.com/login",
@@ -526,6 +543,7 @@ class TestUseCredential:
             json={"message": "authorized"},
         )
 
+        _allow_host("my-api-key", "api.example.com")
         result = await tools.use_credential(
             "my-api-key",
             "https://api.example.com/protected",
@@ -573,6 +591,7 @@ class TestUseCredential:
             json={"a": 1, "b": 2, "c": 3},
         )
 
+        _allow_host("filter-key", "api.example.com")
         result = await tools.use_credential(
             "filter-key",
             "https://api.example.com/data",

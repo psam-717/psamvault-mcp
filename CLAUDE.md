@@ -23,10 +23,10 @@ smoke-test with **`psamvault-mcp --version`** or **`psamvault-mcp --help`**
 | `list_api_keys(project_name)` | List stored API key names with optional project filter |
 | `check_credential_exists(site_name)` | Check if a credential is stored for a site |
 | `get_username_for_site(site_name)` | Get the stored username (never the password) |
-| `use_credential(site_name, target_url, method, inject_as, fields)` | Make an authenticated HTTP request using stored API keys or passwords |
+| `use_credential(site_name, target_url, method, inject_as, fields)` | Authenticated HTTP to the entry's own site or the API key's service. Other hosts are refused |
 | `browser_login(site_name)` | Open a browser and log into a website — credentials filled silently |
 | `scan_and_protect(project_dir, patterns, project_name)` | Scan a project for `.env` secrets, encrypt them into psamvault |
-| `run_with_credential(site_name, command, inject_as, env_var_name, extra_env, workdir, timeout)` | Run a shell command with a credential injected via env var or stdin |
+| `run_with_credential(site_name, command, inject_as, env_var_name, extra_env, workdir, timeout)` | CLI with the credential in env or stdin. URLs in the command are host-checked; output is scrubbed |
 
 ## How to Use
 
@@ -80,7 +80,7 @@ use_credential(
 )
 ```
 
-The credential value is **never returned** to you. Only the HTTP response.
+The credential value is not a result field. The call is refused unless `target_url` is an absolute http or https URL on that entry's own site (a site named `github.com` covers `api.github.com`) or on the API key's service hosts. Any other host is refused, including a redirect. An API key with no known service host stays refused until a human adds it under `entries["<entry>"].allow_hosts` in `~/.psamvault/policy.json`. There is no MCP parameter that grants a host. Do not edit that file. The response is scrubbed of the secret; that scrub is defence in depth, and the host check is the boundary.
 
 ### 5. Protecting `.env` files
 
@@ -127,7 +127,7 @@ run_with_credential(
 )
 ```
 
-The credential is **decrypted locally**, injected into the subprocess, and all output is scanned for the credential value and redacted before being returned — the credential **never enters your context**.
+The credential is **decrypted locally** and injected into the subprocess. Every `http(s)` URL in the command must stay on the entry's site or the key's service, or on a host a human allowed; a command with no URL is not host-checked. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings (base64, URL-encoding, hex, the basic-auth blob). That scrub is defence in depth, not a boundary.
 
 **Key parameters:**
 - `site_name`: API key name (e.g. "pypi") or vault site name (e.g. "github.com")
@@ -145,9 +145,9 @@ These rules are non-negotiable:
 - **NEVER ask the user to paste a credential into the chat.** Use `use_credential`, `browser_login`, or `run_with_credential` instead — the credential stays server-side.
 - **NEVER print a raw credential value.** If you somehow have one, stop and use the MCP tools.
 - **ALWAYS use MCP tools for credential operations.** Do not try to read `~/.psamvault/` files or environment variables containing secrets.
-- **The `use_credential` tool returns only HTTP responses.** The credential is never in your context window.
+- **The `use_credential` tool returns the HTTP response, after scrubbing the secret out of the body and headers.** It sends the secret only to the entry's own site or the key's service. Any other host is refused.
 - **The `browser_login` tool fills credentials directly in the browser.** The agent never sees them.
-- **The `run_with_credential` tool redacts credential values from command output.** The credential never enters your context.
+- **The `run_with_credential` tool scrubs credential values from command output** (raw, reversed, and the common encodings). That scrub is defence in depth. `http(s)` URLs in the command are host-checked; a command with no URL is not.
 
 ## Authentication
 

@@ -287,8 +287,26 @@ or `{"error": ...}`.
 
 **Purpose**, verbatim: Make an authenticated HTTP request using a credential stored in psamvault. The
 lookup checks API key entries first, then vault (site password) entries — so you can use both API keys
-and site passwords. The credential value is NEVER returned to you — only the HTTP response from the
-target is returned. Supported injection modes: bearer_token, api_key_header, basic_auth.
+and site passwords. Use it when target_url is that entry's own site, or the API key's service. A site
+password is sent only to the registrable domain of its site name or login URL, and to subdomains of
+that domain. An API key is sent only to hosts its service already names — a bundled verify recipe
+matched from the service, the service hint, or the key name, or a hostname written in those fields —
+including that host's registrable domain and subdomains, or to hosts a human has listed for the entry.
+Any other host is refused, including a redirect that leaves an allowed host. An API key with no known
+service host is refused until a human allows one. Loopback and private addresses stay blocked, and
+allow_hosts cannot override that block. target_url must be an absolute http or https URL.
+
+A human allows a host by editing ~/.psamvault/policy.json (mode 0600) under
+entries["<entry>"].allow_hosts. Example: {"entries": {"ledger-key": {"allow_hosts":
+["api.ledger.example"]}}}. A leading "*." allows that domain and its subdomains; any other value is
+one host. There is no MCP parameter that grants a host.
+
+The credential value is not returned. Response bodies and headers are scrubbed of the secret in its
+raw form, reversed text, 8-character prefix, and common encodings (base64 and urlsafe base64, with
+and without padding, URL-encoding, hex, and the basic-auth user:pass blob). Scrubbing is defence in
+depth. The host check is the boundary.
+
+Supported injection modes: bearer_token, api_key_header, basic_auth.
 
 TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. Example:
 fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). Works on both
@@ -299,7 +317,7 @@ dict responses and lists-of-dicts.
 | Name | Type | Required | Meaning (registry text) |
 |---|---|---|---|
 | `site_name` | string | **yes** | The vault site whose credential to use, e.g.'github.com' |
-| `target_url` | string | **yes** | The URL to send the authenticated request to |
+| `target_url` | string | **yes** | Absolute http or https URL. The secret is sent only to this entry's own site, its API service hosts, or a host a human allowed in ~/.psamvault/policy.json. |
 | `method` | string, enum `GET` `POST` `PUT` `PATCH` `DELETE` | no (default `GET`) | HTTP method |
 | `inject_as` | string, enum `bearer_token` `api_key_header` `basic_auth` | no (default `bearer_token`) | How to inject the credential: bearer_token = Authorization: Bearer ***; api_key_header = <header_name>: <password>; basic_auth = Authorization: Basic *** |
 | `header_name` | string | required when `inject_as='api_key_header'` | The header name. |
@@ -309,17 +327,26 @@ dict responses and lists-of-dicts.
 
 **Returns.** `{"success": true, "status_code": ..., "headers": {...}, "data": ...}`. The body is
 parsed as JSON where possible and falls back to text; `data` is filtered by `fields` when given.
-Sensitive response headers (`set-cookie`, `authorization`, `www-authenticate`, `proxy-authenticate`,
-`set-cookie2`) are stripped. Errors return `{"error": ...}` — including
-`header_name is required when inject_as='api_key_header'.`, an unknown `inject_as` mode, an unknown
-credential, and a rejected internal-address target.
+Before that, the body and the remaining headers are scrubbed of the secret (raw, reversed, the
+8-character prefix, and the encodings named above). Sensitive response headers (`set-cookie`,
+`authorization`, `www-authenticate`, `proxy-authenticate`, `set-cookie2`) are stripped. Errors return
+`{"error": ...}` — including `header_name is required when inject_as='api_key_header'.`, an unknown
+`inject_as` mode, an unknown credential, a rejected internal-address target, a target that is not an
+absolute http(s) URL, and a host the entry is not allowed to receive. A redirect to such a host is
+refused and not followed. The refusal names `~/.psamvault/policy.json` and `allow_hosts` so a human
+can add the host. The server does not follow more than 5 redirects.
 
-**When to use it.** **Always** for authenticated HTTP/API requests.
+**When to use it.** When the request goes to that entry's own site, or to the API key's service.
+GitHub is the usual case: a site named `github.com`, or a key whose service or name matches the
+bundled `github` recipe, may call `https://api.github.com/...`. Do not use it to send a stored secret
+to an unrelated host (an echo service, a webhook, a pastebin). That call is refused. For a CLI that
+reads a token from the environment or stdin, use `run_with_credential`.
 
 **Name resolution.** `site_name` accepts a vault site name (`github.com`), an API key's stored name
 (`project/.env/KEY`), or a unique leaf. See [Naming an API key](#naming-an-api-key).
 
-**Never returns the credential value** — only the HTTP response.
+**The credential value is not a result field.** What comes back is the HTTP response, after the scrub
+above. Scrubbing is defence in depth. A host the entry does not own is the thing that is refused.
 
 ---
 
@@ -327,12 +354,24 @@ credential, and a rejected internal-address target.
 
 **Group:** API Key Operations.
 
-**Purpose**, verbatim: Run an arbitrary shell command with a credential injected as an environment
-variable or stdin pipe. The credential is decrypted locally, injected into the subprocess, and all
-output is scanned for the credential value and redacted before being returned — the credential NEVER
-enters the agent's context.
+**Purpose**, verbatim: Run a shell command with a credential injected as an environment variable or
+stdin pipe. Use this for a CLI that reads a token from the environment or stdin (twine upload, docker
+login, npm publish, git push, pip install), not for an HTTP API — that is use_credential.
 
-Use cases from the tool description:
+The credential is decrypted locally and injected into the subprocess. Stdout and stderr are scrubbed
+of the raw value, its 8-character prefix, the reversed text, and the common encodings (base64 and
+urlsafe base64, with and without padding, URL-encoding, hex, and the basic-auth user:pass blob).
+Scrubbing is defence in depth, not a boundary: a form the scrubber does not know, or a program that
+contacts a host never written in the command, can still move the value.
+
+Every http(s) URL written in the command is checked the same way as use_credential. A site password
+may only be used when those URLs stay on that site. An API key may only be used when they stay on its
+service hosts, or on hosts a human allowed for that entry in ~/.psamvault/policy.json under
+entries["<entry>"].allow_hosts. Any other URL is refused before the command runs. Loopback and
+private URLs stay blocked. A command with no URL is not host-checked, because the destination is not
+in the command.
+
+Use cases:
 
 - twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'
 - docker login: inject_as='stdin' (password piped to stdin)
@@ -354,24 +393,30 @@ Only site_name and command are required. When inject_as='env', env_var_name is r
 | `workdir` | string | no | Optional working directory for the command. Defaults to the MCP server's current working directory. |
 | `timeout` | integer | no (default `120`) | Max seconds to wait for the command (default: 120). |
 
-**Returns.** `exit_code` (int; `-1` for errors), `stdout`, `stderr` — both streams with the credential
-value replaced by `[REDACTED]` (for credentials longer than 8 characters the 8-character prefix is
-redacted too). `error` is added when the command could not run. A timeout returns `exit_code: -1`,
-`error: "timeout"`, `timed_out: true`, and whatever output the command had already produced (already
-redacted). A blocked command returns the blocking reason in `error` and `stderr` without running
-anything.
+**Returns.** `exit_code` (int; `-1` for errors), `stdout`, `stderr`. Both streams replace the secret
+with `[REDACTED]` in the forms named above. `error` is added when the command could not run. A
+timeout returns `exit_code: -1`, `error: "timeout"`, `timed_out: true`, and whatever output the
+command had already produced (already scrubbed). A blocked command, a loopback or private URL, or an
+http(s) URL the entry may not use returns `exit_code: -1` plus the reason in `error` and `stderr`,
+and the command does not run.
 
 **When to use it.** For `twine upload`, `git push`, `docker login`, `npm publish`, `pip install`
-against a private repo, or any CLI tool that needs an API key or password. For the timeout pitfall and
-the retry rules, read the [Credential injection guide](../guides/credential-injection.md).
+against a private repo, or any CLI that reads an API key or password from the environment or stdin.
+Do not use it to call an HTTP API — that is `use_credential` — and do not put a foreign host's URL
+in the command to carry the secret there. A command with no URL (the publish and push cases) is not
+host-checked. For the timeout pitfall and the retry rules, read the
+[Credential injection guide](../guides/credential-injection.md).
 
 **Name resolution.** `site_name` accepts a vault site name (`github.com`), an API key's stored name
 (`project/.env/KEY`), or a unique leaf. See [Naming an API key](#naming-an-api-key).
 
-**Never returns the credential value** — stdout and stderr are redacted before they reach the agent.
-Commands that could dump a secret are refused (`psamvault get|show|ak-get|ak-show|search|list|export`,
-`psamvault vault-get|credential-get|entry-get`, `cat ...*.psamvault`, `type ...*.psamvault`), and URLs
-in the command targeting loopback, private, or link-local addresses are rejected.
+**The credential value is scrubbed from stdout and stderr before they reach the agent.** That scrub
+is defence in depth, not a guarantee: an encoding the scrubber does not know can still appear, and a
+program can contact a host that was never written in the command. Commands that could dump a secret
+are refused (`psamvault get|show|ak-get|ak-show|search|list|export`,
+`psamvault vault-get|credential-get|entry-get`, `cat ...*.psamvault`, `type ...*.psamvault`). URLs
+in the command that target loopback, private, or link-local addresses are rejected, and so is any
+http(s) URL outside the entry's site, its service hosts, or `allow_hosts`.
 
 ---
 

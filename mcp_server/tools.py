@@ -41,11 +41,12 @@ import ipaddress
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from mcp_server import api_client, config_targets
+from mcp_server import api_client, config_targets, egress
+from mcp_server.redact import redact_obj, redact_text
 from mcp_server import verify as verify_executor
 from mcp_server import verify_recipes
 from mcp_server.crypto import decrypt_credentials, decrypt_api_key
@@ -128,6 +129,92 @@ def _reject_internal_target(url: str) -> str | None:
         # Public IP literal — allowed.
 
     return None
+
+
+# Redirects we will follow only when the next host is still allowed.
+_REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECTS = 5
+
+
+def _entry_names(site_name: str, encrypted_entry: dict) -> list[str]:
+    """Caller name, resolved stored name, and names the entry itself carries."""
+    names = [site_name]
+    resolved = getattr(encrypted_entry, "resolved_name", None)
+    if isinstance(resolved, str) and resolved:
+        names.append(resolved)
+    for key in ("name", "site_name"):
+        value = encrypted_entry.get(key)
+        if isinstance(value, str) and value:
+            names.append(value)
+    return names
+
+
+def _binding_kwargs(
+    site_name: str,
+    encrypted_entry: dict,
+    decrypted: dict,
+    entry_type: str,
+) -> dict:
+    names = _entry_names(site_name, encrypted_entry)
+    if entry_type == "vault":
+        candidates = [site_name]
+        for source in (encrypted_entry, decrypted):
+            for key in ("site_name", "login_url"):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    candidates.append(value)
+        return {
+            "entry_type": "vault",
+            "entry_names": names,
+            "site_candidates": candidates,
+            "service_identifiers": [],
+        }
+    identifiers = [
+        str(decrypted.get("service") or ""),
+        str(encrypted_entry.get("service_hint") or ""),
+        *names,
+    ]
+    return {
+        "entry_type": "api_key",
+        "entry_names": names,
+        "site_candidates": [],
+        "service_identifiers": identifiers,
+    }
+
+
+def _hop_blocked(url: str, previous: str | None, assess) -> dict | None:
+    """SSRF, then destination binding, for one request URL.
+
+    SSRF wins over allow_hosts: a private or loopback target is refused even
+    when a human listed it. ``previous`` is set when ``url`` is a redirect.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not (parsed.hostname or "").strip():
+        message = "target_url must be an absolute http or https URL."
+        if previous:
+            message = f"Refused to follow a redirect from {previous!r} to {url!r}. {message}"
+        return {"error": message}
+    ssrf_error = _reject_internal_target(url)
+    if ssrf_error:
+        if previous:
+            return {
+                "error": (
+                    f"Refused to follow a redirect from {previous!r} to {url!r}. {ssrf_error}"
+                )
+            }
+        return {"error": ssrf_error}
+    reason = assess(url)
+    if reason:
+        if previous:
+            return {
+                "error": (
+                    f"Refused to follow a redirect from {previous!r} to {url!r} "
+                    f"with the credential attached. {reason}"
+                )
+            }
+        return {"error": reason}
+    return None
+
 
 logger = get_logger()
 
@@ -417,12 +504,17 @@ async def use_credential(
     fields: list[str] | None = None,
 ) -> dict:
     """Fetch a credential (vault entry or API key), decrypt locally, make an
-    authenticated HTTP request, and return the response — NEVER exposing the
-    credential value back to the caller.
+    authenticated HTTP request, and return the response. The credential value
+    is not a result field.
 
     The credential is looked up first in the API key entries, then in the
-    vault entries (site passwords). This allows both API keys and site login
-    passwords to be used for HTTP requests.
+    vault entries (site passwords). A site password is sent only to that
+    entry's own site. An API key is sent only to its service's hosts, or to
+    a host a human has listed for the entry in ``~/.psamvault/policy.json``.
+    Anything else is refused. Redirects are checked the same way, one hop at
+    a time. Response bodies and headers are scrubbed of the secret and its
+    common encodings; that scrub is defence in depth, and the host check is
+    the boundary.
 
     Args:
         site_name:    Name of the credential to use (API key name or site name).
@@ -488,81 +580,130 @@ async def use_credential(
             )
             credential_value = decrypted["password"]
 
-        # Build request headers
-        headers = {}
+        if entry_type == "vault":
+            basic_username = str(decrypted.get("username") or "")
+        else:
+            basic_username = str(decrypted.get("service") or "")
 
-        # Add extra headers (if provided)
+        # Reject an unknown mode before any network call, and before the secret
+        # is placed on a request.
+        if inject_as == "api_key_header" and not header_name:
+            return {"error": "header_name is required when inject_as='api_key_header'."}
+        if inject_as not in ("bearer_token", "api_key_header", "basic_auth"):
+            return {
+                "error": (
+                    f"Unknown inject_as mode: '{inject_as}'. "
+                    "Use 'bearer_token', 'api_key_header', or 'basic_auth'."
+                )
+            }
+
+        policy = egress.load_policy()
+        binding = _binding_kwargs(site_name, encrypted_entry, decrypted, entry_type)
+
+        def _assess(url: str) -> str | None:
+            return egress.refusal(url, policy=policy, **binding)
+
+        headers: dict[str, str] = {}
         if extra_headers:
             headers.update(extra_headers)
-
-        # Inject credential based on mode
         if inject_as == "bearer_token":
             headers["Authorization"] = f"Bearer {credential_value}"
-
         elif inject_as == "api_key_header":
-            if not header_name:
-                return {"error": "header_name is required when inject_as='api_key_header'."}
             headers[header_name] = credential_value
-
-        elif inject_as == "basic_auth":
+        else:
             if entry_type == "vault":
-                username = decrypted.get("username", "")
+                username = basic_username
                 password = decrypted.get("password", "")
             else:
-                # For API key entries used as basic auth, use service as username
-                username = decrypted.get("service", "")
+                username = basic_username
                 password = decrypted.get("api_key", "")
             basic = base64.b64encode(f"{username}:{password}".encode()).decode()
             headers["Authorization"] = f"Basic {basic}"
 
-        else:
-            return {"error": f"Unknown inject_as mode: '{inject_as}'. Use 'bearer_token', 'api_key_header', or 'basic_auth'."}
+        # Each hop is checked before the secret is attached to it. httpx is not
+        # asked to follow redirects: a cross-host redirect would otherwise keep
+        # a custom API-key header, and a redirect to a private address would
+        # skip the SSRF check that only saw the first URL.
+        current = target_url
+        current_method = method
+        current_body = body if method in ("POST", "PUT", "PATCH") else None
+        previous: str | None = None
+        response = None
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            for _hop in range(_MAX_REDIRECTS + 1):
+                blocked = _hop_blocked(current, previous, _assess)
+                if blocked:
+                    return blocked
+                response = await client.request(
+                    method=current_method,
+                    url=current,
+                    headers=headers,
+                    json=current_body if current_method in ("POST", "PUT", "PATCH") else None,
+                    timeout=30.0,
+                )
+                if response.status_code not in _REDIRECT_STATUS:
+                    break
+                location = response.headers.get("location")
+                if not location:
+                    break
+                nxt = urljoin(current, location)
+                if response.status_code in (301, 302, 303) and current_method not in ("GET", "HEAD"):
+                    current_method = "GET"
+                    current_body = None
+                previous = current
+                current = nxt
+            else:
+                return {
+                    "error": (
+                        f"Refused to follow more than {_MAX_REDIRECTS} redirects "
+                        f"from {target_url!r}."
+                    )
+                }
 
-        # SSRF guard — reject requests to loopback, private, or link-local IPs
-        ssrf_error = _reject_internal_target(target_url)
-        if ssrf_error:
-            return {"error": ssrf_error}
-
-        # Make the authenticated HTTP request
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method=method,
-                url=target_url,
-                headers=headers,
-                json=body if method in ("POST", "PUT", "PATCH") else None,
-                timeout=30.0,
-                follow_redirects=True,
-            )
-
-        # Parse response body
         try:
             response_data = response.json()
         except Exception:
             response_data = response.text
 
-        # Filter response by fields if requested
+        visible_headers = {
+            k: v
+            for k, v in response.headers.items()
+            if k.lower() not in _SENSITIVE_RESPONSE_HEADERS
+        }
+        scrubbed = redact_obj(
+            {"headers": visible_headers, "data": response_data},
+            credential_value,
+            username=basic_username,
+        )
+        response_data = scrubbed["data"]
+        visible_headers = scrubbed["headers"]
+
         if fields and isinstance(response_data, dict):
             response_data = {k: v for k, v in response_data.items() if k in fields}
         elif fields and isinstance(response_data, list):
             response_data = [
                 {k: v for k, v in item.items() if k in fields}
                 for item in response_data
+                if isinstance(item, dict)
             ]
 
         return {
             "success": True,
             "status_code": response.status_code,
-            "headers": {
-                k: v
-                for k, v in response.headers.items()
-                if k.lower() not in _SENSITIVE_RESPONSE_HEADERS
-            },
+            "headers": visible_headers,
             "data": response_data,
         }
 
     except Exception as e:
-        logger.error("use_credential failed: %s", e)
-        return {"error": f"use_credential failed: {e}"}
+        logger.error("use_credential failed: %s", type(e).__name__)
+        message = f"use_credential failed: {e}"
+        if "credential_value" in locals() and credential_value:
+            message = redact_text(
+                message,
+                credential_value,
+                username=locals().get("basic_username"),
+            )
+        return {"error": message}
 
 
 # ── scan_and_protect tool ──────────────────────────────────────────────────
@@ -732,9 +873,12 @@ async def run_with_credential(
 ) -> dict:
     """Run a shell command with a credential injected via env var or stdin.
 
-    The credential value NEVER enters the agent's context — it is decrypted
-    locally, injected into the subprocess, and all output is scanned for the
-    value and redacted before being returned.
+    The credential is decrypted locally and injected into the subprocess.
+    Stdout and stderr are scrubbed of the secret and its common encodings.
+    That scrub is defence in depth, not a boundary. Every http(s) URL in the
+    command is limited to the entry's own site or the API key's service hosts,
+    or to a host a human listed in ``~/.psamvault/policy.json``. A command
+    with no URL is not host-checked.
 
     The credential is looked up first in API key entries, then vault entries.
 
@@ -755,8 +899,8 @@ async def run_with_credential(
     Returns:
         A dict with keys:
         - ``exit_code``: int — subprocess exit code (-1 for errors)
-        - ``stdout``: str — stdout with credential value redacted
-        - ``stderr``: str — stderr with credential value redacted
+        - ``stdout``: str — stdout with the credential scrubbed
+        - ``stderr``: str — stderr with the credential scrubbed
         - ``error``: str — error details if command could not run
     """
     if not is_logged_in():
@@ -805,25 +949,43 @@ async def run_with_credential(
             )
             credential_value = decrypted["password"]
 
-        # SSRF guard — scan command for URLs targeting internal addresses.
-        # An attacker who tricks the agent into running a command like
-        #   curl http://169.254.169.254/$KEY
-        # would exfiltrate the credential to an internal endpoint.
-        # We extract all http(s) URLs from the command string and reject
-        # any that point to loopback, private, or link-local addresses.
+        if entry_type == "vault":
+            basic_username = str(decrypted.get("username") or "")
+        else:
+            basic_username = str(decrypted.get("service") or "")
+
+        # Every http(s) URL written in the command is treated as a destination,
+        # the same way the SSRF scan already treats one. A program can still
+        # contact a host that is not written in the command; this check cannot
+        # see that.
+        policy = egress.load_policy()
+        binding = _binding_kwargs(site_name, encrypted_entry, decrypted, entry_type)
         _url_re = re.compile(r"https?://[^\s\"'<>|;&$`!(){}]+")
         for _match in _url_re.finditer(command):
             _url = _match.group(0)
             _ssrf_err = _reject_internal_target(_url)
             if _ssrf_err:
                 return {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": _ssrf_err,
                     "error": (
                         f"Command contains a URL targeting an internal address: "
                         f"'{_url[:80]}'. {_ssrf_err}"
                     ),
                 }
+            _dest = egress.refusal(_url, policy=policy, **binding)
+            if _dest:
+                return {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": _dest,
+                    "error": (
+                        f"Command contains a URL this credential may not be sent to: "
+                        f"'{_url[:120]}'. {_dest}"
+                    ),
+                }
 
-        # Run command with credential injected
         from mcp_server.cmd_runner import run_command_with_credential as _run_cmd
 
         result = await _run_cmd(
@@ -834,12 +996,20 @@ async def run_with_credential(
             extra_env=extra_env,
             workdir=workdir,
             timeout=timeout,
+            username=basic_username,
         )
         return result
 
     except Exception as e:
-        logger.error("run_with_credential failed: %s", e)
-        return {"error": f"run_with_credential failed: {e}"}
+        logger.error("run_with_credential failed: %s", type(e).__name__)
+        message = f"run_with_credential failed: {e}"
+        if "credential_value" in locals() and credential_value:
+            message = redact_text(
+                message,
+                credential_value,
+                username=locals().get("basic_username"),
+            )
+        return {"error": message}
 
 
 # ── export_key_to_mcp_config tool ─────────────────────────────────────────────

@@ -38,8 +38,8 @@ Tools are grouped into three categories. Always start in **Entry & Orientation**
 | Tool | What it does |
 |------|-------------|
 | **`list_api_keys`** | Lists all stored API key names with service hints and project grouping — never returns key values |
-| **`use_credential`** | Makes authenticated HTTP requests for you (API keys, bearer tokens, basic auth) — only the HTTP response is returned |
-| **`run_with_credential`** | Runs a CLI command with a credential injected via environment variable or stdin — all output redacted of the secret value |
+| **`use_credential`** | Authenticated HTTP to that entry's own site or the API key's service. Any other host is refused. The response is returned with the secret scrubbed out |
+| **`run_with_credential`** | A CLI that reads a token from the environment or stdin. URLs in the command are host-checked. Output is scrubbed of the secret and its common encodings |
 | **`scan_and_protect`** | Scans a project directory for `.env` files, encrypts secrets into psamvault, replaces plaintext with `psamvault:KEY` placeholders |
 | **`export_key_to_mcp_config`** | Exports a vault API key directly into a client MCP config file (Hermes — the only host whose config shape is verified) — auto-verifies HTTP keys before writing |
 | **`export_key_to_env_file`** | Exports a vault API key into an agent's `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up, auto-verifies |
@@ -98,11 +98,15 @@ When an AI agent needs to make an authenticated API call on your behalf:
 ```
 Agent: "Get my top 10 starred repos"
          ↓
-use_credential("github.com", target_url="api.github.com/users/psam-717/starred")
+use_credential("github.com", target_url="https://api.github.com/users/psam-717/starred")
          ↓
-psamvault decrypts the API key locally, makes the HTTP request,
-returns only the response — the credential is NEVER in the agent's context
+psamvault decrypts the credential locally, sends it only to that site
+(or the key's service), and returns the response with the secret scrubbed out
 ```
+
+A site password goes to the registrable domain of its site name or login URL, and to subdomains of that domain. An API key goes to hosts its service already names (a bundled verify recipe such as `github` → `api.github.com`, or a hostname in the service, the service hint, or the key name), including that registrable domain and its subdomains. Anything else is refused, including a redirect off an allowed host. An API key with no known service host is refused until a human adds the host under `entries["<entry>"].allow_hosts` in `~/.psamvault/policy.json` (mode 0600). There is no MCP parameter that grants a host. `target_url` must be an absolute `http` or `https` URL. Loopback and private addresses stay blocked.
+
+The response scrub (raw value, reversed text, base64, URL-encoding, hex, and the basic-auth blob) is defence in depth. The host check is the boundary.
 
 Supports three injection modes:
 - **Bearer token** — `Authorization: Bearer ***`
@@ -124,11 +128,10 @@ run_with_credential("pypi", "twine upload dist/*",
 psamvault decrypts the credential locally, spawns the subprocess
 with the credential injected as an env var (or piped via stdin)
          ↓
-All stdout and stderr is scanned for the credential value
-and redacted before being returned
-         ↓
-Agent receives only the redacted output — the credential NEVER
-appears in the agent's context
+Every http(s) URL in the command is checked the same way as use_credential.
+A command with no URL is not host-checked.
+Stdout and stderr are scrubbed of the secret, its reversed text, and the
+common encodings before being returned. That scrub is defence in depth.
 ```
 
 Supports two injection modes:
@@ -472,8 +475,8 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | Tool | Description |
 |---|---|
 | `list_api_keys` | List stored API key names with service hints and project grouping (never key values). Optional `project_name` filter |
-| `use_credential` | Make authenticated HTTP requests using stored API keys or site passwords — only the HTTP response is returned |
-| `run_with_credential` | Run a CLI command with a credential injected via env var or stdin — all output redacted of the secret |
+| `use_credential` | Authenticated HTTP to the entry's own site or the API key's service — other hosts are refused; the response is scrubbed |
+| `run_with_credential` | CLI with the credential in env or stdin — URLs in the command are host-checked; output is scrubbed of the secret and its encodings |
 | `scan_and_protect` | Scan a project for `.env` secrets, encrypt them into psamvault, replace with placeholders. Supports `project_name` for per-project namespacing |
 | `export_key_to_mcp_config` | Export a vault API key into a client MCP config file (Hermes — the only host whose config shape is verified) — auto-verifies HTTP keys before write, with `skip_verify` / `verify_url` overrides |
 | `export_key_to_env_file` | Export a vault API key into an agent `.env` as a variable (`agent="hermes"` → `HERMES_HOME/.env`, or explicit `env_path`) — updates in place, timestamped backup, auto-verifies HTTP keys |

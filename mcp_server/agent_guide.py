@@ -202,10 +202,25 @@ This includes trigger phrases like "log into", "log in to", "sign into",
 "enter my password for", "fill in credentials for", or "login to".
 
 ### Rule 3: use_credential for API requests
-Use `use_credential` for all authenticated HTTP/API requests. It looks up API
-key entries first, then falls back to vault (site password) entries if no API
-key is found. The credential value is **never returned** — only the HTTP
-response from the target is returned to you.
+Use `use_credential` for an authenticated HTTP request to that entry's own site
+or the API key's service. It looks up API key entries first, then falls back to
+vault (site password) entries if no API key is found. A site password is sent
+only to the registrable domain of its site name or login URL, and to subdomains
+of that domain. An API key is sent only to hosts its service already names (a
+bundled verify recipe, or a hostname in the service, the service hint, or the
+key name), or to a host a human has listed for the entry. Any other host is
+refused, including a redirect that leaves an allowed host. An API key with no
+known service host is refused until a human allows one. `target_url` must be an
+absolute http or https URL. Loopback and private addresses stay blocked.
+
+A human allows a host by editing `~/.psamvault/policy.json` (mode 0600) under
+`entries["<entry>"].allow_hosts`. There is no MCP parameter that grants a host.
+Relay the error. Do not edit the policy file, and do not send the secret to
+another host to read it back.
+
+The credential value is not a result field. The response body and headers are
+scrubbed of the secret and its common encodings. Scrubbing is defence in depth.
+The host check is the boundary.
 
 Supported injection modes:
 - `bearer_token` — Authorization: Bearer *** (default)
@@ -224,8 +239,13 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 
 ### Rule 6: Credential values are never returned to you
 - `browser_login` fills credentials inside a browser — you never see them.
-- `use_credential` injects credentials into HTTP requests — only the response
-  comes back to you.
+- `use_credential` injects a credential into an HTTP request to that entry's own
+  site or the key's service, and returns the response after scrubbing the secret
+  out of the body and headers. Any other host is refused.
+- `run_with_credential` injects a credential into a CLI subprocess. `http(s)` URLs
+  in the command follow the same host rule. Stdout and stderr are scrubbed of the
+  raw value, the reversed text, and the common encodings. That scrub is defence
+  in depth: a command with no URL is not host-checked.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 
@@ -301,8 +321,8 @@ add `.env` to their `.gitignore`.
 
 | Tool | Purpose | When to call |
 |------|---------|--------------|
-| `use_credential` | Make authenticated HTTP/API requests | **Always** for API calls needing auth |
-| `run_with_credential` | Run CLI command with credential injected | When a CLI tool needs a credential (env/stdin) |
+| `use_credential` | Authenticated HTTP to the entry's site or the key's service | When that host is the one you are calling. Other hosts are refused |
+| `run_with_credential` | CLI with the credential in env or stdin; URLs in the command are host-checked | twine, docker login, npm, git, pip — not an arbitrary HTTP call |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
 """
 
@@ -311,9 +331,11 @@ _HOW_TO_USE_API_CREDENTIAL = """\
 
 ## Goal
 Make an authenticated HTTP request using a credential stored in psamvault
-without ever seeing the plaintext credential value. The MCP server looks up
-API key entries first, falls back to vault entries, decrypts the credential
-locally, injects it into the HTTP request, and returns only the response.
+without the plaintext credential coming back as a result. The MCP server looks
+up API key entries first, falls back to vault entries, decrypts the credential
+locally, and injects it only when the host is that entry's own site or the API
+key's service (or a host a human allowed). The response is scrubbed. That scrub
+is defence in depth. The host check is the boundary.
 
 ## Prerequisites
 - The user must be logged in to psamvault (`psamvault login` in their terminal).
@@ -325,32 +347,41 @@ locally, injects it into the HTTP request, and returns only the response.
 |------|---------|-------|
 | `search_vault_tools` | Discover which tool to use — call this first | 🛠 Entry & Orientation |
 | `check_credential_exists` | Verify the credential exists before calling use_credential | 🔐 Site Authentication |
-| `use_credential` | Make the authenticated HTTP/API request | 🔑 API Key Operations |
+| `use_credential` | Authenticated HTTP to the entry's site or the key's service | 🔑 API Key Operations |
 
 ## Workflow
 
 ### Step 1: Verify the credential exists
-Call `check_credential_exists(site_name="my-api-key")`.
+Call `check_credential_exists(site_name="api.example.com")`.
 If it returns `exists: false`, the credential isn't stored yet.
 
 ### Step 2: Call use_credential
 Call `use_credential(
-    site_name="my-api-key",
+    site_name="api.example.com",
     target_url="https://api.example.com/data",
     method="GET",
     inject_as="bearer_token",
 )`
+`target_url` must be an absolute http or https URL. A site password stored as
+`api.example.com` may also go to a subdomain of `example.com` only when that
+subdomain's registrable domain is `example.com` — `api.example.com`'s
+registrable domain is `example.com`, so `www.example.com` is allowed and
+`notexample.com` is not. An API key is allowed when its service, service hint,
+or name matches a bundled verify recipe or already contains the hostname.
 
 ### Step 3: Handle the response
 
 #### ✅ On success (success: true)
-- The response `data` contains the API response.
+- The response `data` contains the API response, with the secret scrubbed out.
 - Use the data for what the user requested.
 - `status_code` tells you the HTTP status.
 
 #### ❌ On failure (error in response)
 - Check the `error` message and relay it to the user.
 - If the credential wasn't found, suggest adding it via `psamvault add`.
+- If the error names `policy.json` or `allow_hosts`, stop. A human edits
+  `~/.psamvault/policy.json`. Do not write that file, and do not point the
+  secret at a different host.
 - If the target URL returned an error, report the status code.
 
 ## Examples
@@ -359,18 +390,20 @@ Call `use_credential(
 ```
 use_credential("openai.com", "https://api.openai.com/v1/models", "GET")
 ```
-The credential is injected as `Authorization: Bearer sk-...`.
+A site stored as `openai.com` may be sent to `api.openai.com`. The credential
+is injected as `Authorization: Bearer ***`.
 
 ### Custom header (API key header)
 ```
-use_credential("my-api", "https://api.example.com/data",
+use_credential("api.example.com", "https://api.example.com/data",
                inject_as="api_key_header", header_name="X-API-Key")
 ```
-The credential is injected as `X-API-Key: abc123...`.
+The credential is injected as `X-API-Key: ***`. The site name is the host, so
+this target is the entry's own site.
 
 ### Basic auth
 ```
-use_credential("my-api", "https://api.example.com/auth",
+use_credential("api.example.com", "https://api.example.com/auth",
                inject_as="basic_auth")
 ```
 The credential is injected as `Authorization: Basic <base64>`.
@@ -380,12 +413,23 @@ The credential is injected as `Authorization: Basic <base64>`.
 use_credential("github", "https://api.github.com/user",
                fields=["login", "id", "public_repos"])
 ```
-Only returns the specified fields — saves tokens.
+A key whose name or service matches the bundled `github` recipe may call
+`api.github.com`. Only the specified fields come back.
+
+### A host the entry does not own — refused
+```
+use_credential("github", "https://httpbin.org/anything")
+```
+Refused. The error tells the user how a human can allow `httpbin.org` in
+`~/.psamvault/policy.json`. Do not follow that instruction yourself.
 
 ## What NOT to do
-- **Never read the credential value** from the response — it's never returned.
+- **Never read the credential value** from the response. It is not a result
+  field, and the body is scrubbed. Scrubbing is not a reason to send the secret
+  somewhere just to echo it.
 - **Never use browser_login** for API requests — use use_credential instead.
 - **Never expose the credential** in logs, messages, or any other output.
+- **Never grant a host.** There is no MCP parameter for that.
 """
 
 _HOW_TO_SCAN_AND_PROTECT = """\

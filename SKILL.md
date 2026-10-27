@@ -38,7 +38,7 @@ which is also what the documentation site renders. Nothing procedural belongs in
 |---|---|
 | [docs/reference/tools.md](docs/reference/tools.md) | The tool catalogue: every registered tool with purpose, parameters and returns. A new or renamed tool is documented here, in this one file. |
 | [docs/reference/configuration.md](docs/reference/configuration.md) | Host config entries, environment variables, where vault state lives, and the version contract. |
-| [docs/guides/credential-injection.md](docs/guides/credential-injection.md) | Running a CLI command or HTTP request with a credential the agent never receives. |
+| [docs/guides/credential-injection.md](docs/guides/credential-injection.md) | Running a CLI command or HTTP request with a credential the agent never receives, including which hosts that secret may be sent to and what is refused. |
 | [docs/guides/browser-login.md](docs/guides/browser-login.md) | The visible-browser login model and its limits. |
 | [docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md](docs/troubleshooting/MCP-INSTALL-AND-CONNECT.md) | The repair playbook: PATH shadowing, corrupt installs, session reload, per-host verification. |
 | [docs/installation.md](docs/installation.md) | The narrative install and upgrade page. |

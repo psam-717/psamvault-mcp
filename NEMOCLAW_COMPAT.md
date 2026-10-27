@@ -20,7 +20,7 @@ psamvault's architecture aligns naturally with NemoClaw's security model:
 | Security Concern | NemoClaw Protection | psamvault Solution |
 |---|---|---|
 | API keys in sandbox | ❌ Secrets must not enter the sandbox | ✅ Keys stored *on host*, never copied in |
-| Agent reading secrets | ❌ Agent must not see plaintext | ✅ Credential values never returned to agent |
+| Agent reading secrets | ❌ Agent must not see plaintext | ✅ Values are not tool results. `use_credential` also refuses a host the entry does not own |
 | Plaintext .env files | ❌ Sandbox reads expose secrets | ✅ `scan_and_protect` replaces with placeholders |
 
 ---
@@ -194,7 +194,7 @@ so you don't need to re-authenticate on rebuild.
 | `list_vault_sites` | ✅ | ✅ | No credential exposure |
 | `check_credential_exists` | ✅ | ✅ | Returns boolean + username hint |
 | `get_username_for_site` | ✅ | ✅ | Returns username only |
-| `use_credential` | ✅ | ✅ | Key never enters agent context |
+| `use_credential` | ✅ | ✅ | Sent only to the entry's site or the key's service; response scrubbed. Other hosts are refused |
 | `browser_login` | ⚠️ Requires GUI | ⚠️ Requires GUI | No display in headless sandbox |
 | `scan_and_protect` | ✅ | ✅ | Scans `.env` in sandbox filesystem |
 
@@ -212,8 +212,8 @@ you'd need to configure display forwarding or use a remote browser service.
 |---|---|
 | **VEK location** | Host OS keychain (never in sandbox) |
 | **Plaintext credential location** | MCP server memory only, milliseconds only |
-| **Agent sees credential value?** | Never |
+| **Agent sees credential value?** | Not as a tool result. Responses and command output are scrubbed of the common encodings. That scrub is defence in depth; the host check is the boundary |
 | **Backend stores plaintext?** | Never (zero-knowledge) |
 | **Network policy needed?** | Mode A: 1 egress rule host.openshell.internal :port |
 | **Additional attack surface** | None — same security model, just moved to host |
-| **API key exfiltration via MCP?** | Not possible — MCP only returns HTTP responses |
+| **API key exfiltration via MCP?** | A stored secret is not sent to an arbitrary public host. `use_credential` refuses any host that is not the entry's site, the key's service, or a host a human listed in `~/.psamvault/policy.json` |
