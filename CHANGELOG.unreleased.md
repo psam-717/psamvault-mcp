@@ -14,6 +14,10 @@
   `type(scope): what changed and why it matters`.
 -->
 
+## Added
+
+- feat(policy): tools that decrypt a secret read `mcp_use` in `~/.psamvault/policy.json` before the VEK is read and before the destination check. `audit` (the default when the key is absent, and the fallback for a broken or invalid file) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `allow_tools`, and asks in chat only when `ask_each_time` is true; a no or a missing answer refuses the use. `off` records the use and does not consult the list. A refusal starts with STOP and names `psamvault policy allow-tool` for a human. One audit row is written to `audit.jsonl` before decryption. `get_version` reports the mode and, when the key is absent, the notice that a future release will default to enforce. Discovery tools are not gated.
+
 ## Fixed
 
 - fix(credentials): `use_credential` sends a site password only to that site's registrable domain and its subdomains, and an API key only to its service hosts or to a host a human listed under `entries.<name>.allow_hosts` in `~/.psamvault/policy.json`. Any other host is refused, including a redirect that leaves an allowed host, and an API key with no known service host stays refused until a human allows one. Loopback and private targets stay blocked, and `allow_hosts` cannot override that block. There is no MCP parameter that grants a host.
@@ -27,11 +31,13 @@
 
 ## Tests
 
+- test(policy): an unlisted tool under `enforce` is refused before the VEK is read; `audit` and `off` allow and write one row; elicitation yes keeps the allow, no is `ask-declined`, and a missing answer is `ask-unanswered`; the audit row is compact JSON, mode 0600, and rotates at 1,000,000 bytes.
 - test(credentials): a site password to a foreign host is refused and to its own site and a subdomain is allowed; an API key to a service host is allowed and to a foreign host is refused; a redirect to a foreign host or to loopback is not followed with the secret attached; an echoed secret is scrubbed in raw, base64, urlsafe, URL-encoded, hex, and basic-auth forms; `run_with_credential` redacts base64 and reversed text.
 - test(session): the Secret Service chainer check does not use the machine's keyring. The negative assertion called `keyring.get_keyring()`, which is Secret Service on a desktop and the null backend only when `PYTHON_KEYRING_BACKEND` is set. The test builds its own null backend. The suite also pins that backend in `conftest`, because `_prompt_risk` asks `get_keyring()` and would otherwise open the desktop keyring.
 
 ## Docs
 
+- docs(policy): the tool reference, configuration, features, the usage skill, and a guide say when `audit`, `enforce`, and `off` apply, when the server asks, and that a STOP refusal names the human command. The usage skill no longer says there is never a consent dialog.
 - docs(credentials): the tool text, the credential-injection guide, configuration, and the agent pages say which hosts `use_credential` and `run_with_credential` will use, how a human allows another host in `policy.json`, and that scrubbing is not the boundary.
 - docs(install): install Chromium with the pipx venv's Python. `pipx install` does not put `playwright` on PATH, and the documented `~/.local/pipx/venvs` path is not where current pipx keeps venvs. The command asks `pipx environment --value PIPX_LOCAL_VENVS` and runs `python -m playwright install chromium`.
 - docs(config): per-platform keyring environment, and the public docs no longer link the private skill repo. Linux host config must pass the session bus when `/run/user/<uid>/bus` is not visible; macOS and Windows need `PYTHONPATH=""` only. Headless use does not go through `PSAMVAULT_VEK` or `PSAMVAULT_TOKEN`. A missing Hermes skill is documented as optional.
