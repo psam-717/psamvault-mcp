@@ -56,7 +56,7 @@ Browser login (`browser_login`) — when an AI agent needs to log you into a web
 a real Chromium browser, navigates to the site, and fills in the credentials directly inside that
 browser process. The agent never sees the credentials; it only sees whether the login succeeded.
 
-API credential flow (`use_credential`) — psamvault decrypts the credential locally and sends it only
+API credential flow (`use_credential`) — first `mcp_use` decides whether this tool may use the secret (`audit` records and allows, `enforce` requires `allow_tools` and may ask, `off` does not consult the list). On an allow, psamvault decrypts the credential locally and sends it only
 to that entry's own site (a site password: the registrable domain and its subdomains) or to the API
 key's service hosts, or to a host a human has listed for the entry in `~/.psamvault/policy.json`.
 Anything else is refused, including a redirect off an allowed host. An API key with no known service

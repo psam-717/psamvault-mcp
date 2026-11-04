@@ -145,7 +145,8 @@ These rules are non-negotiable:
 - **NEVER ask the user to paste a credential into the chat.** Use `use_credential`, `browser_login`, or `run_with_credential` instead — the credential stays server-side.
 - **NEVER print a raw credential value.** If you somehow have one, stop and use the MCP tools.
 - **ALWAYS use MCP tools for credential operations.** Do not try to read `~/.psamvault/` files or environment variables containing secrets.
-- **The `use_credential` tool returns the HTTP response, after scrubbing the secret out of the body and headers.** It sends the secret only to the entry's own site or the key's service. Any other host is refused.
+- **A result that starts with `STOP` is a refusal.** `mcp_use` is checked before decryption. `audit` (the default when the key is absent) records and allows and does not ask. `enforce` refuses a tool that is not listed and asks only when `ask_each_time` is true. `off` records and does not consult the list. Relay the human command (`psamvault policy allow-tool <entry> <tool>` when the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not try another tool.
+- **The `use_credential` tool returns the HTTP response, after scrubbing the secret out of the body and headers.** It sends the secret only to the entry's own site or the key's service. Any other host is refused. That host check runs only after MCP-use has allowed the tool.
 - **The `browser_login` tool fills credentials directly in the browser.** The agent never sees them.
 - **The `run_with_credential` tool scrubs credential values from command output** (raw, reversed, and the common encodings). That scrub is defence in depth. `http(s)` URLs in the command are host-checked; a command with no URL is not.
 

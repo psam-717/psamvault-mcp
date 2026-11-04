@@ -218,6 +218,16 @@ def _hop_blocked(url: str, previous: str | None, assess) -> dict | None:
 
 logger = get_logger()
 
+
+async def _require_mcp_use(tool: str, entry: str | None) -> dict | None:
+    """Refuse this use before ``get_vek()`` when policy says so.
+
+    ``None`` means the call may continue. The audit row is already written.
+    """
+    from mcp_server.mcp_gate import before_use
+
+    return await before_use(tool, entry)
+
 # ── Singleton Playwright browser manager ───────────────────────────────────────
 # We keep one Chromium instance alive for the lifetime of the MCP server.
 # If it crashes, the next call restarts it automatically.
@@ -426,6 +436,9 @@ async def browser_login(
     The credential is decrypted locally and typed into the browser fields.
     The credential value is NEVER returned to the caller.
     """
+    blocked = await _require_mcp_use("browser_login", site_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
@@ -529,6 +542,9 @@ async def use_credential(
         extra_headers: Additional headers to include.
         fields:       If set, filter the JSON response to only these keys.
     """
+    blocked = await _require_mcp_use("use_credential", site_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
@@ -903,6 +919,9 @@ async def run_with_credential(
         - ``stderr``: str — stderr with the credential scrubbed
         - ``error``: str — error details if command could not run
     """
+    blocked = await _require_mcp_use("run_with_credential", site_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
@@ -1054,6 +1073,9 @@ async def export_key_to_mcp_config(
         ``skip_verify=true`` (loud acknowledgment that a manual check was
         performed). The result records ``verification: verified|skipped``.
     """
+    blocked = await _require_mcp_use("export_key_to_mcp_config", key_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
@@ -1239,6 +1261,9 @@ async def export_key_to_env_file(
     Write semantics: the variable's line is updated in place when it already exists (idempotent
     re-runs, no duplicate keys), otherwise appended, with a timestamped backup before any change.
     """
+    blocked = await _require_mcp_use("export_key_to_env_file", key_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
@@ -1358,6 +1383,9 @@ async def verify_api_key(
     is NEVER returned. This is the standalone half of the shared verify
     executor also used as the gate inside ``export_key_to_mcp_config``.
     """
+    blocked = await _require_mcp_use("verify_api_key", key_name)
+    if blocked:
+        return blocked
     if not is_logged_in():
         return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 

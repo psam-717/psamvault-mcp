@@ -38,6 +38,7 @@ from mcp_server.session import (
 )
 
 from mcp_server import tools
+from mcp_server.mcp_use import TOOLS as _GATED_TOOLS
 
 from mcp_server.version_check import SKIP_UPDATE_CHECK_ENV, check_for_update
 
@@ -69,7 +70,17 @@ server = Server(
         "this reduces token usage significantly for large API responses.\n\n"
 
 
-        "4. ALWAYS call search_vault_tools first to find the right tool for your task. "
+        "4. Tools that decrypt a secret (use_credential, run_with_credential, browser_login, "
+        "export_key_to_mcp_config, export_key_to_env_file, verify_api_key) are gated by "
+        "mcp_use in ~/.psamvault/policy.json before anything is decrypted. "
+        "audit (the default) records and allows, and does not ask. "
+        "enforce refuses a tool that is not listed, and asks only when ask_each_time is true. "
+        "off records and does not consult the list. "
+        "If the result starts with STOP, stop. Tell the human the command in the error. "
+        "Do not edit policy.json, do not run psamvault, and do not try another tool to get the secret. "
+        "get_version reports the mode and, when mcp_use is absent, the notice that a future release will default to enforce.\n\n"
+
+        "5. ALWAYS call search_vault_tools first to find the right tool for your task. "
         "If you are unsure which sites are stored, call list_vault_sites(). "
         "If you are unsure whether a credential exists, call check_credential_exists(site_name) first.\n\n"
 
@@ -105,6 +116,17 @@ except importlib.metadata.PackageNotFoundError:
 # ── Tool registry used by search_vault_tools ──────────────────────────────────
 # Each entry is a one-line description string.
 # Kept here so it stays in sync with TOOL_DEFINITIONS below.
+# Appended to every tool that decrypts a secret. Discovery tools do not get this.
+_GATED_POLICY = (
+    " MCP-use policy in ~/.psamvault/policy.json is checked before decryption and before the host check. "
+    "mcp_use audit (the default when the key is absent, and the fallback when the value is invalid or the file is missing, broken, or not an object) "
+    "records the use and allows it, and never asks. "
+    "mcp_use enforce refuses this tool unless entries[\"<entry>\"].allow_tools lists it; "
+    "a listed tool is asked in chat only when ask_each_time is true, and a missing or failed answer refuses the use. "
+    "mcp_use off records the use and does not consult the list. "
+    "A refusal starts with STOP. A human grants the tool with `psamvault policy allow-tool <entry> <tool>`. "
+    "Do not edit policy.json, do not run psamvault, and do not retry a refusal."
+)
 _ENTRY_DESCRIPTION = (
     "Discover available psamvault tools. Call this FIRST to find the right tool. "
     "Pass a keyword like 'login', 'api', 'check', or '' for all tools."
@@ -113,8 +135,9 @@ _TOOL_REGISTRY: dict[str, str] = {
     # ── Entry & Orientation ────────────────────────────────────────────
     "search_vault_tools": _ENTRY_DESCRIPTION,
     "get_version": (
-        "Return the installed psamvault-mcp version. "
-        "Use this to verify the version you have."
+        "Return the installed psamvault-mcp version and the mcp_use mode. "
+        "When the key is absent, mcp_use.notice says a future release will default to enforce. "
+        "That notice is only on this result, not on other tool results."
     ),
 
     # ── Site Authentication ────────────────────────────────────────────
@@ -134,6 +157,7 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Open a real Chromium browser and log into a website silently. "
         "Params: site_name (required), login_url, username_selector, "
         "password_selector, submit_selector, timeout_ms (all optional)."
+        + _GATED_POLICY
     ),
 
     # ── API Key Operations ─────────────────────────────────────────────
@@ -148,6 +172,7 @@ _TOOL_REGISTRY: dict[str, str] = {
         "in ~/.psamvault/policy.json). Other hosts, including redirects, are refused. "
         "Params: site_name, target_url (absolute http or https URL), method, inject_as, "
         "fields (optional — pass field names to trim the response, e.g. [\"login\", \"id\"])."
+        + _GATED_POLICY
     ),
     "run_with_credential": (
         "Run a shell command with a credential injected as an env var or stdin. "
@@ -158,6 +183,7 @@ _TOOL_REGISTRY: dict[str, str] = {
         "encodings; that scrub is defence in depth, not a boundary. "
         "Params: site_name (required), command (required), inject_as='env', "
         "env_var_name, extra_env, workdir, timeout=120."
+        + _GATED_POLICY
     ),
     "scan_and_protect": (
         "Scan a project directory for exposed secrets in .env files and protect them. "
@@ -171,18 +197,21 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Params: key_name (required), server_name (required), url or command, "
         "inject_as='bearer_token'|'api_key_header'|'env', replace, dry_run, config_path, "
         "verify_url (probe override), skip_verify (only when no probe is possible)."
+        + _GATED_POLICY
     ),
     "export_key_to_env_file": (
         "Export a vault API key into an agent host's .env file as an environment variable "
         "(default: HERMES_HOME/.env for agent='hermes'; unknown hosts need env_path). "
         "The key value is never returned. Params: key_name (required), env_var_name (required), "
         "agent, env_path, dry_run, verify_url (probe override), skip_verify (only when no probe is possible)."
+        + _GATED_POLICY
     ),
     "verify_api_key": (
         "Verify a vault API key is valid by probing the provider's read-only "
         "endpoint (whoami) with the decrypted key. Params: key_name (required), "
         "verify_url (optional override for providers without a bundled recipe). "
         "Returns success/verification/status — the key value is never returned."
+        + _GATED_POLICY
     ),
 }
 
@@ -196,7 +225,12 @@ TOOL_DEFINITIONS = [
     # ── Version tool — no session needed ────────────────────────────
     Tool(
         name="get_version",
-        description="[🛠 Entry & Orientation] Return the installed psamvault-mcp version. No session or login required.",
+        description=(
+            "[🛠 Entry & Orientation] Return the installed psamvault-mcp version and the mcp_use mode. "
+            "No session or login required. "
+            "mcp_use is audit, enforce, or off. When the key is absent, notice says a future release will default to enforce. "
+            "Show that notice from this result. It is not repeated on other tool results."
+        ),
         inputSchema={
             "type": "object",
             "properties": {},
@@ -303,6 +337,7 @@ TOOL_DEFINITIONS = [
             "When captcha_detected is true, the tool pauses automation; inform the user and tell them to solve the CAPTCHA and click Sign in/Login manually in the browser. "
             "When captcha_screenshot is not null, tell the user a screenshot of the CAPTCHA was saved to that path so they can inspect it. "
             "Only site_name is required. All other parameters are optional."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -390,6 +425,7 @@ TOOL_DEFINITIONS = [
             "TOKEN EFFICIENCY: Use the `fields` parameter to return only the response keys you need. "
             "Example: fields=['login','public_repos'] instead of the full GitHub user object (~40 fields). "
             "Works on both dict responses and lists-of-dicts."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -478,6 +514,7 @@ TOOL_DEFINITIONS = [
             "- pip install (private repo): inject_as='env', env_var_name='PIP_TOKEN'\n\n"
             "Only site_name and command are required. "
             "When inject_as='env', env_var_name is required."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -586,6 +623,7 @@ TOOL_DEFINITIONS = [
             "the export. Use when the agent needs an MCP server whose auth is a vault key "
             "(e.g. Render's hosted MCP) and the config must be provisioned without the key "
             "ever entering chat."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -696,6 +734,7 @@ TOOL_DEFINITIONS = [
             "before any change. The key is auto-verified against the provider first "
             "(verification: verified|skipped|failed); a key that cannot be probed requires "
             "skip_verify=true. Pass env_path to target a host without a verified default location."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -761,6 +800,7 @@ TOOL_DEFINITIONS = [
             "Returns success/verification/status/error_class — the key value is "
             "NEVER returned. Use BEFORE export_key_to_mcp_config or whenever you "
             "need to prove a stored key still works."
+            + _GATED_POLICY
         ),
         inputSchema={
             "type": "object",
@@ -798,6 +838,16 @@ def _version_payload() -> dict:
     pair, and whether a breaking release is pending.
     """
     payload: dict = {"version": _VERSION}
+    try:
+        from mcp_server.policy import mode_status
+
+        payload["mcp_use"] = mode_status()
+    except Exception as exc:  # reporting the mode must not break get_version
+        payload["mcp_use"] = {
+            "mode": "audit",
+            "notice": None,
+            "warnings": [f"{type(exc).__name__}: {exc}"],
+        }
     try:
         from mcp_server import compat
 
@@ -846,28 +896,32 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = _TOOL_REGISTRY
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-    # A missing, locked, or uninitialised keyring is not "please log in".
-    # The probe runs on a worker thread: a Secret Service round trip must not
-    # block the stdio loop, and it must not be the call that opens a prompt.
-    problem = await asyncio.to_thread(vault_session.probe_keyring)
-    if problem:
-        return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
+    # Gated tools decide mcp_use before this session check. A refusal must not
+    # wait on the keyring, and a missing session must not skip the audit row.
+    # The tool repeats the login check after the decision, before get_vek().
+    if name not in _GATED_TOOLS:
+        # A missing, locked, or uninitialised keyring is not "please log in".
+        # The probe runs on a worker thread: a Secret Service round trip must not
+        # block the stdio loop, and it must not be the call that opens a prompt.
+        problem = await asyncio.to_thread(vault_session.probe_keyring)
+        if problem:
+            return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
 
-    logged_in = await asyncio.to_thread(is_logged_in)
-    # is_logged_in can discover a lock the cached successful probe did not see.
-    problem = vault_session.keyring_problem()
-    if problem:
-        return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
+        logged_in = await asyncio.to_thread(is_logged_in)
+        # is_logged_in can discover a lock the cached successful probe did not see.
+        problem = vault_session.keyring_problem()
+        if problem:
+            return [TextContent(type="text", text=json.dumps({"error": problem}, indent=2))]
 
-    if not logged_in:
-        result = {
-            "error": (
-                "psamvault session not found. "
-                "Run  'psamvault login'  in your terminal first, then try again"
-            )
-        }
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    
+        if not logged_in:
+            result = {
+                "error": (
+                    "psamvault session not found. "
+                    "Run  'psamvault login'  in your terminal first, then try again"
+                )
+            }
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
     try:
         if name == "list_vault_sites":
             result = await tools.list_vault_sites()

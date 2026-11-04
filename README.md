@@ -104,6 +104,8 @@ psamvault decrypts the credential locally, sends it only to that site
 (or the key's service), and returns the response with the secret scrubbed out
 ```
 
+Before any of that, `mcp_use` in `~/.psamvault/policy.json` decides whether the tool may use the secret at all. `audit` (the default when the key is absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `entries.<name>.allow_tools`, and asks in chat only when `ask_each_time` is true. `off` records the use and does not consult the list. A refusal starts with `STOP` and names `psamvault policy allow-tool <entry> <tool>` for a human. The check runs before decryption and before the host check. `get_version` reports the mode and, when the key is absent, the notice that a future release will default to enforce. Discovery tools are not gated. See [MCP use policy](docs/guides/mcp-use.md).
+
 A site password goes to the registrable domain of its site name or login URL, and to subdomains of that domain. An API key goes to hosts its service already names (a bundled verify recipe such as `github` → `api.github.com`, or a hostname in the service, the service hint, or the key name), including that registrable domain and its subdomains. Anything else is refused, including a redirect off an allowed host. An API key with no known service host is refused until a human adds the host under `entries["<entry>"].allow_hosts` in `~/.psamvault/policy.json` (mode 0600). There is no MCP parameter that grants a host. `target_url` must be an absolute `http` or `https` URL. Loopback and private addresses stay blocked.
 
 The response scrub (raw value, reversed text, base64, URL-encoding, hex, and the basic-auth blob) is defence in depth. The host check is the boundary.

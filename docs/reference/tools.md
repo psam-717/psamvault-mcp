@@ -34,7 +34,41 @@ Do not hard-code this page into a prompt — ask the server:
   version, newest release, whether the tool surface matches, expected tool count). It needs no
   session or login, so it is also the first call when confirming a host is connected.
 
-Neither touches a credential.
+Neither touches a credential. `get_version` is also where the server reports its MCP-use mode. See
+[Which tools may use a secret](#which-tools-may-use-a-secret).
+
+---
+
+## Which tools may use a secret
+
+`~/.psamvault/policy.json` gates the tools that decrypt a secret. The check runs before `get_vek()`
+and before the destination (`allow_hosts`) check. A refusal never decrypts and never sends the secret.
+The destination check still runs after an allow, because it needs the decrypted service identity.
+
+| `mcp_use` | What a gated tool does |
+|---|---|
+| `audit` (default when the key is absent, and when the value or the file is unusable) | Allowed. One audit row, reason `listed` or `not-listed`. Never asks. |
+| `enforce` | Unlisted is refused, reason `not-listed`, with no ask. Listed is allowed, reason `listed`, and the server asks in chat only when `ask_each_time` is JSON `true`. |
+| `off` | Allowed. Reason `mcp-use-off`. The tool list is not consulted. Never asks. |
+
+Gated tools: `use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`,
+`export_key_to_env_file`, `verify_api_key`.
+
+Not gated, and no audit row: `get_version`, `search_vault_tools`, `list_vault_sites`,
+`check_credential_exists`, `get_username_for_site`, `list_api_keys`, `scan_and_protect`.
+
+`get_version` returns `mcp_use.mode`, `mcp_use.notice`, and `mcp_use.warnings`. `notice` is the
+planned-flip sentence when `mcp_use` is absent, and null when the mode was set explicitly. It is not
+copied onto other tool results.
+
+A refusal starts with `STOP`. For an unlisted tool the human command is
+`psamvault policy allow-tool <entry> <tool>`. An agent stops. It does not edit `policy.json`, run
+`psamvault`, or call another tool to obtain the secret. Yes on an ask keeps the allow. No is
+`ask-declined`. A host with no form elicitation, or a prompt that errors, times out, or is cancelled,
+is `ask-unanswered`. `"audit"` and `"off"` do not ask.
+
+The full file shape, the audit row, and the human commands are in
+[Configuration](./configuration.md#mcp-use-policy).
 
 ---
 
@@ -59,8 +93,17 @@ Neither touches a credential.
 | `expected_tool_count` | The tool count the effective release expects. |
 | `check_command` | The exact command to check the pairing (`psamvault-mcp compat --check`). |
 
+Plus `mcp_use`:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `audit`, `enforce`, or `off`. Absent or invalid is `audit`. |
+| `notice` | The planned-flip sentence when `mcp_use` was not set. `null` when the mode is explicit. |
+| `warnings` | Loader warnings (unknown mode, bad `allow_tools`, a file that is not an object). Empty when there are none. |
+
 If the contract cannot be read, `compatibility` degrades to `{"error": "<type>: <message>"}` — a
-broken contract never breaks `get_version`.
+broken contract never breaks `get_version`. A policy file that cannot be read does not break it
+either: `mcp_use.mode` stays `audit` and `notice` is the absent-key sentence.
 
 **When to use it.** Anytime, with or without a vault session. First call after wiring a host; also how
 an agent self-checks the server/skill pairing without extra tooling.
@@ -167,7 +210,7 @@ returns part of a credential, and it returns **only the username — never the p
 
 ## `browser_login`
 
-**Group:** Site Authentication.
+**Group:** Site Authentication. Gated by [MCP use policy](#which-tools-may-use-a-secret) before the credential is decrypted.
 
 **Purpose**, verbatim: Open a visible browser and securely log into a site using a stored psamvault
 credential. Playwright navigates from the site homepage, finds the sign-in link, and handles the full
@@ -283,7 +326,7 @@ or `{"error": ...}`.
 
 ## `use_credential`
 
-**Group:** API Key Operations.
+**Group:** API Key Operations. Gated by [MCP use policy](#which-tools-may-use-a-secret) before decryption and before the host check.
 
 **Purpose**, verbatim: Make an authenticated HTTP request using a credential stored in psamvault. The
 lookup checks API key entries first, then vault (site password) entries — so you can use both API keys
@@ -352,7 +395,7 @@ above. Scrubbing is defence in depth. A host the entry does not own is the thing
 
 ## `run_with_credential`
 
-**Group:** API Key Operations.
+**Group:** API Key Operations. Gated by [MCP use policy](#which-tools-may-use-a-secret) before decryption and before the host check.
 
 **Purpose**, verbatim: Run a shell command with a credential injected as an environment variable or
 stdin pipe. Use this for a CLI that reads a token from the environment or stdin (twine upload, docker
@@ -463,7 +506,7 @@ placeholders.
 
 ## `export_key_to_mcp_config`
 
-**Group:** API Key Operations.
+**Group:** API Key Operations. Gated by [MCP use policy](#which-tools-may-use-a-secret) before the key is decrypted.
 
 **Purpose**, verbatim: Export a vault API key directly into an agent host's MCP server config (Hermes
 config.yaml → mcp_servers.<server_name>). The key is decrypted locally and written into the config
@@ -514,7 +557,7 @@ paste the key, and never run the host's own `mcp add` CLI — psamvault owns the
 
 ## `export_key_to_env_file`
 
-**Group:** API Key Operations.
+**Group:** API Key Operations. Gated by [MCP use policy](#which-tools-may-use-a-secret) before the key is decrypted.
 
 **Purpose**, verbatim: Export a vault API key into an agent host's .env file as an environment
 variable (default: $HERMES_HOME/.env for agent='hermes'). Use this when an agent TOOL reads its
@@ -557,7 +600,7 @@ rejected on purpose and must be targeted with `env_path`. Restart the host sessi
 
 ## `verify_api_key`
 
-**Group:** API Key Operations.
+**Group:** API Key Operations. Gated by [MCP use policy](#which-tools-may-use-a-secret) before the key is decrypted.
 
 **Purpose**, verbatim: Verify a vault API key is valid by probing the provider's read-only endpoint
 (whoami) with the decrypted key. Provider is resolved from the vault entry's service hint; pass

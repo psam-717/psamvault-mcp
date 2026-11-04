@@ -325,8 +325,8 @@ Tell users they can say things like:
 - **Single-process Playwright**: The browser lives in-process with the MCP server. No subprocess daemon chain. If the browser crashes, the next call auto-restarts it.
 - **Stdio transport (default)**: Hermes manages the process lifecycle. No manual server start needed.
 - **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
-- **No consent dialog**: The v0.4.0+ architecture removed the consent dialog requirement. Credentials are used on demand.
-- **Host binding**: a stored secret goes only to the entry's own site, the API key's service hosts, or `allow_hosts` in `~/.psamvault/policy.json`. Redirects are checked one hop at a time.
+- **MCP use, then host binding.** Tools that decrypt a secret check `mcp_use` in `~/.psamvault/policy.json` before decryption. `audit` (the default when the key is absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `allow_tools`, and asks in chat only when `ask_each_time` is true; a missing answer refuses the use. `off` records the use and does not consult the list. A result that starts with `STOP` is final for that call: relay it, including `psamvault policy allow-tool <entry> <tool>` when the tool is not listed, and do not retry or edit `policy.json`. Discovery tools are not gated. There is no separate consent dialog on `audit` or `off`. The in-chat ask exists only for an allowed use under `enforce` when `ask_each_time` is true.
+- **Host binding**: after that check allows the use, a stored secret goes only to the entry's own site, the API key's service hosts, or `allow_hosts` in `~/.psamvault/policy.json`. Redirects are checked one hop at a time.
 - **Output scrubbing**: `use_credential` responses and `run_with_credential` stdout/stderr are scrubbed of the secret in its raw form, reversed text, and common encodings. That is defence in depth. The host check is the boundary.
 
 <!-- /section:usage/architecture -->
