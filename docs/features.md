@@ -165,13 +165,34 @@ dotenv file — for example Hermes' web tools read `TAVILY_API_KEY` from `HERMES
 
 See [`export_key_to_env_file`](./reference/tools.md#export_key_to_env_file).
 
+## MCP use policy
+
+**What it is.** Before a tool decrypts a secret, the server reads `mcp_use` and
+`entries.<name>.allow_tools` from `~/.psamvault/policy.json`. `audit` (the default when the key is
+absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not listed,
+and asks in chat only when that entry's `ask_each_time` is true and the use would otherwise be
+allowed. `off` records the use and does not consult the list. A refusal happens before the VEK is
+read and before the destination check. `get_version` reports the mode, and the planned-flip notice
+when the key is absent. Other tool results do not carry that notice.
+
+**When it applies.** On `use_credential`, `run_with_credential`, `browser_login`,
+`export_key_to_mcp_config`, `export_key_to_env_file`, and `verify_api_key`. Discovery tools,
+including `get_username_for_site` and `scan_and_protect`, are not gated and write no audit row.
+
+A human changes it with `psamvault policy allow-tool`, `psamvault policy ask-each-time`, and
+`psamvault policy mcp-use`. This server does not write the file.
+
+Guide: [MCP use policy](./guides/mcp-use.md). Reference:
+[Configuration](./reference/configuration.md#mcp-use-policy).
+
 ## Version and compatibility reporting
 
 ### `get_version`
 
 **What it is.** Returns the installed psamvault-mcp version plus a `compatibility` block: the paired
 skill version, effective and newest release, whether the tool surface matches the newest release,
-whether a breaking release is pending, the expected tool count, and the exact check command. It needs
+whether a breaking release is pending, the expected tool count, and the exact check command. It also
+returns `mcp_use`: the mode, load warnings, and `notice` when the key is absent. It needs
 no session or login. If the contract cannot be read, the block degrades to an `error` field rather
 than failing the call.
 

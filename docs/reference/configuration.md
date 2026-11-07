@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: MCP host config, PYTHONPATH, vault endpoints and env vars, the policy.json destination allow-list, vault state locations, and the version-lockstep contract.
+description: MCP host config, PYTHONPATH, vault endpoints and env vars, the policy.json destination allow-list and MCP-use policy, the audit trail, vault state locations, and the version-lockstep contract.
 order: 70
 ---
 
@@ -105,6 +105,14 @@ missing, locked, or has no default collection yet. A vault tool returns
 so unlocking the keyring takes effect without restarting the host. The server never falls back
 to a file or to plaintext.
 
+That `✗` line is the recovery when a tool is allowed to use a secret and the keyring then
+cannot be read. It applies to `use_credential`, `run_with_credential`, `browser_login`,
+`export_key_to_mcp_config`, `export_key_to_env_file`, and `verify_api_key`, whether the call
+comes through the MCP dispatcher or the tool function. Unlock the keyring and retry. Do not
+treat that line as "run `psamvault login`" unless the message itself says the session is
+missing. A policy refusal is different: it is returned before the keyring is read, so a locked
+keyring does not change a `STOP` result and the keyring is not probed on that path.
+
 Which variables matter was checked against the libraries this package installs (keyring 25's Secret
 Service backend → secretstorage → jeepney 0.9) and against the stdio clients that strip the
 environment (the Python MCP SDK 1.30 `get_default_environment`, and the same allow-list in the
@@ -205,7 +213,62 @@ What is allowed without this file:
 - An **API key** may go to hosts its service already names: a bundled verify recipe (`github`, `render`, `openrouter`, `tavily`) matched from the service, the service hint, or the key name, or a hostname written in those fields, including that host's registrable domain and subdomains.
 - An API key with no recipe and no hostname has **no known service host**. Every target is refused until a human adds one here. The error says "no known service host".
 
-A missing file allows nothing extra. A file that is not valid JSON allows nothing extra, and the refusal says the file was not applied. The psamvault CLI (0.7.3) reads `reveal`, `allow_entries`, `approval_ttl_seconds`, and `audit`, ignores unknown keys, and does not rewrite the file on load — so a hand-added `entries` object survives a CLI read. The CLI does not yet validate `entries.<name>.allow_hosts`, and there is no `psamvault policy allow-host` command. Both are follow-up work in psamvault-cli. `allow_entries` in that file is the reveal allow-list, not a list of destination hosts.
+A missing file allows nothing extra. A file that is not valid JSON allows nothing extra, and the refusal says the file was not applied. `allow_entries` in that file is the reveal allow-list, not a list of destination hosts.
+
+A human edits the host list with `psamvault policy allow-host`, `psamvault policy remove-host`, and `psamvault policy hosts`. Those commands are human-only. This server still only reads the file. There is no MCP parameter that grants a host.
+
+## MCP use policy
+
+The same file says which MCP tools may use a stored secret. This server reads it and does not write it. The decision matches psamvault-cli `policy.mcp_plan`: `mcp_use.decide`, `mcp_use.should_ask`, and `mcp_use.finalize`.
+
+```json
+{
+  "mcp_use": "audit",
+  "entries": {
+    "ledger-key": {
+      "allow_hosts": ["api.ledger.example"],
+      "allow_tools": ["use_credential", "run_with_credential"],
+      "ask_each_time": false
+    }
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `mcp_use` | `"audit"`, `"enforce"`, or `"off"`. Absent, JSON `null`, or any other value is `"audit"`. A missing file, a file that cannot be read (including one that is not UTF-8), or JSON that is not an object is `"audit"` with no entries and a warning. A bad value is not treated as `"enforce"`. |
+| `entries.<name>.allow_tools` | Tool names that may use that entry once `mcp_use` is `"enforce"`. Compared after trim and casefold. A token that is not a tool name (`^[a-z][a-z0-9_]*$`) is ignored. A name that is a tool name but does not decrypt a secret is kept, so a hand-edited future name still matches. |
+| `entries.<name>.ask_each_time` | JSON `true` only. Anything else, including a missing key, is false. |
+
+Entry lookup is the same rule as `allow_hosts`: the tool argument and the leaf after the last `/`, matched casefolded against trimmed keys. Several matches union their tool lists, and `ask_each_time` is true when any match is JSON `true`.
+
+| `mcp_use` | Unlisted tool | Listed tool | `ask_each_time` |
+|---|---|---|---|
+| `"audit"` (this release's default when the key is absent) | Allowed. Reason `not-listed`. Never asks. | Allowed. Reason `listed`. Never asks. | Stored, not consulted. |
+| `"enforce"` | Refused. Reason `not-listed`. No ask. | Allowed. Reason `listed`. | Asked only when the use would be allowed and the flag is true. |
+| `"off"` | Allowed. Reason `mcp-use-off`. The list is not consulted. Never asks. | Same. | Not consulted. |
+
+When the key is absent, `get_version` includes this `notice` and other tool results do not. A missing file counts. So does a file that raises while it is being read, including a UTF-16 file saved by an editor. The mode, the notice, and the audit row then agree on `audit`. `get_version` does not report `audit` while a tool denies the same file as `enforce`:
+
+> mcp_use is not set, so it defaults to audit; a future release will default to enforce; run `psamvault policy mcp-use audit` to keep audit explicitly, or `enforce` to opt in now.
+
+An explicit `"audit"`, `"enforce"`, or `"off"` sets `notice` to null. An unknown value is `"audit"` with a warning and no notice.
+
+Tools that decrypt a secret are gated: `use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`, `export_key_to_env_file`, `verify_api_key`. Discovery tools are not gated and write no MCP-use row: `get_version`, `search_vault_tools`, `list_vault_sites`, `check_credential_exists`, `get_username_for_site`, `list_api_keys`, `scan_and_protect`.
+
+The check runs at the start of the gated tool, before `get_vek()` and before the destination check. The destination check still needs the decrypted service identity, so it stays after an allow. A refusal never reads the VEK and never sends the secret.
+
+Under `enforce` with `ask_each_time` true, the server asks with MCP elicitation (`session.elicit_form` in the installed MCP SDK, a boolean `allow` field, message `Allow <tool> to use <entry>?`). Yes keeps the allow. No is deny, reason `ask-declined`. No elicitation capability, a URL-only capability, an error, a timeout (300 seconds), or cancel is deny, reason `ask-unanswered`. `"audit"` and `"off"` do not ask, even when the flag is true. A denial is not asked back into an allow.
+
+A refusal starts with `STOP` and tells the human the command. For an unlisted tool that command is `psamvault policy allow-tool <entry> <tool>`. The agent does not run it, does not edit `policy.json`, and does not switch tools to obtain the secret. A declined or unanswered ask does not offer another command that would let the same call through.
+
+Human commands, all of them terminal-only when they write: `psamvault policy allow-tool`, `psamvault policy remove-tool`, `psamvault policy ask-each-time <entry> on|off`, `psamvault policy mcp-use [audit|enforce|off]`, `psamvault policy tools`. Granting a tool does not set `mcp_use`.
+
+## Audit trail
+
+Every gated call appends one row to `~/.psamvault/audit.jsonl` before decryption, whether the decision was allow or deny. Discovery calls do not. A write failure does not fail the tool.
+
+The row is one compact JSON object per line (no space after `:` or `,`), UTF-8, file mode `0600`, directory mode `0700`. The directory mode is applied when the filesystem accepts `chmod`. A failure to change the directory mode does not drop the row and does not fail the tool. The file mode is applied after the append, and a failure of that `chmod` leaves the row in place. At 1,000,000 bytes the file is renamed to `audit.jsonl.1` (an existing `.1` is replaced). `command` is `mcp <tool>`, `caller` is `mcp`, `policy` is null, `signals` is `[]`, `tty` is false, and `reason` is one of `listed`, `not-listed`, `mcp-use-off`, `ask-declined`, `ask-unanswered`. `ask` is true only when an `elicitation/create` request was sent. It is false when the client has no form elicitation or there is no session to send on, under `audit` and `off`, and when `enforce` refused the tool before a prompt. A prompt that was sent and then declined, cancelled, timed out, or answered with an empty form stays `ask` true. The decision is still `ask-unanswered` when no usable yes arrived, including when nothing was sent. The CLI's `McpPlan.ask` is the earlier flag, "should a prompt be attempted". This row records whether that attempt reached the client. The row has no field for a secret.
 
 ## Where vault state lives
 
@@ -218,7 +281,8 @@ the server reads it:
 | `~/.psamvault/session.json` | A **presence marker** only. A live session is confirmed by the keychain entry, not this file: the file holds `{}` after migration, and a mere file creation by another process cannot fake a session because the keychain entry must also exist. |
 | OS keychain, service name `psamvault` | Every sensitive session value: `config.pepper`, `session.access_token`, `session.refresh_token`, `session.kdf_salt`, `session.vek`, `session.encrypted_vek`, `session.vek_iv`. On macOS Keychain, Windows Credential Manager, or Linux Secret Service. |
 | The psamvault backend | Encrypted vault entries and API key entries (encrypted blobs + IVs). The server decrypts them locally with the VEK; the plaintext never goes back to the backend. |
-| `~/.psamvault/policy.json` | CLI policy file. This server reads `entries.<name>.allow_hosts` to decide which extra hosts may receive a stored secret. It does not write the file. See [Destination allow list](#destination-allow-list). |
+| `~/.psamvault/policy.json` | CLI policy file. This server reads `entries.<name>.allow_hosts` for extra destinations and `mcp_use` / `entries.<name>.allow_tools` / `ask_each_time` for which tools may use a secret. It does not write the file. See [Destination allow list](#destination-allow-list) and [MCP use policy](#mcp-use-policy). |
+| `~/.psamvault/audit.jsonl` | One JSONL row per gated MCP use, allowed or denied, plus the CLI's own reveal and policy rows. Mode `0600`, rotated to `audit.jsonl.1` at 1,000,000 bytes. Never contains a secret. See [Audit trail](#audit-trail). |
 
 The VEK is the direct AES-256 key used to decrypt every vault entry. It is stored in the keychain
 after being decrypted locally at login time (login_password → HMAC → PBKDF2 → AES-GCM-decrypt → VEK).

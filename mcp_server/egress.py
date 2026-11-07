@@ -30,9 +30,10 @@ host. A missing file allows nothing extra. A malformed file allows nothing
 extra and the refusal says so. ``allow_hosts`` does not override the SSRF
 block; callers check that first.
 
-The CLI's ``policy.py`` does not parse ``entries`` yet. A human edits the JSON
-directly. Teaching the CLI to validate the key, and a terminal command that
-writes it, is follow-up work in psamvault-cli.
+The psamvault CLI writes ``allow_hosts`` with ``psamvault policy allow-host``.
+This module only reads the file. Tool-use policy (``mcp_use``, ``allow_tools``,
+``ask_each_time``) is a separate read of the same file in ``mcp_server.policy``:
+a broken file allows no extra host here, and is ``mcp_use`` ``audit`` there.
 """
 
 from __future__ import annotations
