@@ -47,7 +47,9 @@ def load(path: Path | None = None) -> Policy:
         if not target.exists():
             return loaded
         raw = target.read_text(encoding="utf-8")
-    except OSError as exc:
+    except Exception as exc:
+        # Same as the CLI: a file that cannot be read, including one that is
+        # not UTF-8, is the implicit audit default. It is not enforce.
         loaded.warnings.append(f"could not read {target}: {exc}")
         return loaded
 
