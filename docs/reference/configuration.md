@@ -105,6 +105,14 @@ missing, locked, or has no default collection yet. A vault tool returns
 so unlocking the keyring takes effect without restarting the host. The server never falls back
 to a file or to plaintext.
 
+That `✗` line is the recovery when a tool is allowed to use a secret and the keyring then
+cannot be read. It applies to `use_credential`, `run_with_credential`, `browser_login`,
+`export_key_to_mcp_config`, `export_key_to_env_file`, and `verify_api_key`, whether the call
+comes through the MCP dispatcher or the tool function. Unlock the keyring and retry. Do not
+treat that line as "run `psamvault login`" unless the message itself says the session is
+missing. A policy refusal is different: it is returned before the keyring is read, so a locked
+keyring does not change a `STOP` result and the keyring is not probed on that path.
+
 Which variables matter was checked against the libraries this package installs (keyring 25's Secret
 Service backend → secretstorage → jeepney 0.9) and against the stdio clients that strip the
 environment (the Python MCP SDK 1.30 `get_default_environment`, and the same allow-list in the
@@ -228,7 +236,7 @@ The same file says which MCP tools may use a stored secret. This server reads it
 
 | Key | Meaning |
 |---|---|
-| `mcp_use` | `"audit"`, `"enforce"`, or `"off"`. Absent, JSON `null`, or any other value is `"audit"`. A missing, unreadable, or non-object file is `"audit"` with no entries. A bad value is not treated as `"enforce"`. |
+| `mcp_use` | `"audit"`, `"enforce"`, or `"off"`. Absent, JSON `null`, or any other value is `"audit"`. A missing file, a file that cannot be read (including one that is not UTF-8), or JSON that is not an object is `"audit"` with no entries and a warning. A bad value is not treated as `"enforce"`. |
 | `entries.<name>.allow_tools` | Tool names that may use that entry once `mcp_use` is `"enforce"`. Compared after trim and casefold. A token that is not a tool name (`^[a-z][a-z0-9_]*$`) is ignored. A name that is a tool name but does not decrypt a secret is kept, so a hand-edited future name still matches. |
 | `entries.<name>.ask_each_time` | JSON `true` only. Anything else, including a missing key, is false. |
 
@@ -240,7 +248,7 @@ Entry lookup is the same rule as `allow_hosts`: the tool argument and the leaf a
 | `"enforce"` | Refused. Reason `not-listed`. No ask. | Allowed. Reason `listed`. | Asked only when the use would be allowed and the flag is true. |
 | `"off"` | Allowed. Reason `mcp-use-off`. The list is not consulted. Never asks. | Same. | Not consulted. |
 
-When the key is absent (a missing file counts), `get_version` includes this `notice` and other tool results do not:
+When the key is absent, `get_version` includes this `notice` and other tool results do not. A missing file counts. So does a file that raises while it is being read, including a UTF-16 file saved by an editor. The mode, the notice, and the audit row then agree on `audit`. `get_version` does not report `audit` while a tool denies the same file as `enforce`:
 
 > mcp_use is not set, so it defaults to audit; a future release will default to enforce; run `psamvault policy mcp-use audit` to keep audit explicitly, or `enforce` to opt in now.
 
@@ -260,7 +268,7 @@ Human commands, all of them terminal-only when they write: `psamvault policy all
 
 Every gated call appends one row to `~/.psamvault/audit.jsonl` before decryption, whether the decision was allow or deny. Discovery calls do not. A write failure does not fail the tool.
 
-The row is one compact JSON object per line (no space after `:` or `,`), UTF-8, file mode `0600`, directory mode `0700`. At 1,000,000 bytes the file is renamed to `audit.jsonl.1` (an existing `.1` is replaced). `command` is `mcp <tool>`, `caller` is `mcp`, `policy` is null, `signals` is `[]`, `tty` is false, and `reason` is one of `listed`, `not-listed`, `mcp-use-off`, `ask-declined`, `ask-unanswered`. `ask` is true only when an in-chat prompt was part of the decision. The row has no field for a secret.
+The row is one compact JSON object per line (no space after `:` or `,`), UTF-8, file mode `0600`, directory mode `0700`. The directory mode is applied when the filesystem accepts `chmod`. A failure to change the directory mode does not drop the row and does not fail the tool. The file mode is applied after the append, and a failure of that `chmod` leaves the row in place. At 1,000,000 bytes the file is renamed to `audit.jsonl.1` (an existing `.1` is replaced). `command` is `mcp <tool>`, `caller` is `mcp`, `policy` is null, `signals` is `[]`, `tty` is false, and `reason` is one of `listed`, `not-listed`, `mcp-use-off`, `ask-declined`, `ask-unanswered`. `ask` is true only when an in-chat prompt was part of the decision. The row has no field for a secret.
 
 ## Where vault state lives
 
