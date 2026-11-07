@@ -58,8 +58,14 @@ Not gated, and no audit row: `get_version`, `search_vault_tools`, `list_vault_si
 `check_credential_exists`, `get_username_for_site`, `list_api_keys`, `scan_and_protect`.
 
 `get_version` returns `mcp_use.mode`, `mcp_use.notice`, and `mcp_use.warnings`. `notice` is the
-planned-flip sentence when `mcp_use` is absent, and null when the mode was set explicitly. It is not
+planned-flip sentence when `mcp_use` is absent, and null when the mode was set explicitly. A file
+that cannot be read as UTF-8 counts as absent: the mode is `audit`, the notice is present, and a
+warning names the read error. The same call's audit row uses that mode. It is not
 copied onto other tool results.
+
+A refusal is decided before the OS keyring is read. After an allow, a locked or unreachable
+keyring returns `✗ <what failed> — <what to do next>` from the tool and from the dispatcher.
+That is the moment to unlock the keyring and retry. It is not the "not logged in" sentence.
 
 A refusal starts with `STOP`. For an unlisted tool the human command is
 `psamvault policy allow-tool <entry> <tool>`. An agent stops. It does not edit `policy.json`, run
