@@ -71,7 +71,9 @@ A refusal starts with `STOP`. For an unlisted tool the human command is
 `psamvault policy allow-tool <entry> <tool>`. An agent stops. It does not edit `policy.json`, run
 `psamvault`, or call another tool to obtain the secret. Yes on an ask keeps the allow. No is
 `ask-declined`. A host with no form elicitation, or a prompt that errors, times out, or is cancelled,
-is `ask-unanswered`. `"audit"` and `"off"` do not ask.
+is `ask-unanswered`. The audit field `ask` is true only when that form request was
+sent. A client that cannot be prompted, and a server with no session to send on,
+still deny with `ask-unanswered` and record `ask` false. `"audit"` and `"off"` do not ask.
 
 The full file shape, the audit row, and the human commands are in
 [Configuration](./configuration.md#mcp-use-policy).
