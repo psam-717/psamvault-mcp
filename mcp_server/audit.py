@@ -83,10 +83,19 @@ def record_mcp_use(
     }
     try:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        return
+    try:
         os.chmod(target.parent, 0o700)
+    except OSError:
+        pass
+    try:
         _rotate(target)
         with open(target, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError:
+        return
+    try:
         os.chmod(target, 0o600)
     except OSError:
         pass
