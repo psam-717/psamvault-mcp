@@ -119,12 +119,15 @@ except importlib.metadata.PackageNotFoundError:
 # Appended to every tool that decrypts a secret. Discovery tools do not get this.
 _GATED_POLICY = (
     " MCP-use policy in ~/.psamvault/policy.json is checked before decryption and before the host check. "
-    "mcp_use audit (the default when the key is absent, and the fallback when the value is invalid or the file is missing, broken, or not an object) "
+    "mcp_use audit (the default when the key is absent, and the fallback when the value is invalid or the file is missing, unreadable, not UTF-8, or not an object) "
     "records the use and allows it, and never asks. "
     "mcp_use enforce refuses this tool unless entries[\"<entry>\"].allow_tools lists it; "
     "a listed tool is asked in chat only when ask_each_time is true, and a missing or failed answer refuses the use. "
     "mcp_use off records the use and does not consult the list. "
-    "A refusal starts with STOP. A human grants the tool with `psamvault policy allow-tool <entry> <tool>`. "
+    "A refusal starts with STOP and is returned before the OS keyring is read. "
+    "After an allow, a locked or unreachable keyring returns the ✗ keyring message: unlock it and retry. "
+    "That message is not a missing login. "
+    "A human grants the tool with `psamvault policy allow-tool <entry> <tool>`. "
     "Do not edit policy.json, do not run psamvault, and do not retry a refusal."
 )
 _ENTRY_DESCRIPTION = (
