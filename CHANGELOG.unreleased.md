@@ -20,6 +20,7 @@
 
 ## Fixed
 
+- fix(policy): the audit `ask` field is true only when an elicitation request was sent. A client that cannot show a form, and a server with no session to send on, still deny as `ask-unanswered` and record `ask` false. A prompt that was sent and then declined, cancelled, timed out, or answered with an empty form stays `ask` true.
 - fix(policy): a policy file that cannot be read as UTF-8 is implicit `audit`, with a warning and the absent-key notice on `get_version`. The tool result and the audit row use that same mode. The file is not treated as `enforce`.
 - fix(tools): after `mcp_use` allows a call, a locked or unreachable keyring returns the `✗` unlock message instead of saying the user is not logged in. A refusal is still returned before the keyring is read.
 - fix(audit): a failure to `chmod` the audit directory does not drop the row. The file is still mode `0600` when that `chmod` succeeds, and a write failure still does not fail the tool.
@@ -34,6 +35,7 @@
 
 ## Tests
 
+- test(policy): a missing session records `ask` false for `ask-unanswered`; a sent timeout, cancel, or decline records `ask` true; a stdio client with no elicitation capability receives no `elicitation/create` and records `ask` false; a yes over stdio allows the call and stops at the missing-session login sentence.
 - test(policy): a UTF-16 policy file agrees with `get_version` and the audit row on `audit`; a valid UTF-8 `enforce` file still denies before the VEK is read and before the keyring is read; a locked keyring on all six gated tools, including the dispatcher, returns the unlock message and does not call `get_vek`; a directory `chmod` error still appends one compact row at mode `0600`.
 - test(policy): an unlisted tool under `enforce` is refused before the VEK is read; `audit` and `off` allow and write one row; elicitation yes keeps the allow, no is `ask-declined`, and a missing answer is `ask-unanswered`; the audit row is compact JSON, mode 0600, and rotates at 1,000,000 bytes.
 - test(credentials): a site password to a foreign host is refused and to its own site and a subdomain is allowed; an API key to a service host is allowed and to a foreign host is refused; a redirect to a foreign host or to loopback is not followed with the secret attached; an echoed secret is scrubbed in raw, base64, urlsafe, URL-encoded, hex, and basic-auth forms; `run_with_credential` redacts base64 and reversed text.
@@ -41,6 +43,7 @@
 
 ## Docs
 
+- docs(policy): configuration and the tool reference say the audit `ask` field records whether the form request was sent. It is not the earlier "should a prompt be attempted" flag.
 - docs(policy): configuration, the tool reference, the MCP-use guide, and the install troubleshooting page say when an unreadable policy file is `audit` and when a locked keyring is the unlock message rather than a missing login.
 - docs(policy): the tool reference, configuration, features, the usage skill, and a guide say when `audit`, `enforce`, and `off` apply, when the server asks, and that a STOP refusal names the human command. The usage skill no longer says there is never a consent dialog.
 - docs(credentials): the tool text, the credential-injection guide, configuration, and the agent pages say which hosts `use_credential` and `run_with_credential` will use, how a human allows another host in `policy.json`, and that scrubbing is not the boundary.
