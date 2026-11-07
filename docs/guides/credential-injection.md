@@ -11,6 +11,11 @@ without ever **receiving** one. Two tools do it — `run_with_credential` for CL
 `use_credential` for HTTP — plus `get_username_for_site` for the narrow case where only the username
 is needed.
 
+`use_credential` and `run_with_credential` are gated by `mcp_use` before decryption and before the
+host check on this page. `audit` (the default) records and allows. `enforce` requires the tool in
+`allow_tools` and asks only when `ask_each_time` is true. `off` does not consult the list. A `STOP`
+result is the end of the call. See [MCP use policy](mcp-use.md). `get_username_for_site` is not gated.
+
 ## What the agent must never ask the user for
 
 There is no tool that returns a secret value, and no supported workflow that produces one. In

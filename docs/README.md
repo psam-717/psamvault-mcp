@@ -21,12 +21,13 @@ New here? Read [Overview](overview.md), then [Installation](installation.md).
 ## Guides
 
 - [Credential injection](guides/credential-injection.md) — how an agent runs a CLI command or makes an HTTP request with a credential it never receives: which hosts `use_credential` and `run_with_credential` will send it to, what is refused, env vs stdin, response scrubbing, and the real failure modes.
+- [MCP use policy](guides/mcp-use.md) — when `mcp_use` is `audit`, `enforce`, or `off`, which tools may use a secret, when the server asks, and the human command a refusal names.
 - [Browser login](guides/browser-login.md) — `browser_login`: the visible-browser model, when to use it instead of injecting, and its limits.
 
 ## Reference
 
 - [Tool reference](reference/tools.md) — every tool the server registers, each with purpose, key parameters, what it returns, and when to use it.
-- [Configuration](reference/configuration.md) — MCP host config entries, `PYTHONPATH=""` and why, vault endpoints and the environment variables the server reads, the `policy.json` destination allow-list, where vault state lives, and the version-lockstep contract.
+- [Configuration](reference/configuration.md) — MCP host config entries, `PYTHONPATH=""` and why, vault endpoints and the environment variables the server reads, the `policy.json` destination allow-list and MCP-use policy, the audit trail, where vault state lives, and the version-lockstep contract.
 
 ## Troubleshooting
 

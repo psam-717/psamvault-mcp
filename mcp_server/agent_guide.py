@@ -379,9 +379,16 @@ or name matches a bundled verify recipe or already contains the hostname.
 #### ❌ On failure (error in response)
 - Check the `error` message and relay it to the user.
 - If the credential wasn't found, suggest adding it via `psamvault add`.
+- If the error starts with `STOP`, or names `allow_tools` or `mcp_use`, stop.
+  Tell the human the command in the error. For a tool that is not listed that
+  command is `psamvault policy allow-tool <entry> <tool>`. Do not run it, do
+  not edit `policy.json`, and do not call another tool to obtain the secret.
+  `audit` (the default) records and allows and does not ask. `enforce` refuses
+  an unlisted tool and asks only when `ask_each_time` is true. `off` does not
+  consult the list. `get_version` reports the mode.
 - If the error names `policy.json` or `allow_hosts`, stop. A human edits
-  `~/.psamvault/policy.json`. Do not write that file, and do not point the
-  secret at a different host.
+  `~/.psamvault/policy.json` or runs `psamvault policy allow-host`. Do not
+  write that file, and do not point the secret at a different host.
 - If the target URL returned an error, report the status code.
 
 ## Examples

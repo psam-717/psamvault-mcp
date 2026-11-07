@@ -21,6 +21,17 @@ This includes trigger phrases like "log into", "log in to", "sign into",
 "sign in to", "sign on to", "authenticate to", "access my account on",
 "enter my password for", "fill in credentials for", or "login to".
 
+### STOP on an MCP-use refusal
+`use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`,
+`export_key_to_env_file`, and `verify_api_key` check `mcp_use` before decryption.
+`audit` (the default when the key is absent) records and allows, and does not ask.
+`enforce` refuses a tool that is not listed, and asks only when `ask_each_time` is true.
+`off` records and does not consult the list. If the result starts with `STOP`, stop.
+Tell the human the command it names (`psamvault policy allow-tool <entry> <tool>` when
+the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not
+try another tool to get the secret. `get_version` reports the mode. Discovery tools are
+not gated.
+
 ### Rule 3: use_credential for API requests
 Use `use_credential` for an authenticated HTTP request to that entry's own site
 or the API key's service. It looks up API key entries first, then falls back to

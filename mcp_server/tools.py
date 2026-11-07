@@ -55,6 +55,8 @@ from mcp_server.session import (
     get_access_token,
     get_vek,
     is_logged_in,
+    keyring_problem,
+    probe_keyring,
 )
 
 # Private / loopback IP blocks blocked as SSRF protection
@@ -217,6 +219,36 @@ def _hop_blocked(url: str, previous: str | None, assess) -> dict | None:
 
 
 logger = get_logger()
+
+
+def _session_block() -> dict | None:
+    """None when a session can be used.
+
+    Called only after MCP-use has allowed the tool, so a refusal does not read
+    the keyring. ``probe_keyring`` refreshes the failure: a lock recorded on an
+    earlier call is not reused once the keyring answers again. A locked or
+    unreachable keyring is that ``✗`` message. A missing session is the login
+    sentence.
+    """
+    problem = probe_keyring()
+    if problem:
+        return {"error": problem}
+    if is_logged_in():
+        return None
+    problem = keyring_problem()
+    if problem:
+        return {"error": problem}
+    return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+
+
+async def _require_mcp_use(tool: str, entry: str | None) -> dict | None:
+    """Refuse this use before ``get_vek()`` when policy says so.
+
+    ``None`` means the call may continue. The audit row is already written.
+    """
+    from mcp_server.mcp_gate import before_use
+
+    return await before_use(tool, entry)
 
 # ── Singleton Playwright browser manager ───────────────────────────────────────
 # We keep one Chromium instance alive for the lifetime of the MCP server.
@@ -426,8 +458,12 @@ async def browser_login(
     The credential is decrypted locally and typed into the browser fields.
     The credential value is NEVER returned to the caller.
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("browser_login", site_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     # Reject non-http(s) schemes
     if login_url:
@@ -529,8 +565,12 @@ async def use_credential(
         extra_headers: Additional headers to include.
         fields:       If set, filter the JSON response to only these keys.
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("use_credential", site_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     # Validate method
     method = method.upper()
@@ -903,8 +943,12 @@ async def run_with_credential(
         - ``stderr``: str — stderr with the credential scrubbed
         - ``error``: str — error details if command could not run
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("run_with_credential", site_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
@@ -1054,8 +1098,12 @@ async def export_key_to_mcp_config(
         ``skip_verify=true`` (loud acknowledgment that a manual check was
         performed). The result records ``verification: verified|skipped``.
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("export_key_to_mcp_config", key_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     if agent != "hermes":
         return {"error": f"Unsupported agent '{agent}'. Supported agents: hermes"}
@@ -1239,8 +1287,12 @@ async def export_key_to_env_file(
     Write semantics: the variable's line is updated in place when it already exists (idempotent
     re-runs, no duplicate keys), otherwise appended, with a timestamped backup before any change.
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("export_key_to_env_file", key_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
@@ -1358,8 +1410,12 @@ async def verify_api_key(
     is NEVER returned. This is the standalone half of the shared verify
     executor also used as the gate inside ``export_key_to_mcp_config``.
     """
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    blocked = await _require_mcp_use("verify_api_key", key_name)
+    if blocked:
+        return blocked
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
