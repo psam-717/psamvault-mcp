@@ -3,8 +3,10 @@
 Order, for one call of a tool that decrypts a secret:
 
 1. Read ``policy.json`` and compute the plan (no keychain, no network).
-2. When the plan says to ask, elicit. A missing capability, error, timeout
-   or cancel is an unanswered prompt.
+2. When the plan says to ask, elicit. Nothing is sent when the client has
+   no form elicitation or there is no session. A sent prompt that errors,
+   times out, or is cancelled is still unanswered, and the audit ``ask``
+   bit records that the request was sent.
 3. Append one audit row. A write failure is ignored.
 4. Return a refusal, or ``None`` so the tool may continue.
 
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from dataclasses import dataclass
 from typing import Any
 
 from mcp_server import audit, mcp_use, policy
@@ -95,19 +98,35 @@ def _current_session() -> Any:
         return None
 
 
-async def elicit(tool: str, entry: str) -> bool | None:
-    """Ask the human. ``None`` when the host cannot answer or does not.
+@dataclass(frozen=True)
+class ElicitOutcome:
+    """Whether ``elicitation/create`` was sent, and the human's answer.
+
+    ``sent`` is false when there is no session or the client cannot take a
+    form, so nothing is written to the wire. It is true once ``elicit_form``
+    (or ``elicit``) is invoked: that method sends the request and then waits.
+    A decline, cancel, empty accept, timeout, or error after that send stays
+    ``sent`` true. ``accepted`` is true, false, or None (no usable answer).
+    """
+
+    sent: bool
+    accepted: bool | None
+
+
+async def elicit(tool: str, entry: str) -> ElicitOutcome:
+    """Ask the human.
 
     Uses ``session.elicit_form`` (mcp 1.30). ``session.elicit`` is the same
-    call on a build that has not renamed it. There is no dependency bump
-    beyond what a current install already resolves: ``mcp>=1.30.0,<2``.
+    call on a build that has not renamed it. The dependency floor is
+    ``mcp>=1.30.0,<2``. A missing session or a client without form elicitation
+    returns ``sent=False`` and does not call the SDK.
     """
     session = _current_session()
     if not form_supported(session):
-        return None
+        return ElicitOutcome(False, None)
     method = getattr(session, "elicit_form", None) or getattr(session, "elicit", None)
     if method is None:
-        return None
+        return ElicitOutcome(False, None)
     try:
         result = await asyncio.wait_for(
             method(
@@ -117,8 +136,20 @@ async def elicit(tool: str, entry: str) -> bool | None:
             timeout=ELICIT_TIMEOUT_SECONDS,
         )
     except Exception:
-        return None
-    return accepted_from_action(getattr(result, "action", None), getattr(result, "content", None))
+        return ElicitOutcome(True, None)
+    return ElicitOutcome(
+        True,
+        accepted_from_action(getattr(result, "action", None), getattr(result, "content", None)),
+    )
+
+
+def _coerce_outcome(result: ElicitOutcome | bool | None) -> ElicitOutcome:
+    """Normalise ``elicit`` and a test double that still returns yes/no/None."""
+    if isinstance(result, ElicitOutcome):
+        return result
+    if result is True or result is False:
+        return ElicitOutcome(True, result)
+    return ElicitOutcome(True, None)
 
 
 def _refusal(tool: str, entry: str | None, reason: str, mode: str) -> dict:
@@ -162,12 +193,16 @@ async def before_use(tool: str, entry: str | None) -> dict | None:
         loaded = policy.load()
         plan = policy.mcp_plan(loaded, entry or "", tool)
         accepted: bool | None = None
+        sent = False
         if plan.ask:
             try:
-                result = await elicit(tool, entry or "")
+                outcome = _coerce_outcome(await elicit(tool, entry or ""))
             except Exception:
-                result = None
-            accepted = result if result is True or result is False else None
+                # The ask was entered and then failed. Count it as sent so a
+                # timeout or client error is not recorded like "never asked".
+                outcome = ElicitOutcome(True, None)
+            sent = outcome.sent
+            accepted = outcome.accepted
         decision, reason = mcp_use.finalize(
             plan.decision,
             plan.reason,
@@ -175,7 +210,7 @@ async def before_use(tool: str, entry: str | None) -> dict | None:
             accepted=accepted,
         )
         mode = plan.mcp_use
-        asked = plan.ask
+        asked = sent
     except Exception as exc:
         # A bug in the checker must not decrypt. not-listed is the closed reason
         # a human can answer with allow-tool; the real mode could not be read.
