@@ -164,6 +164,94 @@ async def test_enforce_denial_does_not_read_the_keyring(clean_policy, monkeypatc
     assert keyring_calls == []
 
 
+@pytest.mark.asyncio
+async def test_no_session_records_ask_false_when_nothing_is_sent(clean_policy, monkeypatch):
+    """A host that cannot be prompted is ask-unanswered, and ask is false.
+
+    ask is true only after an elicitation request is sent. This process has
+    no MCP session, so nothing is dispatched.
+    """
+    (_vault() / "policy.json").write_text(
+        json.dumps({
+            "mcp_use": "enforce",
+            "entries": {"ledger-key": {"allow_tools": ["use_credential"], "ask_each_time": True}},
+        }),
+        encoding="utf-8",
+    )
+    seen = _watch_vek(monkeypatch)
+    keyring_calls = _watch_keyring(monkeypatch)
+    result = await tools.use_credential("ledger-key", "https://api.ledger.example/v1")
+    assert result["reason"] == "ask-unanswered"
+    assert result["decision"] == "deny"
+    assert seen == []
+    assert keyring_calls == []
+    row = audit.read()[0]
+    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-unanswered", False)
+
+
+class _FormSession:
+    """A client that advertises form elicitation and answers with ``elicit_form``."""
+
+    def __init__(self, elicit_form):
+        self.client_params = type("Params", (), {})()
+        self.client_params.capabilities = type("Caps", (), {})()
+        self.client_params.capabilities.elicitation = type("Elicit", (), {"form": object(), "url": None})()
+        self.elicit_form = elicit_form
+
+
+def _enforce_ask(monkeypatch, elicit_form):
+    (_vault() / "policy.json").write_text(
+        json.dumps({
+            "mcp_use": "enforce",
+            "entries": {"ledger-key": {"allow_tools": ["use_credential"], "ask_each_time": True}},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "mcp_server.mcp_gate._current_session",
+        lambda: _FormSession(elicit_form),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_sent_prompt_that_times_out_records_ask_true(clean_policy, monkeypatch):
+    seen = _watch_vek(monkeypatch)
+
+    async def elicit_form(message, requestedSchema):
+        raise TimeoutError("timed out")
+
+    _enforce_ask(monkeypatch, elicit_form)
+    result = await tools.use_credential("ledger-key", "https://api.ledger.example/v1")
+    assert result["reason"] == "ask-unanswered"
+    assert seen == []
+    row = audit.read()[0]
+    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-unanswered", True)
+
+
+@pytest.mark.asyncio
+async def test_a_sent_cancel_records_ask_true(clean_policy, monkeypatch):
+    async def elicit_form(message, requestedSchema):
+        return type("Result", (), {"action": "cancel", "content": None})()
+
+    _enforce_ask(monkeypatch, elicit_form)
+    result = await tools.use_credential("ledger-key", "https://api.ledger.example/v1")
+    assert result["reason"] == "ask-unanswered"
+    row = audit.read()[0]
+    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-unanswered", True)
+
+
+@pytest.mark.asyncio
+async def test_a_sent_decline_records_ask_true(clean_policy, monkeypatch):
+    async def elicit_form(message, requestedSchema):
+        return type("Result", (), {"action": "decline", "content": None})()
+
+    _enforce_ask(monkeypatch, elicit_form)
+    result = await tools.use_credential("ledger-key", "https://api.ledger.example/v1")
+    assert result["reason"] == "ask-declined"
+    row = audit.read()[0]
+    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-declined", True)
+
+
 def test_directory_chmod_failure_still_appends_one_row(tmp_path, monkeypatch):
     target = tmp_path / "vault" / "audit.jsonl"
     target.parent.mkdir()
