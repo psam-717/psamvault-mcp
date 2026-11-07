@@ -357,6 +357,13 @@ returns `✗ <what failed> — <what to do next>` (locked keyring, unset bus, or
 answer). It does not store the secret in a file. This server does not read `PSAMVAULT_VEK` or
 `PSAMVAULT_TOKEN`.
 
+For `use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`,
+`export_key_to_env_file`, and `verify_api_key`, that `✗` line is what you get when the MCP-use
+policy has already allowed the call and the keyring then cannot be read. Unlock the keyring and
+call the tool again. Do not run `psamvault login` for a locked keyring unless the text says the
+session is missing. A result that starts with `STOP` was decided before the keyring was read.
+Unlocking the keyring does not turn that refusal into an allow.
+
 `doctor` and `compat --check` exit 0 on a fresh install that has no Hermes usage skill. That skill
 is optional. A skill file that is present but below the floor is still drift. `--sync-skill` only
 works from a local checkout you already have; without one it points at
