@@ -23,9 +23,13 @@ Discovery tools do not decrypt for this check and are not gated. That includes `
 | `off` | Allowed, reason `mcp-use-off` | Allowed, same reason | Never |
 
 `audit` is the mode when the key is absent, when it is JSON `null`, when the value is not one of the
-three modes, and when the file is missing, unreadable, or not a JSON object. A broken file is not
-treated as `enforce`. An explicit `"audit"` does not carry the planned-flip notice. A missing key
-does, and `get_version` is where that sentence is shown.
+three modes, and when the file is missing, unreadable, not UTF-8, or not a JSON object. A broken
+file is not treated as `enforce`. `get_version` and the audit row use that same `audit` mode, and
+the absent-key notice is shown from `get_version`. An explicit `"audit"` does not carry the notice.
+A missing key does, and `get_version` is where that sentence is shown.
+
+After an allow, a locked or unreachable OS keyring returns the `✗` keyring message. Unlock it and
+retry. A `STOP` refusal is decided before that read, so unlocking the keyring does not allow the call.
 
 `ask_each_time` is true only for JSON `true`. The server asks with MCP form elicitation: "Allow
 \<tool\> to use \<entry\>?". Yes keeps the allow. No is `ask-declined`. If the host has no form
