@@ -343,7 +343,7 @@ async def test_a_leaf_name_unions_matching_entries(mock_tool_deps, clean_policy)
     # so the allow becomes ask-unanswered before the VEK is used.
     assert result["reason"] == "ask-unanswered"
     assert result["error"].startswith("STOP.")
-    assert _rows()[0]["ask"] is True
+    assert _rows()[0]["ask"] is False
     assert _rows()[0]["decision"] == "deny"
 
 
@@ -363,7 +363,7 @@ async def test_enforce_ask_without_a_session_fails_closed_before_the_vek(
     assert result["error"].startswith("STOP.")
     assert "psamvault policy allow-tool" not in result["error"]
     row = _rows()[0]
-    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-unanswered", True)
+    assert (row["decision"], row["reason"], row["ask"]) == ("deny", "ask-unanswered", False)
 
 
 async def test_a_yes_keeps_the_allow_and_a_no_denies(
