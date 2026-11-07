@@ -55,6 +55,8 @@ from mcp_server.session import (
     get_access_token,
     get_vek,
     is_logged_in,
+    keyring_problem,
+    probe_keyring,
 )
 
 # Private / loopback IP blocks blocked as SSRF protection
@@ -217,6 +219,26 @@ def _hop_blocked(url: str, previous: str | None, assess) -> dict | None:
 
 
 logger = get_logger()
+
+
+def _session_block() -> dict | None:
+    """None when a session can be used.
+
+    Called only after MCP-use has allowed the tool, so a refusal does not read
+    the keyring. ``probe_keyring`` refreshes the failure: a lock recorded on an
+    earlier call is not reused once the keyring answers again. A locked or
+    unreachable keyring is that ``✗`` message. A missing session is the login
+    sentence.
+    """
+    problem = probe_keyring()
+    if problem:
+        return {"error": problem}
+    if is_logged_in():
+        return None
+    problem = keyring_problem()
+    if problem:
+        return {"error": problem}
+    return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
 
 
 async def _require_mcp_use(tool: str, entry: str | None) -> dict | None:
@@ -439,8 +461,9 @@ async def browser_login(
     blocked = await _require_mcp_use("browser_login", site_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     # Reject non-http(s) schemes
     if login_url:
@@ -545,8 +568,9 @@ async def use_credential(
     blocked = await _require_mcp_use("use_credential", site_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     # Validate method
     method = method.upper()
@@ -922,8 +946,9 @@ async def run_with_credential(
     blocked = await _require_mcp_use("run_with_credential", site_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
@@ -1076,8 +1101,9 @@ async def export_key_to_mcp_config(
     blocked = await _require_mcp_use("export_key_to_mcp_config", key_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     if agent != "hermes":
         return {"error": f"Unsupported agent '{agent}'. Supported agents: hermes"}
@@ -1264,8 +1290,9 @@ async def export_key_to_env_file(
     blocked = await _require_mcp_use("export_key_to_env_file", key_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
@@ -1386,8 +1413,9 @@ async def verify_api_key(
     blocked = await _require_mcp_use("verify_api_key", key_name)
     if blocked:
         return blocked
-    if not is_logged_in():
-        return {"error": "Not logged in. Run 'psamvault login' in your terminal first."}
+    session_block = _session_block()
+    if session_block:
+        return session_block
 
     try:
         access_token = get_access_token()
