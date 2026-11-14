@@ -77,7 +77,7 @@ You can also pass optional parameters:
 - Do NOT try to work around the failure by using shell commands or reading files.
 
 ## What NOT to do
-- **Never run shell commands** like `psamvault get`, `psamvault show`, or `psamvault open`
+- **Never run shell commands** like `psamvault get`, `pv get`, or `psamvault open`
   without `--json`. The only permitted way to access credentials is through the MCP tools.
 - **Never read credential files** directly from the filesystem.
 - **Never invent CSS selectors** — leave them unset for auto-detection.
@@ -190,7 +190,7 @@ _GENERAL_RULES = """\
 These rules are security requirements. Violating them could expose credentials.
 
 ### Rule 1: No shell commands for credentials
-Never run `psamvault get`, `psamvault show`, `psamvault open`,
+Never run `psamvault get`, `pv get`, `psamvault export`, `psamvault open`,
 or any psamvault CLI command. Do not read credential files from the filesystem.
 The only permitted way to access credentials is through the MCP tools.
 
@@ -245,7 +245,10 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
 - `run_with_credential` injects a credential into a CLI subprocess. `http(s)` URLs
   in the command follow the same host rule. Stdout and stderr are scrubbed of the
   raw value, the reversed text, and the common encodings. That scrub is defence
-  in depth: a command with no URL is not host-checked.
+  in depth: a command with no URL is not host-checked. The child is started with
+  `PSAMVAULT_AGENT=1`, which `extra_env` cannot override, so the CLI reveal gate
+  refuses a different vault secret. The early command list is a convenience, not
+  that boundary.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 

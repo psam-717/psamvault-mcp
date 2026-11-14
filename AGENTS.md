@@ -91,7 +91,7 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 
 **Run a command with a credential:**
 `run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="env", env_var_name="TWINE_PASSWORD")`
-→ Use for twine upload, docker login, npm publish, git push, or any CLI that reads a token from the environment or stdin. Every `http(s)` URL in the command is host-checked the same way; a command with no URL is not. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings. That scrub is defence in depth.
+→ Use for twine upload, docker login, npm publish, git push, or any CLI that reads a token from the environment or stdin. Every `http(s)` URL in the command is host-checked the same way; a command with no URL is not. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings. That scrub is defence in depth. The child is started with `PSAMVAULT_AGENT=1`, which `extra_env` cannot override, so the psamvault CLI reveal gate refuses a reveal. Obvious dump spellings (`pv get`, `ak-get`, `note-get`, `export`, `dashboard`, `generate`, `generate-codes`, `backup create`/`rotate`, `list`, `search`, `cat`/`type` of a `.psamvault` path) are refused first. That list is a convenience, not the boundary. Do not use the tool to print a different vault secret. Full isolation needs a separate OS user.
 
 **Give a tool a credential without pasting it** (most tools read a dotenv file, not MCP config):
 `export_key_to_env_file(key_name="tavily", env_var_name="TAVILY_API_KEY")` → writes `HERMES_HOME/.env`,
@@ -112,7 +112,7 @@ is a **floor**: a newer skill is fine, and a skill-only improvement ships with
 - ❌ Never ask user to paste credentials into chat
 - ❌ Never print credential values
 - ❌ Never read `~/.psamvault/` files directly
-- ❌ Never run psamvault CLI commands (`psamvault get`, `psamvault show`, etc.)
+- ❌ Never run psamvault CLI commands (`psamvault get`, `pv get`, `psamvault export`, etc.)
 - ❌ Never install psamvault-mcp with system `pip` “just to make PATH work” when pipx is available
 - ✅ Always use MCP tools for anything credential-related
 - ✅ Prefer absolute pipx path + `PYTHONPATH=""` in MCP host config

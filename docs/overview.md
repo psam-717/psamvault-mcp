@@ -68,7 +68,8 @@ absolute `http` or `https` URL.
 CLI command flow (`run_with_credential`) — psamvault decrypts the credential locally and spawns the
 subprocess with it injected as an env var (or piped via stdin). Every `http(s)` URL in the command is
 held to the same host rule; a command with no URL is not host-checked. Stdout and stderr are scrubbed
-of the raw value, the reversed text, and the common encodings before they return. Supports `env`
+of the raw value, the reversed text, and the common encodings before they return. The child is started
+with `PSAMVAULT_AGENT=1` so the CLI reveal gate refuses a different vault secret. Supports `env`
 (default) and `stdin` injection. Use this for a CLI, not for an HTTP API.
 
 See [Credential injection](guides/credential-injection.md) and [Browser login](guides/browser-login.md)
@@ -78,9 +79,11 @@ for the guides, and [Tool reference](reference/tools.md) for the exact parameter
 
 These rules are security requirements. Violating them could expose credentials.
 
-- **No shell commands for credentials.** Never run `psamvault get`, `psamvault show`,
-  `psamvault open`, or any psamvault CLI command. Do not read credential files from the filesystem.
-  The only permitted way to access credentials is through the MCP tools.
+- **No shell commands for credentials.** Never run `psamvault get`, `pv get`, `psamvault export`,
+  `psamvault open`, or any other psamvault CLI command. Do not read credential files from the filesystem.
+  The only permitted way to access credentials is through the MCP tools. `run_with_credential` starts
+  its child with `PSAMVAULT_AGENT=1`, which `extra_env` cannot override, so the CLI reveal gate refuses
+  a reveal. An early list refuses the obvious dump spellings; that list is a convenience, not the boundary.
 - **Never print raw credentials.** This keeps secrets out of the context window and the transcript.
 - **Never ask the user to paste a credential into the chat.** Use `browser_login`,
   `use_credential`, or `run_with_credential` instead.

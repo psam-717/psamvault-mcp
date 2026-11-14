@@ -67,7 +67,7 @@ You can also pass optional parameters:
 - Do NOT try to work around the failure by using shell commands or reading files.
 
 ## What NOT to do
-- **Never run shell commands** like `psamvault get`, `psamvault show`, or `psamvault open`.
+- **Never run shell commands** like `psamvault get`, `pv get`, or `psamvault open`.
 
 - **Never read credential files** directly from the filesystem.
 - **Never invent CSS selectors** — leave them unset for auto-detection.

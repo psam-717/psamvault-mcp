@@ -98,7 +98,10 @@ in the command is checked the same way as `use_credential`; a URL on any other h
 the command runs. A command with no URL is not host-checked, because the destination is not in the
 command. Stdout and stderr are scrubbed of the raw secret, its reversed text, its 8-character prefix,
 and the common encodings (base64, urlsafe base64, URL-encoding, hex, and the basic-auth blob).
-Scrubbing is defence in depth, not a boundary.
+Scrubbing is defence in depth, not a boundary. The child is always started with `PSAMVAULT_AGENT=1`,
+which `extra_env` cannot override, so the psamvault CLI reveal gate refuses a reveal of a different
+secret. Obvious dump spellings are refused first. That list is a convenience, not the boundary. Full
+isolation needs a separate OS user.
 
 **When to reach for it.** For `twine upload`, `git push`, `docker login`, `npm publish`, `pip install`
 against a private repo, or any CLI that needs an API key or password and that you would otherwise have

@@ -422,6 +422,19 @@ entries["<entry>"].allow_hosts. Any other URL is refused before the command runs
 private URLs stay blocked. A command with no URL is not host-checked, because the destination is not
 in the command.
 
+The child is always started with PSAMVAULT_AGENT=1. extra_env cannot override it, including with 0 or
+an empty value, and neither can naming that variable as env_var_name. The psamvault CLI reveal gate
+then refuses a reveal. Obvious spellings that would print or dump another vault secret are refused
+before the process starts: get, vault get, ak-get, ak get, note-get, note get, export (encrypted and
+--plaintext), dashboard, generate, vault generate, generate-codes, recovery generate-codes, backup
+create, backup rotate, list, vault list, search, and vault search, invoked as psamvault or pv (a
+quoted name, a .exe, a path, global flags such as --agent, an env assignment or env prefix, bash/sh
+-c, cmd /c, powershell -Command/-c, or python -m main). cat and type of a .psamvault path are refused
+too. list and search stay refused even though they print no secret. site-list, ak-list, note-list,
+ak list, and note list are not in that set. The list is a convenience, not the security boundary. A
+spelling it does not recognise still runs, and still sees PSAMVAULT_AGENT=1. Full isolation needs a
+separate OS user.
+
 Use cases:
 
 - twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'
@@ -440,7 +453,7 @@ Only site_name and command are required. When inject_as='env', env_var_name is r
 | `command` | string | **yes** | Shell command to run with the credential injected. Example: 'twine upload dist/*' or 'git push origin main' |
 | `inject_as` | string, enum `env` `stdin` | no (default `env`) | 'env' — set credential as an environment variable (requires env_var_name). 'stdin' — pipe credential as stdin to the process. |
 | `env_var_name` | string | required when `inject_as='env'` | The environment variable name to set the credential as. Examples: 'TWINE_PASSWORD', 'GITHUB_TOKEN', 'DOCKER_PASSWORD', 'NPM_TOKEN'. When 'TWINE_PASSWORD' is used, TWINE_USERNAME is automatically set to '__token__'. |
-| `extra_env` | object | no | Optional additional environment variables to pass to the subprocess. These are non-sensitive values merged into the subprocess environment alongside the credential. Example: `{'TWINE_REPOSITORY_URL': 'https://upload.pypi.org/legacy/'}` |
+| `extra_env` | object | no | Optional additional environment variables to pass to the subprocess. These are non-sensitive values merged into the subprocess environment alongside the credential. `PSAMVAULT_AGENT` is forced to `1` after this and cannot be overridden. Example: `{'TWINE_REPOSITORY_URL': 'https://upload.pypi.org/legacy/'}` |
 | `workdir` | string | no | Optional working directory for the command. Defaults to the MCP server's current working directory. |
 | `timeout` | integer | no (default `120`) | Max seconds to wait for the command (default: 120). |
 
@@ -463,11 +476,15 @@ host-checked. For the timeout pitfall and the retry rules, read the
 
 **The credential value is scrubbed from stdout and stderr before they reach the agent.** That scrub
 is defence in depth, not a guarantee: an encoding the scrubber does not know can still appear, and a
-program can contact a host that was never written in the command. Commands that could dump a secret
-are refused (`psamvault get|show|ak-get|ak-show|search|list|export`,
-`psamvault vault-get|credential-get|entry-get`, `cat ...*.psamvault`, `type ...*.psamvault`). URLs
-in the command that target loopback, private, or link-local addresses are rejected, and so is any
-http(s) URL outside the entry's site, its service hosts, or `allow_hosts`.
+program can contact a host that was never written in the command. The child is always started with
+`PSAMVAULT_AGENT=1`, which `extra_env` cannot override, and the psamvault CLI reveal gate refuses a
+reveal. Obvious spellings are also refused first (`get` / `vault get`, `ak-get` / `ak get`,
+`note-get` / `note get`, `export` including `--plaintext`, `dashboard`, `generate` / `vault generate`,
+`generate-codes` / `recovery generate-codes`, `backup create`, `backup rotate`, `list` / `vault list`,
+`search` / `vault search`, as `psamvault` or `pv`, plus `cat` or `type` of a `.psamvault` path). That
+list is a convenience, not the boundary. `site-list`, `ak-list`, `note-list`, `ak list`, and
+`note list` are not on it. URLs in the command that target loopback, private, or link-local addresses
+are rejected, and so is any http(s) URL outside the entry's site, its service hosts, or `allow_hosts`.
 
 ---
 

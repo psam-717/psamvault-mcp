@@ -247,6 +247,10 @@ def child_environment(extra: dict | None = None) -> dict[str, str]:
     explicit ``extra_env`` entry is how a caller passes any of those through.
     ``DISPLAY`` stays: commands that open a window still can, and they still
     cannot autolaunch a bus.
+
+    ``extra`` wins over the removals above. A value that must survive
+    ``extra`` — ``PSAMVAULT_AGENT`` on a ``run_with_credential`` child — has to
+    be written by the caller after this function returns.
     """
     env = os.environ.copy()
     for name in list(env):

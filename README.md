@@ -134,6 +134,9 @@ Every http(s) URL in the command is checked the same way as use_credential.
 A command with no URL is not host-checked.
 Stdout and stderr are scrubbed of the secret, its reversed text, and the
 common encodings before being returned. That scrub is defence in depth.
+The child is started with PSAMVAULT_AGENT=1, which extra_env cannot override,
+so the CLI reveal gate refuses a different vault secret. An early list refuses
+the obvious dump spellings; that list is a convenience, not the boundary.
 ```
 
 Supports two injection modes:

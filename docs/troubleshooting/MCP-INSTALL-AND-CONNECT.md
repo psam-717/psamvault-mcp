@@ -415,7 +415,7 @@ grok mcp doctor psamvault
 
 Even while debugging installs:
 
-- Never run `psamvault get` / `psamvault show` to “verify” keys
+- Never run `psamvault get` / `pv get` / `psamvault export` to “verify” keys
 - Never read vault files under `~/.psamvault/` for secret values
 - Never print API keys into the chat
 - Use only MCP tools once the server is connected

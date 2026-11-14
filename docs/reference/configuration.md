@@ -151,6 +151,13 @@ pepper in this process's environment for the API client; it is not a value a
 command should see. Pass a variable back through `extra_env` when the command
 itself needs the bus or that value.
 
+`PSAMVAULT_AGENT` is not one of those secrets, and it is not optional on a
+`run_with_credential` child. The runner sets it to `1` after `extra_env` and
+after the credential assignment, so a caller cannot pass `0`, an empty string,
+or the credential itself under that name. The psamvault CLI treats a truthy
+value as an agent. Under the default `human-only` reveal mode that refuses the
+reveal. This server does not read the variable for itself.
+
 KWallet is not the backend this package installs: it
 needs `dbus-python`, which is not a dependency. On KDE, Secret Service is still what keyring
 selects unless that extra package is installed.
@@ -170,6 +177,7 @@ tests. Vault tools cannot run there. This server does not read `PSAMVAULT_VEK` o
 | `PSAMVAULT_SKILL_CLONE` | — | Optional. Where `--sync-skill` reads a local skill checkout you already have. Without it, compat looks for a `private-skills` directory beside the discovered psamvault-mcp checkout. That directory is a maintainer mirror, not a public install step. A missing skill is not drift; see below. |
 | `PSAMVAULT_MCP_REPO` | — | Overrides the checkout `compat --from-git` installs from and whose git state `--apply` reports. Without it the checkout is **discovered**: the one this process runs from, else the one the current directory is inside — so `--from-git` in the repo you are standing in works with no configuration. Nothing found raises, naming this variable. |
 | `HERMES_HOME` | `~/.hermes` | Base directory for the Hermes export targets: `config.yaml` (`export_key_to_mcp_config`) and `.env` (`export_key_to_env_file`), and the base for the installed skill path the compatibility check reads. On Windows the platform default is `%LOCALAPPDATA%\hermes`. |
+| `PSAMVAULT_AGENT` | `1` on every `run_with_credential` child | Not read by this server. Forced to `1` on that child after `extra_env` and after the credential is assigned, so neither can clear it. The psamvault CLI's reveal gate treats a truthy value as an agent. |
 
 Platform variables (`LOCALAPPDATA`, `USERPROFILE`, `VIRTUAL_ENV`) are used only for path resolution on
 Windows and for venv detection; they are not settings.

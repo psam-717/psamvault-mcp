@@ -194,6 +194,7 @@ When the user needs to run a CLI tool that requires credentials:
    ```
 
 3. **Stdout and stderr are scrubbed** of the raw secret, the reversed text, the 8-character prefix, and the common encodings (base64, urlsafe base64, URL-encoding, hex, the basic-auth blob) before they are returned. That scrub is defence in depth. Every `http(s)` URL in the command must stay on the entry's site or the key's service, or on a host a human allowed; any other URL is refused and the command does not run. A command with no URL (`twine upload`, `git push`, `npm publish`) is not host-checked.
+4. **The child is always an agent to the CLI.** `PSAMVAULT_AGENT=1` is set after `extra_env`, so `0` or an empty value cannot clear it. The CLI reveal gate then refuses `get`, `ak-get`, `note-get`, and `export --plaintext`. Obvious other dump spellings (`export` without `--plaintext`, `dashboard`, `generate`, `generate-codes`, `backup create`, `backup rotate`, `list`, `search`, and `cat`/`type` of a `.psamvault` path, as `psamvault` or `pv`) are refused first. That list is a convenience, not the boundary. A spelling it misses still runs and still sees `PSAMVAULT_AGENT=1`. Do not use this tool to print a different vault secret. Full isolation needs a separate OS user.
 
 Supported injection modes:
 - `env` — Set credential as an environment variable. Requires `env_var_name`.
@@ -263,7 +264,7 @@ Notes:
 | **Never ask user to paste credentials** | Use `browser_login`, `use_credential`, or `run_with_credential` instead |
 | **Use `fields` parameter** | Reduces token usage and avoids returning unnecessary data |
 | **Relay `message` field verbatim** | Browser login messages contain user-facing instructions |
-| **Never run `psamvault` CLI commands** | Always use MCP tools for credential access |
+| **Never run `psamvault` CLI commands** | `get`, `pv get`, and `export` print or dump secrets. `run_with_credential` forces `PSAMVAULT_AGENT=1` and refuses the obvious spellings; that list is a convenience, not the boundary |
 | **Remember exports write plaintext into `.env`** | The variable is the agent's local working copy; the vault stays the source of truth — rotate from the vault, not the file |
 
 <!-- /section:usage/security-rules -->
@@ -327,7 +328,7 @@ Tell users they can say things like:
 - **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
 - **MCP use, then host binding.** Tools that decrypt a secret check `mcp_use` in `~/.psamvault/policy.json` before decryption. `audit` (the default when the key is absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `allow_tools`, and asks in chat only when `ask_each_time` is true; a missing answer refuses the use. `off` records the use and does not consult the list. A result that starts with `STOP` is final for that call: relay it, including `psamvault policy allow-tool <entry> <tool>` when the tool is not listed, and do not retry or edit `policy.json`. Discovery tools are not gated. There is no separate consent dialog on `audit` or `off`. The in-chat ask exists only for an allowed use under `enforce` when `ask_each_time` is true.
 - **Host binding**: after that check allows the use, a stored secret goes only to the entry's own site, the API key's service hosts, or `allow_hosts` in `~/.psamvault/policy.json`. Redirects are checked one hop at a time.
-- **Output scrubbing**: `use_credential` responses and `run_with_credential` stdout/stderr are scrubbed of the secret in its raw form, reversed text, and common encodings. That is defence in depth. The host check is the boundary.
+- **Output scrubbing**: `use_credential` responses and `run_with_credential` stdout/stderr are scrubbed of the secret in its raw form, reversed text, and common encodings. That is defence in depth. The host check is the boundary for where the injected secret may go. A different vault secret is refused by `PSAMVAULT_AGENT=1` on the child (the CLI reveal gate) and, for the obvious spellings, by the command list. The list is a convenience. Full isolation needs a separate OS user.
 
 <!-- /section:usage/architecture -->
 
