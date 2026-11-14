@@ -43,6 +43,8 @@
 
 ## Docs
 
+- docs(usage): the usage skill no longer tells agents to start `psamvault-mcp --http --port 8433`. Those flags do not exist. Stdio is the only transport: the host starts the server, and `--http`, `--port`, and `--host` are not flags. A bare `psamvault-mcp` in a terminal waits on stdin; use `--version` or `--help` for a smoke test.
+- docs(install): the install skill no longer tells non-stdio clients to run `psamvault-mcp --http --port 8433`. That block now says stdio is the only transport, those flags do not exist, and a client that cannot spawn `psamvault-mcp` and speak MCP on stdin/stdout cannot connect.
 - docs(policy): configuration and the tool reference say the audit `ask` field records whether the form request was sent. It is not the earlier "should a prompt be attempted" flag.
 - docs(policy): configuration, the tool reference, the MCP-use guide, and the install troubleshooting page say when an unreadable policy file is `audit` and when a locked keyring is the unlock message rather than a missing login.
 - docs(policy): the tool reference, configuration, features, the usage skill, and a guide say when `audit`, `enforce`, and `off` apply, when the server asks, and that a STOP refusal names the human command. The usage skill no longer says there is never a consent dialog.
