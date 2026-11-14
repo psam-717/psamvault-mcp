@@ -5,9 +5,12 @@ spawns a subprocess with a credential injected via environment variable
 or stdin pipe, captures output, and redacts the credential value before
 returning — so the calling agent never sees the secret.
 
-The function also blocks commands that could leak credentials from the
-psamvault CLI itself (``psamvault get``, ``psamvault show``,
-``psamvault ak-get``, ``psamvault search``, and similar).
+The child is always started with ``PSAMVAULT_AGENT=1``. That is the marker
+the psamvault CLI's reveal gate treats as an agent, and ``extra_env`` cannot
+override it. A normalised blocklist refuses the obvious secret-revealing
+spellings before the process starts. The list is a convenience: the variable
+and the CLI gate are the control, and a separate OS user is what isolates
+the keychain.
 """
 from __future__ import annotations
 
@@ -15,33 +18,310 @@ import asyncio
 import contextlib
 import os
 import re
+import shlex
 import signal
 import subprocess
 import tempfile
 from typing import Optional
 
-# Commands that are blocked from run_with_credential because they
-# could leak stored credentials back to the agent via stdout.
-_BLOCKED_COMMANDS: list[re.Pattern[str]] = [
-    # psamvault CLI read operations
-    re.compile(r"\bpsamvault\s+(get|show|ak-get|ak-show|search|list|export)\b", re.I),
-    re.compile(r"\bpsamvault\s+(vault-get|credential-get|entry-get)\b", re.I),
-    # Generic key/credential read operations that could dump secrets
-    re.compile(r"\bcat\s+.*\.psamvault", re.I),
-    re.compile(r"\btype\s+.*\.psamvault", re.I),
-]
+# Set on every child. Truthy values the CLI counts as an agent are
+# 1/true/yes/on (psamvault-cli caller.py). "1" is the value ``--agent`` sets.
+_AGENT_ENV = "PSAMVAULT_AGENT"
+
+# ``psamvault`` and ``pv`` are the same entry point (pyproject [project.scripts],
+# both ``main:app``). ``python -m main`` is that module.
+_CLI_NAMES = frozenset({"psamvault", "pv"})
+_PYTHONS = frozenset({"python", "python3", "py"})
+_SHELLS = frozenset({"bash", "sh", "dash"})
+_POWERSHELL = frozenset({"powershell", "pwsh"})
+_FILE_READERS = frozenset({"cat", "type"})
+
+# Secret-revealing command paths, derived from psamvault-cli main
+# (github.com/psam-717/psamvault-cli), not from the old regex.
+#
+# The reveal gate (reveal_gate.py) refuses ``get``, ``ak-get``, ``note-get``,
+# and ``export --plaintext`` (including ``--copy``) when this variable is set.
+# Grouped forms are the same commands: ``vault get``, ``ak get``, ``note get``.
+#
+# Also refused here, because that gate does not cover them and they still put
+# secret material where the caller can read it:
+#   export            decrypts every entry and writes them under a passphrase
+#                     the command chooses (command/export_command.py). The
+#                     encrypted form is explicitly not gated.
+#   generate          prints the generated password (command/vault_commands.py)
+#   generate-codes    prints recovery codes (command/recovery_commands.py),
+#                     also ``recovery generate-codes``
+#   backup create     writes the wrapped vault key (command/backup_commands.py)
+#   backup rotate     same, and revokes the other slots
+#   dashboard         serves reveals over HTTP (main.py, dashboard/api.py)
+#
+# ``list`` and ``search`` print no secret. They stay refused in every spelling
+# of those two commands, including ``vault list`` and ``vault search``.
+# ``site-list``, ``ak-list``, ``note-list``, ``ak list``, and ``note list``
+# are different commands and are not here.
+#
+# ``show``, ``ak-show``, ``vault-get``, ``credential-get``, and ``entry-get``
+# are not commands. They are not in this set.
+_BLOCKED_PATHS: frozenset[tuple[str, ...]] = frozenset({
+    ("get",),
+    ("vault", "get"),
+    ("ak-get",),
+    ("ak", "get"),
+    ("note-get",),
+    ("note", "get"),
+    ("export",),
+    ("dashboard",),
+    ("generate",),
+    ("vault", "generate"),
+    ("generate-codes",),
+    ("recovery", "generate-codes"),
+    ("backup", "create"),
+    ("backup", "rotate"),
+    ("list",),
+    ("vault", "list"),
+    ("search",),
+    ("vault", "search"),
+})
+
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_MAX_UNWRAP = 8
 
 
-def _is_command_blocked(command: str) -> str | None:
-    """Return an error message if the command is blocked, else None."""
-    for pattern in _BLOCKED_COMMANDS:
-        if pattern.search(command):
-            return (
-                f"Command contains a blocked operation: "
-                f"'{pattern.pattern}'. "
-                f"This command could leak credentials. "
-                f"Use the appropriate MCP tool instead."
-            )
+def _strip_quotes(token: str) -> str:
+    """Drop one matching pair of quotes.
+
+    POSIX ``shlex`` already removes them. Windows mode (``posix=False``) keeps
+    them on the token, which is not how ``cmd`` hands the word to the program.
+    """
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
+        return token[1:-1]
+    return token
+
+
+def _split_command(command: str, *, posix: bool) -> list[str] | None:
+    """Split one command the way the platform shell quotes words.
+
+    ``shlex`` is not a shell. An unmatched quote, or a construct it does not
+    tokenise, comes back as None and the string check does not refuse it.
+    """
+    try:
+        return [_strip_quotes(part) for part in shlex.split(command, posix=posix, comments=False)]
+    except ValueError:
+        return None
+
+
+def _exe_name(token: str) -> str:
+    """Basename, without ``.exe``, case-folded. Slashes of either platform count."""
+    name = token.replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name.casefold()
+
+
+def _skip_assignments(tokens: list[str]) -> list[str]:
+    index = 0
+    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):
+        index += 1
+    return tokens[index:]
+
+
+def _after_env(tokens: list[str]) -> list[str]:
+    """Drop a leading ``env`` and the flags and assignments that belong to it."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if _ASSIGNMENT.match(token):
+            index += 1
+            continue
+        if token in {"-u", "--unset"}:
+            index += 2
+            continue
+        if token.startswith("--unset="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        break
+    return tokens[index:]
+
+
+def _after_shell_c(rest: list[str], *, posix: bool) -> list[str] | None:
+    """The command string after ``bash``/``sh`` ``-c`` / ``-lc`` / ``--command``."""
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        is_c = token in {"-c", "--command"} or (
+            token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+        )
+        if is_c:
+            if index + 1 >= len(rest):
+                return None
+            return _split_command(rest[index + 1], posix=posix)
+        if token.startswith("-"):
+            index += 1
+            continue
+        return None
+    return None
+
+
+def _after_cmd_c(rest: list[str], *, posix: bool) -> list[str] | None:
+    """The command after ``cmd /c`` or ``cmd /k``."""
+    index = 0
+    while index < len(rest):
+        if rest[index].casefold() in {"/c", "/k"}:
+            payload = rest[index + 1:]
+            if not payload:
+                return None
+            if len(payload) == 1:
+                return _split_command(payload[0], posix=posix)
+            return payload
+        index += 1
+    return None
+
+
+def _after_powershell(rest: list[str], *, posix: bool) -> list[str] | None:
+    """The command after ``powershell``/``pwsh`` ``-Command`` / ``-c``."""
+    flags = {"-command", "-c", "/command", "/c"}
+    index = 0
+    while index < len(rest):
+        if rest[index].casefold() in flags:
+            payload = rest[index + 1:]
+            if not payload:
+                return None
+            if len(payload) == 1:
+                return _split_command(payload[0], posix=posix)
+            return payload
+        index += 1
+    return None
+
+
+def _after_python_m_main(tokens: list[str]) -> list[str] | None:
+    """Argv after ``python -m main``. None when this is not that invocation."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-c":
+            return None
+        if token == "-m":
+            module = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if _exe_name(module) == "main":
+                return tokens[index + 2:]
+            return None
+        if token in {"-W", "-X"}:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return None
+    return None
+
+
+def _unwrap(tokens: list[str], *, posix: bool) -> tuple[list[str], bool]:
+    """Peel env prefixes and shell wrappers.
+
+    The second value is true when the remaining tokens are already the CLI's
+    argv (``python -m main``), with no ``psamvault``/``pv`` word in front.
+    """
+    for _ in range(_MAX_UNWRAP):
+        tokens = _skip_assignments(tokens)
+        if not tokens:
+            return [], False
+        exe = _exe_name(tokens[0])
+        if exe == "env":
+            tokens = _after_env(tokens)
+            continue
+        if exe in _SHELLS:
+            inner = _after_shell_c(tokens[1:], posix=posix)
+            if inner is None:
+                return tokens, False
+            tokens = inner
+            continue
+        if exe == "cmd":
+            inner = _after_cmd_c(tokens[1:], posix=posix)
+            if inner is None:
+                return tokens, False
+            tokens = inner
+            continue
+        if exe in _POWERSHELL:
+            inner = _after_powershell(tokens[1:], posix=posix)
+            if inner is None:
+                return tokens, False
+            tokens = inner
+            continue
+        if exe in _PYTHONS:
+            inner = _after_python_m_main(tokens)
+            if inner is None:
+                return tokens, False
+            return inner, True
+        return tokens, False
+    return tokens, False
+
+
+def _positionals(tokens: list[str]) -> list[str]:
+    """Drop flags. Global options (``--agent``, ``--verbose``) sit before the subcommand."""
+    return [token for token in tokens if token != "--" and not token.startswith("-")]
+
+
+def _match_cli(positionals: list[str]) -> str | None:
+    folded = [word.casefold() for word in positionals]
+    matched: tuple[str, ...] | None = None
+    for path in _BLOCKED_PATHS:
+        if folded[:len(path)] == list(path) and (matched is None or len(path) > len(matched)):
+            matched = path
+    if matched is None:
+        return None
+    return " ".join(matched)
+
+
+def _reads_psamvault_file(tokens: list[str]) -> bool:
+    for token in tokens:
+        if token.startswith("-"):
+            continue
+        if ".psamvault" in token.casefold():
+            return True
+    return False
+
+
+def _refusal(operation: str) -> str:
+    return (
+        f"Refusing to run this command: it matches a secret-revealing "
+        f"psamvault operation ({operation}). "
+        "run_with_credential will not reveal another vault secret. "
+        "Use the MCP tools for the credential this call already holds. "
+        "This blocklist is a convenience, not the security boundary. "
+        f"The child is started with {_AGENT_ENV}=1, which extra_env cannot "
+        "override, and the psamvault CLI reveal gate is what refuses a reveal. "
+        "A command this list does not recognise still runs, and still sees "
+        "that variable. Full isolation needs a separate OS user."
+    )
+
+
+def _is_command_blocked(command: str, *, posix: bool | None = None) -> str | None:
+    """Return an error message if the command is blocked, else None.
+
+    ``posix`` selects the quoting rules. The default follows this process:
+    POSIX shlex on Unix, Windows shlex on Windows. Tests pass it explicitly
+    so both rule sets run on one machine.
+    """
+    if posix is None:
+        posix = os.name != "nt"
+    tokens = _split_command(command, posix=posix)
+    if not tokens:
+        return None
+    tokens, cli_direct = _unwrap(tokens, posix=posix)
+    if not tokens:
+        return None
+    if cli_direct:
+        matched = _match_cli(_positionals(tokens))
+        return _refusal(matched) if matched else None
+    exe = _exe_name(tokens[0])
+    if exe in _CLI_NAMES:
+        matched = _match_cli(_positionals(tokens[1:]))
+        return _refusal(matched) if matched else None
+    if exe in _FILE_READERS and _reads_psamvault_file(tokens[1:]):
+        return _refusal(f"{exe} of a .psamvault path")
     return None
 
 
@@ -102,6 +382,8 @@ async def run_command_with_credential(
     # Build environment. The session bus the server adopted (and the variables
     # GDBus would use to find that same bus) are not copied in. extra_env is
     # applied after that removal, which is the explicit pass-through.
+    # PSAMVAULT_AGENT is forced further down, after extra_env and after the
+    # credential assignment, so neither can clear it.
     from mcp_server.session import child_environment
 
     env = child_environment(extra_env)
@@ -131,6 +413,14 @@ async def run_command_with_credential(
             "stderr": f"Unknown inject_as mode: '{inject_as}'. Use 'env' or 'stdin'.",
             "error": f"Unknown inject_as mode: '{inject_as}'. Use 'env' or 'stdin'.",
         }
+
+    # child_environment applies extra_env after it strips the session bus and
+    # the secret-shaped PSAMVAULT_* names, so a caller can put this variable
+    # back as "0" or "". The credential assignment can do the same when
+    # env_var_name is PSAMVAULT_AGENT. Set it last, on the dict the child
+    # actually receives. The CLI treats a truthy value as an agent and the
+    # default human-only policy then refuses the reveal.
+    env[_AGENT_ENV] = "1"
 
     # Run the command on a WORKER THREAD with a blocking Popen. Two independent traps live here:
     #
