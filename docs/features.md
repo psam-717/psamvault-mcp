@@ -116,8 +116,9 @@ Guide: [Credential injection](./guides/credential-injection.md). Tool:
 **What it is.** Generates a password with the `secrets` module and stores it as a new vault site
 entry. The password is encrypted locally and sent only as ciphertext. The result is `site`,
 `length`, `classes`, and `created`. The password is not returned, logged, or written to the audit
-row. Symbols default to a safe set with no quotes, backslash, backtick, space, `$`, or `%`. That
-set must match `psamvault generate`. If the site already exists, the call is refused and nothing is
+row. Symbols are the CLI safe set `!@^*()-_=+[]{}:,.` only. The CLI's `--all-symbols`
+option is not offered. Length is 8 to 128; the floor is the higher of 8 and the number of enabled
+classes. If the site already exists, the call is refused and nothing is
 overwritten. The human runs `psamvault update` to change an existing entry.
 
 **When to reach for it.** When the user wants a new site password created and stored. It is not

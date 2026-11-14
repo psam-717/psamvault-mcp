@@ -226,20 +226,24 @@ async def test_all_classes_off_is_refused(mock_tool_deps, httpx_mock: HTTPXMock,
 async def test_length_bounds_are_refused_without_a_store(
     mock_tool_deps, httpx_mock: HTTPXMock, clean_audit
 ):
-    too_short = await tools.generate_and_store_password(_SITE, length=3)
+    too_short = await tools.generate_and_store_password(_SITE, length=7)
+    one_class = await tools.generate_and_store_password(
+        _SITE, length=7, upper=True, lower=False, digits=False, symbols=False
+    )
     too_long = await tools.generate_and_store_password(_SITE, length=129)
     not_int = await tools.generate_and_store_password(_SITE, length=True)  # type: ignore[arg-type]
-    assert "at least 4" in too_short["error"]
+    assert "at least 8" in too_short["error"]
+    assert "at least 8" in one_class["error"]
     assert "at most 128" in too_long["error"]
     assert "integer" in not_int["error"]
     assert httpx_mock.get_requests() == []
 
     _mock_absent(httpx_mock)
-    tight = await tools.generate_and_store_password(_SITE, length=4)
+    tight = await tools.generate_and_store_password(_SITE, length=8)
     assert tight["created"] is True
-    assert tight["length"] == 4
+    assert tight["length"] == 8
     password, _body = _posted_password(httpx_mock)
-    assert len(password) == 4
+    assert len(password) == 8
     assert any(ch in string.ascii_uppercase for ch in password)
     assert any(ch in string.ascii_lowercase for ch in password)
     assert any(ch in string.digits for ch in password)
@@ -258,7 +262,8 @@ async def test_default_symbols_in_the_stored_password_are_safe(
     assert result["classes"]["symbols"] is True
     password, _body = _posted_password(httpx_mock)
     assert set(password) <= set(SAFE_SYMBOLS)
-    assert not (set(password) & set("\"'\\`$% "))
+    assert SAFE_SYMBOLS == "!@^*()-_=+[]{}:,."
+    assert not (set(password) & set("\"'`\\$%&|;<>#?/~ "))
     _absent(password, json.dumps(result))
 
 

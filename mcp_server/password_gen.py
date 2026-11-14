@@ -3,17 +3,17 @@
 Generation uses :mod:`secrets` only. Each enabled class contributes at least
 one character, then :class:`secrets.SystemRandom` shuffles the result.
 
-The default symbol alphabet is a SAFE subset of :data:`string.punctuation`.
-It excludes quotes, backslash, backtick, ``$``, and ``%``. Space is not in
-``string.punctuation`` and is excluded too. This is the MCP default. It must
-match ``psamvault generate``'s default symbol set in psamvault-cli. That
-companion change was not on the CLI's ``main`` when this set was written
-(the CLI still appended ``string.punctuation``). Keep the two sets identical.
+The default symbol alphabet is the CLI's safe set from psamvault-cli pull
+request 109: ``!@^*()-_=+[]{}:,.``. Left out of :data:`string.punctuation` are quotes,
+backtick, backslash, ``$``, ``%``, ``&``, ``|``, ``;``, ``<``, ``>``, ``#``,
+``?``, ``/``, ``~``, and space. The CLI flag ``--all-symbols`` selects the
+full punctuation set. This tool does not offer that option. Symbols are
+always the safe set.
 
 The length default is 20, the same default as ``psamvault generate --length``.
-The maximum is 128. The minimum is the number of enabled classes, so the
-class guarantee is possible. The CLI's interactive ``generate`` command
-currently rejects a length below 8; this tool does not add that extra floor.
+The valid range is 8 to 128. The floor is the higher of 8 and the number of
+enabled classes, so the class guarantee is possible and a short password is
+refused the same way the CLI refuses it.
 """
 
 from __future__ import annotations
@@ -21,13 +21,15 @@ from __future__ import annotations
 import secrets
 import string
 
-# psamvault generate --length default, command/vault_commands.py on CLI main.
+# psamvault generate --length default. The floor matches the CLI: max(8, classes).
 DEFAULT_LENGTH = 20
+MIN_LENGTH = 8
 MAX_LENGTH = 128
 
-# string.punctuation minus " ' \ ` $ % . Space is not part of that alphabet.
-SAFE_SYMBOLS = "!#&()*+,-./:;<=>?@[]^_{|}~"
-_EXCLUDED_SYMBOLS = set("\"'\\`$% ")
+# Exact safe set from psamvault-cli pull request 109. Not string.punctuation.
+SAFE_SYMBOLS = "!@^*()-_=+[]{}:,."
+# Characters the CLI names as left out of the default set.
+EXCLUDED_SYMBOLS = set("\"'`\\$%&|;<>#?/~ ")
 
 # Same forbidden set as the CLI's vault ``_validate_site_name``.
 FORBIDDEN_SITE_CHARS = set("\\/\"'" " <>|?*&#%")
@@ -74,15 +76,22 @@ def site_name_problem(site_name: object) -> str | None:
     )
 
 
+def length_floor(enabled: int) -> int:
+    """The shortest password the CLI will draw for this many enabled classes."""
+    return max(MIN_LENGTH, enabled)
+
+
 def length_problem(length: object, *, enabled: int) -> str | None:
     """Why ``length`` cannot be used with ``enabled`` classes, or None."""
     if isinstance(length, bool) or not isinstance(length, int):
         return "length must be an integer."
     if enabled < 1:
         return "At least one character class must be enabled."
-    if length < enabled or length > MAX_LENGTH:
+    floor = length_floor(enabled)
+    if length < floor or length > MAX_LENGTH:
         return (
-            f"length must be at least {enabled} (one character from each enabled class) "
+            f"length must be at least {floor} "
+            f"(the higher of {MIN_LENGTH} and the number of enabled classes) "
             f"and at most {MAX_LENGTH}."
         )
     return None

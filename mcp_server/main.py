@@ -166,7 +166,7 @@ _TOOL_REGISTRY: dict[str, str] = {
     "generate_and_store_password": (
         "Generate a password and store it as a new vault entry. "
         "Returns site, length, classes, and created — never the password. "
-        "Params: site_name (required), username, notes, length (default 20, max 128), "
+        "Params: site_name (required), username, notes, length (default 20, min 8, max 128), "
         "upper, lower, digits, symbols (all default true). "
         "Refuses when the site already exists; run psamvault update yourself. "
         "Not gated by mcp_use. An audit row is written and does not contain the password."
@@ -391,8 +391,8 @@ TOOL_DEFINITIONS = [
             "encrypted locally with the vault key, and sent only as ciphertext. "
             "The password is never returned, logged, or written to the audit row. "
             "Returns only site, length, classes, and created. "
-            "Symbols use a safe subset: no quotes, backslash, backtick, space, $, or %. "
-            "That set must match psamvault generate's default symbols. "
+            "Symbols are the CLI safe set !@^*()-_=+[]{}:,. only. "
+            "The CLI's --all-symbols option is not offered here. "
             "If the site already exists, the call is refused and nothing is overwritten — "
             "run `psamvault update` yourself to change an existing entry. "
             "Not gated by mcp_use (no stored secret is revealed). An audit row is still written."
@@ -419,10 +419,11 @@ TOOL_DEFINITIONS = [
                     "type": "integer",
                     "description": (
                         "Password length. Default 20, the same default as `psamvault generate`. "
-                        "Maximum 128. Minimum is the number of enabled character classes."
+                        "Minimum 8, or the number of enabled classes when that is higher. "
+                        "Maximum 128."
                     ),
                     "default": 20,
-                    "minimum": 1,
+                    "minimum": 8,
                     "maximum": 128,
                 },
                 "upper": {
@@ -443,8 +444,8 @@ TOOL_DEFINITIONS = [
                 "symbols": {
                     "type": "boolean",
                     "description": (
-                        "Include the safe symbol set (no quotes, backslash, backtick, space, $, or %). "
-                        "Default true."
+                        "Include the safe symbol set !@^*()-_=+[]{}:,. "
+                        "The full string.punctuation set is not available. Default true."
                     ),
                     "default": True,
                 },

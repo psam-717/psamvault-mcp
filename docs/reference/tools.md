@@ -327,23 +327,21 @@ The value is encrypted locally with the vault encryption key and sent only as ci
 | `site_name` | string | **yes** | Vault site name to create, e.g. 'github.com'. The same characters the psamvault CLI refuses in a site name are refused here. |
 | `username` | string | no | Optional username stored with the entry. Never returned. |
 | `notes` | string | no | Optional notes stored with the entry. Never returned. |
-| `length` | integer | no (default `20`) | Password length. Default 20, the same default as `psamvault generate`. Maximum 128. Minimum is the number of enabled character classes. |
+| `length` | integer | no (default `20`) | Password length. Default 20, the same default as `psamvault generate`. Minimum 8, or the number of enabled classes when that is higher. Maximum 128. |
 | `upper` | boolean | no (default `true`) | Include uppercase A-Z. |
 | `lower` | boolean | no (default `true`) | Include lowercase a-z. |
 | `digits` | boolean | no (default `true`) | Include digits 0-9. |
 | `symbols` | boolean | no (default `true`) | Include the safe symbol set. Default true. |
 
-**Symbols.** The default symbol set is `!#&()*+,-./:;<=>?@[]^_{|}~`. That is
-`string.punctuation` without quotes, backslash, backtick, `$`, or `%`. Space is not included.
-This set must match `psamvault generate`'s default symbols. The CLI's `main` still used the full
-punctuation set when this page was written; the companion CLI change has to land on the same
-characters.
+**Symbols.** The symbol set is exactly `!@^*()-_=+[]{}:,.`, the safe set from
+[psamvault-cli pull request 109](https://github.com/psam-717/psamvault-cli/pull/109). Left out are
+quotes, backtick, backslash, `$`, `%`, `&`, `|`, `;`, `<`, `>`, `#`, `?`, `/`, `~`, and space.
+The CLI's `--all-symbols` flag selects `string.punctuation`. This tool does not offer that option.
+Symbols are always the safe set.
 
 **Generation.** At least one character comes from each enabled class. The result is shuffled with
-`secrets.SystemRandom`. Every class turned off is an error. A length below the number of enabled
-classes, or above 128, is an error. The CLI's interactive `generate` command currently also rejects
-a length below 8. This tool does not add that extra floor: the minimum is the class count, so four
-enabled classes allow a length of 4.
+`secrets.SystemRandom`. Every class turned off is an error. Length must be from 8 to 128. The
+floor is the higher of 8 and the number of enabled classes, the same rule as `psamvault generate`.
 
 **Returns.** On success, exactly `site`, `length`, `classes` (the four booleans), and `created` set
 to true. The password is not a field. On conflict, `created` is false and `error` tells the human to

@@ -209,11 +209,11 @@ Auto-convenience: When `env_var_name="TWINE_PASSWORD"`, the tool automatically s
 
 When the user wants a new site password created and stored:
 
-1. **Call** `generate_and_store_password(site_name="github.com")`. `username` and `notes` are optional. `length` defaults to 20 (maximum 128). `upper`, `lower`, `digits`, and `symbols` default to true.
+1. **Call** `generate_and_store_password(site_name="github.com")`. `username` and `notes` are optional. `length` defaults to 20 and must be 8 to 128 (the floor is the higher of 8 and the number of enabled classes). `upper`, `lower`, `digits`, and `symbols` default to true.
 2. **Read only** `site`, `length`, `classes`, and `created`. The password is not in the result. Do not ask the tool to reveal it, and do not look for it in the audit row.
 3. **If `created` is false** and the error names `psamvault update`, the site already exists. Nothing was overwritten. Tell the user to run `psamvault update` themselves. Do not retry, and do not run `psamvault`.
 
-At least one character class must stay enabled. Symbols use the safe set (no quotes, backslash, backtick, space, `$`, or `%`). The tool is not gated by `mcp_use`. It still writes one audit row.
+At least one character class must stay enabled. Symbols are only the safe set `!@^*()-_=+[]{}:,.`. The CLI's `--all-symbols` option is not a parameter of this tool. The tool is not gated by `mcp_use`. It still writes one audit row.
 
 ### 5. Protecting .env Files
 
