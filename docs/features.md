@@ -111,6 +111,20 @@ request in `use_credential`, and only when the host is allowed.
 Guide: [Credential injection](./guides/credential-injection.md). Tool:
 [`run_with_credential`](./reference/tools.md#run_with_credential).
 
+### Generate and store a password (`generate_and_store_password`)
+
+**What it is.** Generates a password with the `secrets` module and stores it as a new vault site
+entry. The password is encrypted locally and sent only as ciphertext. The result is `site`,
+`length`, `classes`, and `created`. The password is not returned, logged, or written to the audit
+row. Symbols default to a safe set with no quotes, backslash, backtick, space, `$`, or `%`. That
+set must match `psamvault generate`. If the site already exists, the call is refused and nothing is
+overwritten. The human runs `psamvault update` to change an existing entry.
+
+**When to reach for it.** When the user wants a new site password created and stored. It is not
+gated by `mcp_use`, because no stored secret is revealed, and it does write one audit row.
+
+See [`generate_and_store_password`](./reference/tools.md#generate_and_store_password).
+
 ### Secret scanning and protection (`scan_and_protect`)
 
 **What it is.** Scans a project directory for exposed secrets in `.env` files, detects API keys and
@@ -181,6 +195,8 @@ when the key is absent. Other tool results do not carry that notice.
 **When it applies.** On `use_credential`, `run_with_credential`, `browser_login`,
 `export_key_to_mcp_config`, `export_key_to_env_file`, and `verify_api_key`. Discovery tools,
 including `get_username_for_site` and `scan_and_protect`, are not gated and write no audit row.
+`generate_and_store_password` is not gated and does write one `allow` row. The password is not on
+the row.
 
 A human changes it with `psamvault policy allow-tool`, `psamvault policy ask-each-time`, and
 `psamvault policy mcp-use`. This server does not write the file.

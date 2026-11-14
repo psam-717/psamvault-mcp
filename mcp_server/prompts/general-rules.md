@@ -30,7 +30,8 @@ This includes trigger phrases like "log into", "log in to", "sign into",
 Tell the human the command it names (`psamvault policy allow-tool <entry> <tool>` when
 the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not
 try another tool to get the secret. `get_version` reports the mode. Discovery tools are
-not gated.
+not gated. `generate_and_store_password` is not gated and writes one audit row; the password
+is not on the row and is not in the tool result.
 
 ### Rule 3: use_credential for API requests
 Use `use_credential` for an authenticated HTTP request to that entry's own site
@@ -179,6 +180,7 @@ add `.env` to their `.gitignore`.
 | `check_credential_exists` | Check if a site has a credential | Before any credential-dependent tool |
 | `get_username_for_site` | Get username only | When username is needed in a form/API |
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
+| `generate_and_store_password` | Generate a password and store a new site entry | When the user wants a new site password. Never returns the value. Refuses an existing site |
 | `use_credential` | Authenticated HTTP to the entry's site or the key's service | When that host is the one you are calling. Other hosts are refused |
 | `scan_and_protect` | Scan .env files for exposed secrets | **First** when working in a project with .env files |
 | `run_with_credential` | CLI with the credential in env or stdin; URLs in the command are host-checked; output scrubbed | twine, docker login, npm, git, pip — not an arbitrary HTTP call |

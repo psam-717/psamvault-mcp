@@ -9,6 +9,17 @@ contract calls newest, so the two cannot silently drift apart.
 
 Releases up to and including 0.4.6 predate this file — see the [GitHub releases](https://github.com/psam-717/psamvault-mcp/releases).
 
+## 0.5.6 — unreleased
+
+Not published. The package version stays 0.5.5 until release. This heading is here because
+`mcp_server/compatibility.json` records 0.5.6 as the newest contract entry (14 tools, adding
+`generate_and_store_password`) and `scripts/docs-sync-check.py` requires this file's newest section
+to be that version. 0.5.6 is the next MCP patch placeholder, not a psamvault-cli version, and not a
+release that has been uploaded. The line items live in
+[`CHANGELOG.unreleased.md`](CHANGELOG.unreleased.md) and are rolled into this section at release
+time. The skill floor in the contract stays 1.9.1 until the private `psamvault-mcp` skill documents
+the new tool.
+
 ## 0.5.5 — 2026-10-11
 
 ### Added

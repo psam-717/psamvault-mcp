@@ -105,13 +105,15 @@ The full rule set, including error handling, ships with the server in
   tools, the psamvault CLI, or by reading `~/.psamvault/` — defeats the entire design.
 - **Credential-free tasks.** If a task needs no stored credential, do not route it through this
   server.
-- **Managing the vault.** Adding, editing, or deleting credentials is the psamvault CLI's job
-  (`psamvault add`, `psamvault login`, and friends). The MCP server uses what is already stored.
+- **Editing or deleting vault entries.** `generate_and_store_password` can create a new site
+  password and store it. It refuses when the site already exists and does not overwrite. Changing
+  or deleting an entry is still `psamvault update` or `psamvault delete`, run by the human.
+  `psamvault login` is still how a session starts.
 - **A substitute for the psamvault CLI.** The server needs `psamvault` installed and logged in; if
   the session is missing, the fix is `psamvault login` in a terminal, run by the user.
 - **Guessing what to do when a credential is missing.** If `check_credential_exists` returns
-  `exists: false`, the site isn't in the vault. The user must add it before you can use it — do not
-  substitute a different site or a shell workaround.
+  `exists: false`, the site isn't in the vault. Create one with `generate_and_store_password` only
+  when the user asked for a new password. Do not substitute a different site or a shell workaround.
 
 ## Architecture
 

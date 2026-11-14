@@ -65,6 +65,7 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 | `check_credential_exists` | Check if a site's credential is stored |
 | `get_username_for_site` | Get username hint (never password) |
 | `browser_login` | Open browser, fill credentials — agent never sees them |
+| `generate_and_store_password` | Generate a password and store a new site entry. The password is never returned. An existing site is refused; the human runs `psamvault update` |
 
 ### 🔑  API Key Operations
 *All tools that deal with API keys — discover, use, inject, and protect.*
@@ -87,7 +88,7 @@ Tools are grouped by purpose so AI agents navigate them efficiently:
 
 **API call:** `use_credential(site_name="github.com", target_url="https://api.github.com/user/repos", inject_as="bearer_token")` → use `fields` to return only needed data. `target_url` must be an absolute http or https URL on that entry's site or the key's service. A site named `github.com`, or a key whose name or service matches the bundled `github` recipe, may call `api.github.com`. A call to any other host is refused. An API key with no known service host stays refused until a human adds it under `entries["<name>"].allow_hosts` in `~/.psamvault/policy.json`. There is no MCP parameter that grants a host. Do not edit that file. The response is scrubbed of the secret; the host check is the boundary.
 
-**MCP use, before that host check:** tools that decrypt a secret (`use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`, `export_key_to_env_file`, `verify_api_key`) read `mcp_use` first. `audit` (the default when the key is absent) records and allows, and does not ask. `enforce` refuses a tool that is not listed, and asks only when `ask_each_time` is true. `off` records and does not consult the list. If the result starts with `STOP`, stop. Tell the human the command in the error (`psamvault policy allow-tool <entry> <tool>` when the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not try another tool to get the secret. `get_version` reports the mode and the absent-key notice. Discovery tools, including `get_username_for_site`, are not gated and write no audit row.
+**MCP use, before that host check:** tools that decrypt a secret (`use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`, `export_key_to_env_file`, `verify_api_key`) read `mcp_use` first. `audit` (the default when the key is absent) records and allows, and does not ask. `enforce` refuses a tool that is not listed, and asks only when `ask_each_time` is true. `off` records and does not consult the list. If the result starts with `STOP`, stop. Tell the human the command in the error (`psamvault policy allow-tool <entry> <tool>` when the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not try another tool to get the secret. `get_version` reports the mode and the absent-key notice. Discovery tools, including `get_username_for_site` and `scan_and_protect`, are not gated and write no audit row. `generate_and_store_password` is not gated and does write one audit row; the password is not on the row.
 
 **Run a command with a credential:**
 `run_with_credential(site_name="pypi", command="twine upload dist/*", inject_as="env", env_var_name="TWINE_PASSWORD")`

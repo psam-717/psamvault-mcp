@@ -226,7 +226,7 @@ it. Any skill at or above that floor is healthy — the skill may legitimately m
 | Trap | Reality |
 |---|---|
 | "It upgraded" because the install command exited 0 | the sessions running before it keep the old code; only a new session reloads |
-| Tool count unchanged | a rename keeps the count — 13 tools has been constant since 0.4.6; the version string and fingerprint are the identifiers |
+| Tool count unchanged | a rename can keep the count. It stayed at 13 from 0.4.6 through 0.5.5; the current surface is 14 tools. The version string and the fingerprint are still the identifiers |
 | `pipx list` shows the old version | its metadata lags; use `importlib.metadata` / `selfcheck` |
 | `python -c "from mcp_server import __version__"` reports the new version | you are standing in the checkout — that is the working tree, not the install |
 | Blind-retrying an upload that "timed out" | it often completed; verify against the registry instead of re-uploading |

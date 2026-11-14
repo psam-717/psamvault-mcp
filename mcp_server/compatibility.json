@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-10-11",
+  "updated": "2026-11-14",
   "skill": {
     "name": "psamvault-mcp",
     "repo": "psam-717/private-skills",
@@ -8,6 +8,32 @@
     "installed_path": "skills/psam-custom/psamvault-mcp/SKILL.md"
   },
   "releases": [
+    {
+      "mcp": "0.5.6",
+      "skill": "1.9.1",
+      "breaking": false,
+      "added": [
+        "generate_and_store_password"
+      ],
+      "removed": [],
+      "notes": "UNPUBLISHED placeholder for the next MCP release. The package version stays 0.5.5 until this is published. 0.5.6 is not a psamvault-cli version. Adds generate_and_store_password (14 tools). The tool generates a password with secrets, stores it as ciphertext on POST /vault, returns only site/length/classes/created, refuses an existing site without overwriting, and is not gated by mcp_use. It does write one audit row that does not contain the password. The default symbol set is string.punctuation without quotes, backslash, backtick, dollar, or percent, and must match psamvault generate. Skill floor stays 1.9.1 on purpose: docs/skills/usage.md in this repository is 1.11.0, and the private skill in psam-717/private-skills is not updated here. Raise this floor to that skill's version when it documents the tool. Do not treat 0.5.6 or 1.11.0 as already released.",
+      "tools": [
+        "browser_login",
+        "check_credential_exists",
+        "export_key_to_env_file",
+        "export_key_to_mcp_config",
+        "generate_and_store_password",
+        "get_username_for_site",
+        "get_version",
+        "list_api_keys",
+        "list_vault_sites",
+        "run_with_credential",
+        "scan_and_protect",
+        "search_vault_tools",
+        "use_credential",
+        "verify_api_key"
+      ]
+    },
     {
       "mcp": "0.5.5",
       "skill": "1.9.1",

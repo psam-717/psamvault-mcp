@@ -297,7 +297,7 @@ reload the host first:
 
 Then verify, in this order:
 
-1. The host reports the server **healthy** / tools discovered — **13 tools** (v0.5.0 and later).
+1. The host reports the server **healthy** / tools discovered — **14 tools**.
 2. Call `get_version` — it needs no login and returns the installed version plus the compatibility
    block (see [Configuration](./reference/configuration.md)).
 3. Call `list_vault_sites` — this one needs an active vault session, so it is also your
@@ -360,4 +360,4 @@ See [Configuration](./reference/configuration.md) for the contract and the exit 
 - [MCP install & connect](./troubleshooting/MCP-INSTALL-AND-CONNECT.md) — the agent repair playbook.
 - [PYTHONPATH conflict](./troubleshooting/PYTHONPATH-CONFLICT.md) — native-module import errors.
 - [Configuration](./reference/configuration.md) — everywhere the server reads settings from.
-- [Tool reference](./reference/tools.md) — the 13 registered tools.
+- [Tool reference](./reference/tools.md) — the 14 registered tools.

@@ -473,6 +473,7 @@ Tools are grouped by purpose so AI agents can find the right tool faster:
 | `check_credential_exists` | Check if a credential exists for a site. Returns username hint |
 | `get_username_for_site` | Get the username only (not password) for a site |
 | `browser_login` | Open a real browser and log into a website — credentials filled silently, never shown to the agent |
+| `generate_and_store_password` | Generate a password and store it as a new site entry. Returns site, length, classes, and created — never the password. Refuses an existing site; the human runs `psamvault update` |
 
 ### 🔑  API Key Operations
 *All tools that deal with API keys — discover, use, inject, and protect.*
@@ -600,7 +601,7 @@ never left installed.**
 - `get_version` reports the pairing (`compatibility.paired_skill_version`, newest release,
   `breaking_pending`), so an agent can self-check without extra tooling.
 - A tool count alone is **not** a version check: v0.5.0 removed one tool and added another, leaving
-  the count at 13 — only the fingerprint reveals that.
+  the count at 13 — only the fingerprint reveals that. The current surface is 14 tools.
 - `tests/test_compat.py` fails when the newest contract entry disagrees with the code's actual tool
   surface, so a release that forgets to record itself cannot ship quietly.
 - `scripts/docs-sync-check.py` is the release-time **docs gate**: it fails when any doc still names a

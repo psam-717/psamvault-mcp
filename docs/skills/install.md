@@ -12,7 +12,7 @@ Claude Code, Cursor, Cline, Goose, Grok Build, or any stdio MCP client — for t
 **Definition of done.** All four, in this order:
 
 1. `psamvault-mcp --version` prints a version and exits cleanly (no traceback).
-2. The host reports the server connected, with **13 tools**.
+2. The host reports the server connected, with **14 tools**.
 3. `get_version` in a session opened *after* the config change returns that same version plus a
    `compatibility` block.
 4. `list_vault_sites` returns a list — which is also the proof that a vault session exists.
@@ -187,7 +187,7 @@ psamvault-mcp compat --check   # server ↔ usage-skill pairing (exit 1 = drift;
 
 Then, from a new session:
 
-1. the host shows the server **connected with 13 tools** (v0.5.0 and later);
+1. the host shows the server **connected with 14 tools**;
 2. `get_version` — needs no login, returns the version and the compatibility block;
 3. `list_vault_sites` — needs a live vault session, so it doubles as the `psamvault login` check;
 4. `search_vault_tools("")` — returns the full tool list.

@@ -25,6 +25,7 @@ smoke-test with **`psamvault-mcp --version`** or **`psamvault-mcp --help`**
 | `get_username_for_site(site_name)` | Get the stored username (never the password) |
 | `use_credential(site_name, target_url, method, inject_as, fields)` | Authenticated HTTP to the entry's own site or the API key's service. Other hosts are refused |
 | `browser_login(site_name)` | Open a browser and log into a website — credentials filled silently |
+| `generate_and_store_password(site_name, username, notes, length, upper, lower, digits, symbols)` | Generate a password and store a new site entry. The password is never returned. An existing site is refused |
 | `scan_and_protect(project_dir, patterns, project_name)` | Scan a project for `.env` secrets, encrypt them into psamvault |
 | `run_with_credential(site_name, command, inject_as, env_var_name, extra_env, workdir, timeout)` | CLI with the credential in env or stdin. URLs in the command are host-checked; output is scrubbed |
 

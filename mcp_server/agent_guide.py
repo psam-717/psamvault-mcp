@@ -318,6 +318,7 @@ add `.env` to their `.gitignore`.
 | `check_credential_exists` | Check if a site has a credential | Before any credential-dependent tool |
 | `get_username_for_site` | Get username only | When username is needed in a form/API |
 | `browser_login` | Full login via browser | **Always** for login/authenticate requests |
+| `generate_and_store_password` | Generate a password and store a new site entry | When the user wants a new site password. The value is never returned |
 
 ### 🔑  API Key Operations
 *All tools that deal with API keys: discover, use, inject, and protect.*

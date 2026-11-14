@@ -212,7 +212,7 @@ you'd need to configure display forwarding or use a remote browser service.
 |---|---|
 | **VEK location** | Host OS keychain (never in sandbox) |
 | **Plaintext credential location** | MCP server memory only, milliseconds only |
-| **Agent sees credential value?** | Not as a tool result. Responses and command output are scrubbed of the common encodings. That scrub is defence in depth; the host check is the boundary |
+| **Agent sees credential value?** | Not as a tool result. `generate_and_store_password` returns a confirmation only. Responses and command output are scrubbed of the common encodings. That scrub is defence in depth; the host check is the boundary |
 | **Backend stores plaintext?** | Never (zero-knowledge) |
 | **Network policy needed?** | Mode A: 1 egress rule host.openshell.internal :port |
 | **Additional attack surface** | None — same security model, just moved to host |

@@ -6,7 +6,7 @@ order: 60
 
 # Tool reference
 
-**13 tools.** The list below is the server's registered tool surface, taken from the tool registry in
+**14 tools.** The list below is the server's registered tool surface, taken from the tool registry in
 `mcp_server/main.py` (the `TOOL_DEFINITIONS` list). The descriptions and parameter documentation are
 the registry's own text.
 
@@ -15,7 +15,7 @@ Tools are grouped into three categories:
 | Group | Tools |
 |---|---|
 | Entry & Orientation | `get_version`, `search_vault_tools` |
-| Site Authentication | `list_vault_sites`, `check_credential_exists`, `get_username_for_site`, `browser_login` |
+| Site Authentication | `list_vault_sites`, `check_credential_exists`, `get_username_for_site`, `browser_login`, `generate_and_store_password` |
 | API Key Operations | `list_api_keys`, `use_credential`, `run_with_credential`, `scan_and_protect`, `export_key_to_mcp_config`, `export_key_to_env_file`, `verify_api_key` |
 
 A tool count is **not** a version check: v0.5.0 removed `capture_stripe_credentials` and added
@@ -56,6 +56,12 @@ Gated tools: `use_credential`, `run_with_credential`, `browser_login`, `export_k
 
 Not gated, and no audit row: `get_version`, `search_vault_tools`, `list_vault_sites`,
 `check_credential_exists`, `get_username_for_site`, `list_api_keys`, `scan_and_protect`.
+
+`generate_and_store_password` is not gated either — it creates a password and does not reveal a
+stored one — but it does append one audit row, with decision `allow`, before the password is
+generated. `ask` is false. The reason is `not-listed` under `audit` and `enforce` (the allow-list is
+not consulted) and `mcp-use-off` under `off`. The row names the tool and the site. It has no field
+for the password.
 
 `get_version` returns `mcp_use.mode`, `mcp_use.notice`, and `mcp_use.warnings`. `notice` is the
 planned-flip sentence when `mcp_use` is absent, and null when the mode was set explicitly. A file
@@ -295,12 +301,60 @@ genuinely absent. Copying a name out of a `scan_and_protect` result works even w
 from the stored one — that difference is expected, not a mistake.
 
 **Scope.** This is the API key store only. The site tools (`list_vault_sites`,
-`check_credential_exists`, `get_username_for_site`, `browser_login`) take a site name such as
-`github.com` and are unaffected — a vault site password is not an API key entry.
+`check_credential_exists`, `get_username_for_site`, `browser_login`, `generate_and_store_password`)
+take a site name such as `github.com` and are unaffected — a vault site password is not an API key
+entry.
 
 **Cost.** Every lookup reads `GET /apikeys` first — that read is what supplies the stored spelling and
 makes the ambiguity check possible — then reads the entry by its resolved name. Nothing is sent to the
 provider and no key value is returned by the resolution step.
+
+---
+
+## `generate_and_store_password`
+
+**Group:** Site Authentication. Not gated by [MCP use policy](#which-tools-may-use-a-secret). An
+audit row is written before the password is generated. The row does not contain the password.
+
+**Purpose.** Generate a password with the `secrets` module and store it as a new vault site entry.
+The value is encrypted locally with the vault encryption key and sent only as ciphertext
+(`POST /vault`). The tool returns a confirmation and nothing else.
+
+**Parameters.**
+
+| Name | Type | Required | Meaning (registry text) |
+|---|---|---|---|
+| `site_name` | string | **yes** | Vault site name to create, e.g. 'github.com'. The same characters the psamvault CLI refuses in a site name are refused here. |
+| `username` | string | no | Optional username stored with the entry. Never returned. |
+| `notes` | string | no | Optional notes stored with the entry. Never returned. |
+| `length` | integer | no (default `20`) | Password length. Default 20, the same default as `psamvault generate`. Maximum 128. Minimum is the number of enabled character classes. |
+| `upper` | boolean | no (default `true`) | Include uppercase A-Z. |
+| `lower` | boolean | no (default `true`) | Include lowercase a-z. |
+| `digits` | boolean | no (default `true`) | Include digits 0-9. |
+| `symbols` | boolean | no (default `true`) | Include the safe symbol set. Default true. |
+
+**Symbols.** The default symbol set is `!#&()*+,-./:;<=>?@[]^_{|}~`. That is
+`string.punctuation` without quotes, backslash, backtick, `$`, or `%`. Space is not included.
+This set must match `psamvault generate`'s default symbols. The CLI's `main` still used the full
+punctuation set when this page was written; the companion CLI change has to land on the same
+characters.
+
+**Generation.** At least one character comes from each enabled class. The result is shuffled with
+`secrets.SystemRandom`. Every class turned off is an error. A length below the number of enabled
+classes, or above 128, is an error. The CLI's interactive `generate` command currently also rejects
+a length below 8. This tool does not add that extra floor: the minimum is the class count, so four
+enabled classes allow a length of 4.
+
+**Returns.** On success, exactly `site`, `length`, `classes` (the four booleans), and `created` set
+to true. The password is not a field. On conflict, `created` is false and `error` tells the human to
+run `psamvault update` themselves. Nothing is overwritten: the tool never calls the vault update
+endpoint.
+
+**When to use it.** When the user wants a new site password created and stored, and the site is not
+already in the vault. An existing site is left unchanged.
+
+**Secrets.** The password is not returned, not logged, and not written into the audit row. A refusal
+for a bad site name, a bad length, or every class being off happens before the password is generated.
 
 ---
 
