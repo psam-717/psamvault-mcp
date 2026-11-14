@@ -10,7 +10,7 @@ type: agent-skill
 These rules are security requirements. Violating them could expose credentials.
 
 ### Rule 1: No shell commands for credentials
-Never run `psamvault get`, `psamvault show`, `psamvault open`,
+Never run `psamvault get`, `pv get`, `psamvault export`, `psamvault open`,
 or any psamvault CLI command. Do not read credential files from the filesystem.
 The only permitted way to access credentials is through the MCP tools.
 
@@ -78,6 +78,9 @@ If you are unsure whether a credential exists, call `check_credential_exists`.
   raw value, the reversed text, and the common encodings. That scrub is defence
   in depth: a command with no URL is not host-checked. Use it for a CLI that
   reads a token from the environment or stdin, not to call an arbitrary URL.
+  The child is started with `PSAMVAULT_AGENT=1`, which `extra_env` cannot override,
+  so the CLI reveal gate refuses a different vault secret. The early command list
+  is a convenience, not that boundary.
 - `get_username_for_site` only returns the username, never the password.
 - `list_vault_sites` only returns site names and username hints.
 - `export_key_to_mcp_config` writes the key into an agent MCP config file —

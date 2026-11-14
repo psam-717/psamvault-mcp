@@ -23,17 +23,44 @@ particular:
 
 - **Never ask the user to paste a credential into the chat.** Use `use_credential`,
   `run_with_credential`, or `browser_login` instead.
-- **Never run `psamvault get`, `psamvault show`, `psamvault open`, or any psamvault CLI command**, and
-  never read credential files from the filesystem. The only permitted way to access credentials is
-  through the MCP tools.
+- **Never run `psamvault get`, `pv get`, `psamvault export`, `psamvault open`, or any other psamvault
+  CLI command**, and never read credential files from the filesystem. The only permitted way to access
+  credentials is through the MCP tools.
 - **Never read `~/.psamvault/` for secret values**, even while "just testing" an install.
 - **Never print raw credentials** into chat, a file, or a command line you then echo.
 
-`run_with_credential` enforces part of this mechanically: commands matching a blocked pattern are
-refused before anything runs. The blocked patterns are `psamvault get|show|ak-get|ak-show|search|list|export`,
-`psamvault vault-get|credential-get|entry-get`, `cat ...*.psamvault`, and `type ...*.psamvault`. A
-refused command returns an error naming the pattern and the advice to use the appropriate MCP tool
-instead.
+`run_with_credential` refuses the obvious secret-revealing spellings before anything runs. The child
+is always started with `PSAMVAULT_AGENT=1`, after `extra_env` and after the credential assignment, so
+neither can set that variable to `0` or to empty. The psamvault CLI reveal gate then treats the
+process as an agent and, under the default `human-only` policy, refuses a reveal.
+
+The early list is a convenience, not the security boundary. The forced variable and the CLI reveal
+gate are. A spelling the list does not recognise still runs, and it still sees `PSAMVAULT_AGENT=1`.
+Full isolation — a child that cannot reach the keychain at all — needs a separate OS user.
+
+The list is the real command set from psamvault-cli (`psamvault` and `pv` are the same program),
+not a guess. Refused, including the grouped form and `--copy` where that flag exists:
+
+| Operation | Why it is refused |
+|---|---|
+| `get`, `vault get` | Prints the password. The CLI gate refuses this when `PSAMVAULT_AGENT` is set. |
+| `ak-get`, `ak get` | Prints the API key. Same gate. |
+| `note-get`, `note get` | Prints the note. Same gate. |
+| `export`, including `--plaintext` | Decrypts every entry. `--plaintext` writes them in the clear and the CLI gate refuses that form. The encrypted form is not gated: the command chooses the passphrase, so the file is readable by whoever chose it. Both forms are refused here. |
+| `dashboard` | Serves reveals over HTTP. |
+| `generate`, `vault generate` | Prints the generated password. |
+| `generate-codes`, `recovery generate-codes` | Prints recovery codes. |
+| `backup create`, `backup rotate` | Writes the wrapped vault key. |
+| `list`, `vault list`, `search`, `vault search` | Print no secret. They stay refused anyway. `site-list`, `ak-list`, `note-list`, `ak list`, and `note list` are different commands and are not refused. |
+| `cat` or `type` of a `.psamvault` path | Reads a vault file. |
+
+`show`, `ak-show`, `vault-get`, `credential-get`, and `entry-get` are not commands and are not on the list.
+
+The same operation is recognised under `psamvault` or `pv`, a quoted name, a trailing `.exe`, a path,
+a case difference, global flags such as `--agent` before the subcommand, a `NAME=value` or `env`
+prefix, and these wrappers: `bash`/`sh -c`, `cmd /c`, `powershell -Command`/`-c`, and
+`python -m main` (that module is the CLI). A refused command returns `exit_code: -1` and an error
+that names the operation and says the list is a convenience.
 
 ## Running a CLI command with a credential (`run_with_credential`)
 
@@ -55,6 +82,19 @@ The tool description, verbatim:
 > entries["<entry>"].allow_hosts. Any other URL is refused before the command runs. Loopback and
 > private URLs stay blocked. A command with no URL is not host-checked, because the destination is
 > not in the command.
+>
+> The child is always started with PSAMVAULT_AGENT=1. extra_env cannot override it, including with 0
+> or an empty value, and neither can naming that variable as env_var_name. The psamvault CLI reveal
+> gate then refuses a reveal. Obvious spellings that would print or dump another vault secret are
+> refused before the process starts: get, vault get, ak-get, ak get, note-get, note get, export
+> (encrypted and --plaintext), dashboard, generate, vault generate, generate-codes, recovery
+> generate-codes, backup create, backup rotate, list, vault list, search, and vault search, invoked
+> as psamvault or pv (a quoted name, a .exe, a path, global flags such as --agent, an env assignment
+> or env prefix, bash/sh -c, cmd /c, powershell -Command/-c, or python -m main). cat and type of a
+> .psamvault path are refused too. list and search stay refused even though they print no secret.
+> site-list, ak-list, note-list, ak list, and note list are not in that set. The list is a
+> convenience, not the security boundary. A spelling it does not recognise still runs, and still sees
+> PSAMVAULT_AGENT=1. Full isolation needs a separate OS user.
 
 ```
 Agent: "Upload my package to PyPI"
@@ -87,8 +127,9 @@ Use cases from the tool description: `twine upload`, `docker login`, `npm publis
 
 When `env_var_name` is `TWINE_PASSWORD`, `TWINE_USERNAME=__token__` is set automatically as a
 convenience. `extra_env` merges non-sensitive values into the subprocess environment alongside the
-credential (e.g. `{"TWINE_REPOSITORY_URL": "https://upload.pypi.org/legacy/"}`), and `workdir` sets
-the subprocess working directory (default: the MCP server's own cwd).
+credential (e.g. `{"TWINE_REPOSITORY_URL": "https://upload.pypi.org/legacy/"}`). It cannot clear
+`PSAMVAULT_AGENT`: that variable is set to `1` after `extra_env`. `workdir` sets the subprocess
+working directory (default: the MCP server's own cwd).
 
 ### What comes back
 
@@ -113,8 +154,9 @@ Three checks run before the subprocess starts:
   hosts, or a host a human listed for that entry. A command with no `http(s)` URL is not host-checked:
   `twine upload` and `git push` name no URL, so the tool cannot see where they connect. That is a
   limit of reading the command text, not a grant to send the secret anywhere.
-- **Blocked-command guard.** As above — the psamvault read commands and `.psamvault` file reads are
-  refused.
+- **Blocked-command guard.** As above — the secret-revealing psamvault spellings and `.psamvault`
+  file reads are refused. The refusal names the operation and says the list is a convenience. The
+  child still receives `PSAMVAULT_AGENT=1` when a command is allowed to run.
 
 A refused URL returns `exit_code: -1` and the reason in `error` and `stderr`. The command does not
 run.

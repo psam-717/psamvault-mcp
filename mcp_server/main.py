@@ -52,7 +52,7 @@ server = Server(
         "These are the strict rules you MUST follow — they are security requirements, not suggestions:\n\n"
 
         "1. NEVER run shell commands to retrieve credentials. "
-        "Do not call 'psamvault get', 'psamvault show', or any psamvault CLI command. "
+        "Do not call 'psamvault get', 'pv get', 'psamvault export', or any psamvault CLI command. "
         "Do not read any credential file. "
         "The only permitted way to access credentials is through the MCP tools listed below.\n\n"
 
@@ -509,6 +509,19 @@ TOOL_DEFINITIONS = [
             "for that entry in ~/.psamvault/policy.json under entries[\"<entry>\"].allow_hosts. "
             "Any other URL is refused before the command runs. Loopback and private URLs stay blocked. "
             "A command with no URL is not host-checked, because the destination is not in the command.\n\n"
+            "The child is always started with PSAMVAULT_AGENT=1. extra_env cannot override it, "
+            "including with 0 or an empty value, and neither can naming that variable as env_var_name. "
+            "The psamvault CLI reveal gate then refuses a reveal. "
+            "Obvious spellings that would print or dump another vault secret are refused before the "
+            "process starts: get, vault get, ak-get, ak get, note-get, note get, export (encrypted and "
+            "--plaintext), dashboard, generate, vault generate, generate-codes, recovery generate-codes, "
+            "backup create, backup rotate, list, vault list, search, and vault search, invoked as "
+            "psamvault or pv (a quoted name, a .exe, a path, global flags such as --agent, an env "
+            "assignment or env prefix, bash/sh -c, cmd /c, powershell -Command/-c, or python -m main). "
+            "cat and type of a .psamvault path are refused too. list and search stay refused even though "
+            "they print no secret. site-list, ak-list, note-list, ak list, and note list are not in that set. "
+            "The list is a convenience, not the security boundary. A spelling it does not recognise still "
+            "runs, and still sees PSAMVAULT_AGENT=1. Full isolation needs a separate OS user.\n\n"
             "Use cases:\n"
             "- twine upload: inject_as='env', env_var_name='TWINE_PASSWORD'\n"
             "- docker login: inject_as='stdin' (password piped to stdin)\n"
@@ -566,6 +579,8 @@ TOOL_DEFINITIONS = [
                         "Optional additional environment variables to pass to "
                         "the subprocess. These are non-sensitive values merged "
                         "into the subprocess environment alongside the credential. "
+                        "PSAMVAULT_AGENT is forced to 1 after this and cannot be "
+                        "overridden. "
                         "Example: {'TWINE_REPOSITORY_URL': 'https://upload.pypi.org/legacy/'}"
                     )
                 },

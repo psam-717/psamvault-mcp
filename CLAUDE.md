@@ -127,7 +127,7 @@ run_with_credential(
 )
 ```
 
-The credential is **decrypted locally** and injected into the subprocess. Every `http(s)` URL in the command must stay on the entry's site or the key's service, or on a host a human allowed; a command with no URL is not host-checked. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings (base64, URL-encoding, hex, the basic-auth blob). That scrub is defence in depth, not a boundary.
+The credential is **decrypted locally** and injected into the subprocess. Every `http(s)` URL in the command must stay on the entry's site or the key's service, or on a host a human allowed; a command with no URL is not host-checked. Stdout and stderr are scrubbed of the raw secret, the reversed text, and the common encodings (base64, URL-encoding, hex, the basic-auth blob). That scrub is defence in depth, not a boundary. The child is always started with `PSAMVAULT_AGENT=1`, which `extra_env` cannot override. The psamvault CLI reveal gate then refuses a reveal. Obvious spellings that would dump another secret are refused first; that list is a convenience, not the boundary. Full isolation needs a separate OS user.
 
 **Key parameters:**
 - `site_name`: API key name (e.g. "pypi") or vault site name (e.g. "github.com")
@@ -148,7 +148,7 @@ These rules are non-negotiable:
 - **A result that starts with `STOP` is a refusal.** `mcp_use` is checked before decryption. `audit` (the default when the key is absent) records and allows and does not ask. `enforce` refuses a tool that is not listed and asks only when `ask_each_time` is true. `off` records and does not consult the list. Relay the human command (`psamvault policy allow-tool <entry> <tool>` when the tool is not listed). Do not edit `policy.json`, do not run `psamvault`, and do not try another tool.
 - **The `use_credential` tool returns the HTTP response, after scrubbing the secret out of the body and headers.** It sends the secret only to the entry's own site or the key's service. Any other host is refused. That host check runs only after MCP-use has allowed the tool.
 - **The `browser_login` tool fills credentials directly in the browser.** The agent never sees them.
-- **The `run_with_credential` tool scrubs credential values from command output** (raw, reversed, and the common encodings). That scrub is defence in depth. `http(s)` URLs in the command are host-checked; a command with no URL is not.
+- **The `run_with_credential` tool scrubs credential values from command output** (raw, reversed, and the common encodings). That scrub is defence in depth. `http(s)` URLs in the command are host-checked; a command with no URL is not. The child is started with `PSAMVAULT_AGENT=1` so the CLI reveal gate refuses a different vault secret. The early command list is a convenience, not that boundary.
 
 ## Authentication
 
