@@ -20,6 +20,8 @@
 
 ## Fixed
 
+- fix(cmd): `run_with_credential` always starts the child with `PSAMVAULT_AGENT=1`, after `extra_env` and after the credential assignment, so neither can clear it (including `0`, an empty string, or naming that variable as `env_var_name`). Without the marker the CLI classified the child as `uncertain` and the default `human-only` reveal mode allowed the reveal, so `pv get <other>` could print another secret. The scrubber only removes the credential this call injected.
+- fix(cmd): `run_with_credential` refuses the real secret-revealing spellings before the process starts: `get` / `vault get`, `ak-get` / `ak get`, `note-get` / `note get`, `export` (encrypted and `--plaintext`), `dashboard`, `generate` / `vault generate`, `generate-codes` / `recovery generate-codes`, `backup create`, `backup rotate`, `list` / `vault list`, and `search` / `vault search`, as `psamvault` or `pv` (quoted name, `.exe`, path, global flags, `env` prefixes, `bash`/`sh -c`, `cmd /c`, `powershell -Command`/`-c`, `python -m main`), plus `cat` or `type` of a `.psamvault` path. The list is a convenience, not the boundary. `show`, `ak-show`, `vault-get`, `credential-get`, and `entry-get` are not commands and are no longer named. `site-list`, `ak-list`, `note-list`, `ak list`, and `note list` stay allowed.
 - fix(policy): the audit `ask` field is true only when an elicitation request was sent. A client that cannot show a form, and a server with no session to send on, still deny as `ask-unanswered` and record `ask` false. A prompt that was sent and then declined, cancelled, timed out, or answered with an empty form stays `ask` true.
 - fix(policy): a policy file that cannot be read as UTF-8 is implicit `audit`, with a warning and the absent-key notice on `get_version`. The tool result and the audit row use that same mode. The file is not treated as `enforce`.
 - fix(tools): after `mcp_use` allows a call, a locked or unreachable keyring returns the `✗` unlock message instead of saying the user is not logged in. A refusal is still returned before the keyring is read.
@@ -35,6 +37,7 @@
 
 ## Tests
 
+- test(cmd): the `run_with_credential` child sees `PSAMVAULT_AGENT=1` when `extra_env` passes `0`, `""`, `false`, `no`, `off`, or `true`, and when the credential is injected under that name. Every refused spelling above is covered on POSIX and Windows quoting, and `twine upload dist/*`, `gh pr list`, and `git commit -m "psamvault get docs"` are not refused. `$(echo pv) get x` passes the string check and the child still sees the marker. The tests use a fake `pv` and a throwaway value, not a vault.
 - test(policy): a missing session records `ask` false for `ask-unanswered`; a sent timeout, cancel, or decline records `ask` true; a stdio client with no elicitation capability receives no `elicitation/create` and records `ask` false; a yes over stdio allows the call and stops at the missing-session login sentence.
 - test(policy): a UTF-16 policy file agrees with `get_version` and the audit row on `audit`; a valid UTF-8 `enforce` file still denies before the VEK is read and before the keyring is read; a locked keyring on all six gated tools, including the dispatcher, returns the unlock message and does not call `get_vek`; a directory `chmod` error still appends one compact row at mode `0600`.
 - test(policy): an unlisted tool under `enforce` is refused before the VEK is read; `audit` and `off` allow and write one row; elicitation yes keeps the allow, no is `ask-declined`, and a missing answer is `ask-unanswered`; the audit row is compact JSON, mode 0600, and rotates at 1,000,000 bytes.
@@ -43,6 +46,7 @@
 
 ## Docs
 
+- docs(cmd): the credential-injection guide, the tool reference, configuration, the usage skill, and the agent pages name the real commands `run_with_credential` refuses, say `PSAMVAULT_AGENT` is forced on the child, and say the blocklist is a convenience rather than the boundary. They no longer list `show`, `ak-show`, `vault-get`, `credential-get`, or `entry-get`.
 - docs(usage): the usage skill no longer tells agents to start `psamvault-mcp --http --port 8433`. Those flags do not exist. Stdio is the only transport: the host starts the server, and `--http`, `--port`, and `--host` are not flags. A bare `psamvault-mcp` in a terminal waits on stdin; use `--version` or `--help` for a smoke test.
 - docs(install): the install skill no longer tells non-stdio clients to run `psamvault-mcp --http --port 8433`. That block now says stdio is the only transport, those flags do not exist, and a client that cannot spawn `psamvault-mcp` and speak MCP on stdin/stdout cannot connect.
 - docs(policy): configuration and the tool reference say the audit `ask` field records whether the form request was sent. It is not the earlier "should a prompt be attempted" flag.
