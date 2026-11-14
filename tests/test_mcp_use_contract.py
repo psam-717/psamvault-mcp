@@ -56,7 +56,9 @@ def test_the_consuming_tools_are_the_contract():
         "get_username_for_site",
         "list_api_keys",
         "scan_and_protect",
+        "generate_and_store_password",
     }
+    assert "generate_and_store_password" not in mcp_use.TOOLS
 
 
 def test_absent_file_is_audit_and_does_not_refuse(tmp_path):

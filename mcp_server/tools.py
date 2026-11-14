@@ -11,8 +11,9 @@ Tools are organised into 3 groups:
       — always start here to discover what to use.
 
   🔐  Site Authentication (list_vault_sites, check_credential_exists,
-                            get_username_for_site, browser_login)
-      — end-to-end: discover, check, and log into websites.
+                            get_username_for_site, browser_login,
+                            generate_and_store_password)
+      — end-to-end: discover, check, log into websites, and store a new password.
 
   🔑  API Key Operations (list_api_keys, use_credential,
                            run_with_credential, scan_and_protect,
@@ -1484,4 +1485,158 @@ async def verify_api_key(
         "status": v_result["status"],
         "error_class": v_result["error_class"],
         "detail": detail,
+    }
+
+
+# ── generate_and_store_password ────────────────────────────────────────────
+
+
+def _audit_generate(site_name: str) -> None:
+    """One MCP-use row. Not a gate: the decision is always allow.
+
+    ``generate_and_store_password`` reveals no stored secret, so ``mcp_use``
+    does not refuse it. The row is still written, the way a gated tool's row
+    is written, before the password exists. ``scan_and_protect`` is the other
+    tool that stores a secret and is not gated; it writes no row. This one
+    does, because creating a password is a use worth recording. The row names
+    the tool and the site. It has no field that can hold the password.
+    """
+    from mcp_server import audit, mcp_use, policy
+
+    mode = mcp_use.MODE_AUDIT
+    try:
+        loaded = policy.load()
+        if loaded.mcp_use in mcp_use.MODES:
+            mode = loaded.mcp_use
+    except Exception as exc:
+        logger.warning("generate_and_store_password policy read failed: %s", type(exc).__name__)
+    reason = mcp_use.REASON_OFF if mode == mcp_use.MODE_OFF else mcp_use.REASON_NOT_LISTED
+    try:
+        audit.record_mcp_use(
+            tool="generate_and_store_password",
+            entry=site_name,
+            decision=mcp_use.ALLOW,
+            reason=reason,
+            mcp_use=mode,
+            ask=False,
+        )
+    except Exception as exc:
+        logger.warning("generate_and_store_password audit was not written: %s", type(exc).__name__)
+
+
+def _conflict(site_name: str) -> dict:
+    return {
+        "error": (
+            f"Entry for {site_name!r} already exists. Nothing was overwritten. "
+            "Run `psamvault update` yourself to change it."
+        ),
+        "site": site_name,
+        "created": False,
+    }
+
+
+async def generate_and_store_password(
+    site_name: str,
+    username: str | None = None,
+    notes: str | None = None,
+    length: int | None = None,
+    upper: bool | None = None,
+    lower: bool | None = None,
+    digits: bool | None = None,
+    symbols: bool | None = None,
+) -> dict:
+    """Generate a password and store it as a new vault site entry.
+
+    The password is generated with :mod:`secrets`, encrypted with the VEK,
+    and sent as ciphertext via ``POST /vault``. The return value is a
+    confirmation only. The password is not a result field, not logged, and
+    not written to the audit row.
+
+    An existing site (``check_site_exists`` or HTTP 409) is refused. This
+    function does not call the vault update endpoint.
+
+    Not gated by ``mcp_use``. An audit row is written after the arguments
+    are accepted and before the password is generated.
+    """
+    from mcp_server.api_client import VaultConflictError
+    from mcp_server.crypto import encrypt_credentials
+    from mcp_server.password_gen import (
+        DEFAULT_LENGTH,
+        class_flag_problem,
+        enabled_alphabets,
+        generate_password,
+        length_problem,
+        site_name_problem,
+    )
+
+    problem = site_name_problem(site_name)
+    if problem:
+        return {"error": problem}
+
+    flags = {
+        "upper": True if upper is None else upper,
+        "lower": True if lower is None else lower,
+        "digits": True if digits is None else digits,
+        "symbols": True if symbols is None else symbols,
+    }
+    for name, value in flags.items():
+        flag_problem = class_flag_problem(name, value)
+        if flag_problem:
+            return {"error": flag_problem}
+    if username is not None and not isinstance(username, str):
+        return {"error": "username must be a string."}
+    if notes is not None and not isinstance(notes, str):
+        return {"error": "notes must be a string."}
+
+    chosen = length if length is not None else DEFAULT_LENGTH
+    pools = enabled_alphabets(**flags)
+    if not pools:
+        return {"error": "At least one character class must be enabled."}
+    length_error = length_problem(chosen, enabled=len(pools))
+    if length_error:
+        return {"error": length_error}
+
+    session_block = _session_block()
+    if session_block:
+        return session_block
+
+    _audit_generate(site_name)
+
+    stored_username = username or ""
+    stored_notes = notes or ""
+    password: str | None = None
+    try:
+        access_token = get_access_token()
+        vek = get_vek()
+        existing = await api_client.check_site_exists(access_token, site_name)
+        if isinstance(existing, dict) and existing.get("exists") is True:
+            return _conflict(site_name)
+
+        password = generate_password(chosen, **flags)
+        encrypted_blob, iv = encrypt_credentials(
+            vek,
+            username=stored_username,
+            password=password,
+            notes=stored_notes,
+        )
+        await api_client.add_vault_entry(
+            access_token=access_token,
+            site_name=site_name,
+            encrypted_blob=encrypted_blob,
+            iv=iv,
+            username_hint=stored_username or None,
+        )
+    except VaultConflictError:
+        return _conflict(site_name)
+    except Exception as exc:
+        logger.error("generate_and_store_password failed: %s", type(exc).__name__)
+        return {"error": "generate_and_store_password failed."}
+    finally:
+        password = None
+
+    return {
+        "site": site_name,
+        "length": chosen,
+        "classes": flags,
+        "created": True,
     }
