@@ -1,4 +1,4 @@
-"""Tests for crypto.py — AES-256-GCM credential decryption."""
+"""Tests for crypto.py — AES-256-GCM credential encryption and decryption."""
 
 import json
 import os
@@ -7,14 +7,30 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from mcp_server.crypto import decrypt_credentials
+from mcp_server.crypto import decrypt_credentials, encrypt_credentials
+
+
+class TestEncryptCredentials:
+    """encrypt_credentials is the CLI's site-entry blob, written by the MCP."""
+
+    def test_roundtrip_matches_decrypt_credentials(self, vek: bytes):
+        creds = {"username": "ada", "password": "correct horse", "notes": "desk"}
+        blob, iv = encrypt_credentials(vek, creds["username"], creds["password"], creds["notes"])
+        assert decrypt_credentials(vek, blob, iv) == creds
+
+    def test_empty_username_and_notes(self, vek: bytes):
+        blob, iv = encrypt_credentials(vek, "", "secret-value", "")
+        result = decrypt_credentials(vek, blob, iv)
+        assert result == {"username": "", "password": "secret-value", "notes": ""}
+
+    def test_iv_is_not_reused(self, vek: bytes):
+        first = encrypt_credentials(vek, "u", "p", "")
+        second = encrypt_credentials(vek, "u", "p", "")
+        assert first[1] != second[1]
+        assert first[0] != second[0]
 
 
 class TestDecryptCredentials:
-    """decrypt_credentials is the only public function in crypto.py.
-
-    The CLI handles encryption; the MCP only needs to decrypt.
-    """
 
     def test_decrypt_roundtrip(self, vek: bytes, sample_creds: dict):
         """A valid encrypted blob decrypts back to the original credentials."""

@@ -14,6 +14,10 @@ Discovery tools do not decrypt for this check and are not gated. That includes `
 `search_vault_tools`, `list_vault_sites`, `check_credential_exists`, `get_username_for_site`,
 `list_api_keys`, and `scan_and_protect`. They write no MCP-use audit row.
 
+`generate_and_store_password` is not gated either. It does not reveal a stored secret, so `enforce`
+does not refuse it and the server does not ask. It does write one audit row, decision `allow`,
+before the password exists. The password is not on that row.
+
 ## When each mode applies
 
 | `mcp_use` | Unlisted tool | Listed tool | Ask |

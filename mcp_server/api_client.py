@@ -18,7 +18,13 @@ def _auth_headers(access_token: str) -> dict:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+class VaultConflictError(RuntimeError):
+    """POST /vault returned 409. The existing entry was not overwritten."""
+
+
 def _handle_error(response: httpx.Response) -> None:
+    if response.status_code == 409:
+        raise VaultConflictError("psamvault API error 409: entry already exists")
     if not response.is_success:
         try:
             detail = response.json().get("detail", response.text[:500] if response.text else "")
@@ -64,6 +70,8 @@ async def _refresh_and_retry(retry_fn):
         if result is None:
             raise RuntimeError("Server returned 401 after token refresh.")
         return result
+    except VaultConflictError:
+        raise
     except Exception as e:
         raise RuntimeError(
             "Session expired. Run  psamvault login  in your terminal to re-authenticate."
@@ -306,6 +314,49 @@ async def add_api_key_entry(
                     "encrypted_blob": encrypted_blob,
                     "iv": iv,
                 },
+                timeout=30.0,
+            )
+        if response.status_code == 401:
+            return None
+        _handle_error(response)
+        return response.json()
+
+    result = await _call(access_token)
+    if result is None:
+        return await _refresh_and_retry(_call)
+    return result
+
+
+async def add_vault_entry(
+    access_token: str,
+    site_name: str,
+    encrypted_blob: str,
+    iv: str,
+    username_hint: str | None = None,
+    login_url: str | None = None,
+) -> dict:
+    """
+    POST /vault — store a new encrypted site entry.
+
+    The blob and IV are produced locally with ``encrypt_credentials``. The
+    server never sees the plaintext password. A 409 raises
+    :class:`VaultConflictError` and does not retry as an update: this function
+    never calls PUT.
+    """
+    body = {
+        "site_name": site_name,
+        "encrypted_blob": encrypted_blob,
+        "iv": iv,
+        "username_hint": username_hint,
+        "login_url": login_url,
+    }
+
+    async def _call(token: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{BASE_URL}/vault",
+                headers=_auth_headers(token),
+                json=body,
                 timeout=30.0,
             )
         if response.status_code == 401:

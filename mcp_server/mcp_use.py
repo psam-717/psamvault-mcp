@@ -71,6 +71,9 @@ DISCOVERY = frozenset({
     "get_username_for_site",
     "list_api_keys",
     "scan_and_protect",
+    # Creates a secret and does not decrypt one. Not gated. The tool writes
+    # its own audit row; the other names in this set do not.
+    "generate_and_store_password",
 })
 
 REASON_LISTED = "listed"

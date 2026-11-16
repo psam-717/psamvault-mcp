@@ -1,5 +1,7 @@
 """Tests for api_client.py — async HTTP client for psamvault API."""
 
+import json
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
@@ -19,6 +21,12 @@ class TestAuthHeaders:
 
 
 class TestHandleError:
+    def test_conflict_is_a_typed_error_without_the_body(self):
+        response = httpx.Response(409, json={"detail": "secret-should-not-leak"})
+        with pytest.raises(api_client.VaultConflictError, match="409") as caught:
+            api_client._handle_error(response)
+        assert "secret-should-not-leak" not in str(caught.value)
+
     def test_raises_on_non_success(self):
         response = httpx.Response(404)
         with pytest.raises(RuntimeError, match="psamvault API error 404"):
@@ -154,6 +162,46 @@ class TestGetVaultEntry:
         )
         result = await api_client.get_vault_entry(TEST_ACCESS_TOKEN, "github.com")
         assert result == {"encrypted_blob": "abc123", "iv": "iv123"}
+
+
+class TestAddVaultEntry:
+    @pytest.mark.asyncio
+    async def test_posts_ciphertext_and_does_not_update(self, httpx_mock: HTTPXMock, session_file):
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{api_client.BASE_URL}/vault",
+            json={"site_name": "github.com"},
+        )
+        result = await api_client.add_vault_entry(
+            TEST_ACCESS_TOKEN,
+            "github.com",
+            "aabb",
+            "ccdd",
+            username_hint="ada",
+        )
+        assert result == {"site_name": "github.com"}
+        posted = httpx_mock.get_requests()
+        assert len(posted) == 1
+        assert posted[0].method == "POST"
+        assert posted[0].url.path == "/vault"
+        body = json.loads(posted[0].content)
+        assert body["site_name"] == "github.com"
+        assert body["encrypted_blob"] == "aabb"
+        assert body["iv"] == "ccdd"
+        assert body["username_hint"] == "ada"
+        assert body["login_url"] is None
+
+    @pytest.mark.asyncio
+    async def test_409_raises_conflict_and_does_not_put(self, httpx_mock: HTTPXMock, session_file):
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{api_client.BASE_URL}/vault",
+            status_code=409,
+            json={"detail": "already exists"},
+        )
+        with pytest.raises(api_client.VaultConflictError):
+            await api_client.add_vault_entry(TEST_ACCESS_TOKEN, "github.com", "aabb", "ccdd")
+        assert [request.method for request in httpx_mock.get_requests()] == ["POST"]
 
 
 class TestCheckSiteExists:

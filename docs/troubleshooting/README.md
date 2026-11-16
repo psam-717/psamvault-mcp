@@ -34,6 +34,6 @@ Guides for fixing **psamvault-mcp** install and runtime issues (especially for A
   upgrading.
 - [Configuration](../reference/configuration.md) — host config keys, the environment variables the
   server reads, where vault state lives, and the version-lockstep contract.
-- [Tool reference](../reference/tools.md) — the 13 registered tools.
+- [Tool reference](../reference/tools.md) — the 14 registered tools.
 - [mcp_server/prompts/general-rules.md](../../mcp_server/prompts/general-rules.md) — the agent error-
   handling guidance (session timeout, CAPTCHA, browser timeout, unknown site).

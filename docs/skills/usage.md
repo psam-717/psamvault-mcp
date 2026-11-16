@@ -3,7 +3,7 @@ title: "Skill — use the psamvault tools"
 description: Agent-followable skill for using psamvault-mcp — which tool for which job, the workflows, and the rules that do not bend.
 order: 150
 name: psamvault-mcp-usage
-version: 1.10.0
+version: 1.11.0
 ---
 
 # Skill: use psamvault-mcp
@@ -20,11 +20,12 @@ HTTP status, an exit code) — and **no secret appears in your output, your file
 
 [psamvault-mcp](https://pypi.org/project/psamvault-mcp/) is an MCP server for [psamvault](https://pypi.org/project/psamvault/) — a zero-knowledge credential vault for AI agents. It lets agents use stored credentials (site passwords, API keys, tokens) without ever seeing their plaintext values.
 
-The server provides four complementary flows:
+The server provides these flows:
 
 - **`browser_login`** — Opens a real Chromium browser, navigates to the site, fills credentials directly in the browser process. The agent only sees whether login succeeded.
 - **`use_credential`** — Authenticated HTTP, only to that entry's own site or the API key's service (or a host a human allowed in `~/.psamvault/policy.json`). Any other host is refused. The response is scrubbed of the secret; that scrub is defence in depth.
 - **`run_with_credential`** — A CLI that reads a token from the environment or stdin. `http(s)` URLs in the command follow the same host rule. Output is scrubbed of the secret and its common encodings, including reversed text. A command with no URL is not host-checked.
+- **`generate_and_store_password`** — Generates a password and stores it as a new vault site entry. The password is never returned. An existing site is refused; the human runs `psamvault update`.
 - **`scan_and_protect`** — Scans a project directory for `.env` files, detects secrets using pattern matching, encrypts them into the psamvault vault, and replaces plaintext with `psamvault:KEY_NAME` placeholders.
 
 This is the **key differentiator**: credentials are never in the agent's context window, never in training data, and never accidentally leaked in a prompt.
@@ -37,6 +38,7 @@ This is the **key differentiator**: credentials are never in the agent's context
 - User wants to log into a website via agent (`browser_login`)
 - User needs authenticated API calls via agent (`use_credential`)
 - User needs to run CLI commands with credentials (twine upload, docker login, git push — `run_with_credential`)
+- User wants a new site password generated and stored (`generate_and_store_password`)
 - User wants to secure their project's `.env` files (`scan_and_protect`)
 - Any task involving credential lookup or use — prefer MCP tools over terminal-based CLI
 - **Do not use for**: reading credentials directly (always use `use_credential` instead)
@@ -69,6 +71,7 @@ Once connected, these tools become available (prefixed `mcp_psamvault_*` in Herm
 | `use_credential` | `site_name, target_url, method, inject_as, fields, header_name, body, extra_headers` | Authenticated HTTP to the entry's site or the key's service. `target_url` is an absolute http(s) URL. Other hosts are refused | ❗ Secret is not a result field; response is scrubbed. Host check is the boundary |
 | `browser_login` | `site_name, login_url, selectors, timeout_ms` | Log into website via browser | ❗ Fills directly in browser |
 | `run_with_credential` | `site_name, command, inject_as, env_var_name, extra_env, workdir, timeout` | CLI with the credential in env or stdin. URLs in the command are host-checked | ❗ Output scrubbed (raw, reversed, encodings). Scrub is not the boundary |
+| `generate_and_store_password` | `site_name, username, notes, length, upper, lower, digits, symbols` | Generate a password and store a new site entry. Default length 20, max 128. Safe symbols by default | ❗ Password is never returned. Refuses an existing site |
 | `scan_and_protect` | `project_dir, patterns, project_name` | Scan & encrypt .env secrets | ❗ Encrypts into vault |
 | `export_key_to_mcp_config` | `key_name, server_name, url/command, inject_as, replace, dry_run, config_path, verify_url, skip_verify` | Export a vault API key into a host MCP config (e.g. Hermes `config.yaml`) — auto-verifies HTTP keys | ❗ Key value never returned |
 | `export_key_to_env_file` | `key_name, env_var_name, agent, env_path, dry_run, verify_url, skip_verify` | Export a vault API key into an agent `.env` as an environment variable (default `HERMES_HOME/.env`) — updates in place, backs up first, **never writes an invalid key** | ❗ Key value never returned |
@@ -202,7 +205,17 @@ Supported injection modes:
 
 Auto-convenience: When `env_var_name="TWINE_PASSWORD"`, the tool automatically sets `TWINE_USERNAME=__token__`.
 
-### 4. Protecting .env Files
+### 4. Generate and store a password
+
+When the user wants a new site password created and stored:
+
+1. **Call** `generate_and_store_password(site_name="github.com")`. `username` and `notes` are optional. `length` defaults to 20 and must be 8 to 128 (the floor is the higher of 8 and the number of enabled classes). `upper`, `lower`, `digits`, and `symbols` default to true.
+2. **Read only** `site`, `length`, `classes`, and `created`. The password is not in the result. Do not ask the tool to reveal it, and do not look for it in the audit row.
+3. **If `created` is false** and the error names `psamvault update`, the site already exists. Nothing was overwritten. Tell the user to run `psamvault update` themselves. Do not retry, and do not run `psamvault`.
+
+At least one character class must stay enabled. Symbols are only the safe set `!@^*()-_=+[]{}:,.`. The CLI's `--all-symbols` option is not a parameter of this tool. The tool is not gated by `mcp_use`. It still writes one audit row.
+
+### 5. Protecting .env Files
 
 When the user wants to secure project secrets:
 
@@ -226,7 +239,7 @@ When the user wants to secure project secrets:
    ```
 5. **Nothing else needed** — the `.env` file now has `psamvault:KEY` placeholders and pv-dotenv resolves them at runtime
 
-### 5. Vault Discovery
+### 6. Vault Discovery
 
 When the user asks "What credentials do I have?":
 
@@ -235,7 +248,7 @@ When the user asks "What credentials do I have?":
 3. **For each site**, optionally `get_username_for_site(site_name)` to show usernames
 4. Present the information as a clean list to the user
 
-### 6. Exporting a Key into an Agent `.env`
+### 7. Exporting a Key into an Agent `.env`
 
 When the user asks "put my Tavily key in the agent's .env" or "make <tool> see my key without pasting it":
 
@@ -260,7 +273,8 @@ Notes:
 | Rule | Rationale |
 |------|-----------|
 | **Always use MCP tools** for credential ops | Never read `~/.psamvault/` files or env vars directly |
-| **Never print raw credentials** | Keeps secrets out of context window and transcript |
+| **Never print raw credentials** | Keeps secrets out of context window and transcript. `generate_and_store_password` returns only site, length, classes, and created |
+| **Do not overwrite a site** | `generate_and_store_password` refuses an existing entry. The human runs `psamvault update` |
 | **Never ask user to paste credentials** | Use `browser_login`, `use_credential`, or `run_with_credential` instead |
 | **Use `fields` parameter** | Reduces token usage and avoids returning unnecessary data |
 | **Relay `message` field verbatim** | Browser login messages contain user-facing instructions |
@@ -309,7 +323,7 @@ Tell users they can say things like:
 <!-- section:usage/verification -->
 
 - [ ] MCP server is connected (stdio, managed by Hermes automatically)
-- [ ] `search_vault_tools("")` returns all 13 tools (v0.5.0+; `verify_api_key`, `export_key_to_mcp_config` and `export_key_to_env_file` present; `capture_stripe_credentials` REMOVED in v0.5.0)
+- [ ] `search_vault_tools("")` returns all 14 tools (`generate_and_store_password` present; `verify_api_key`, `export_key_to_mcp_config` and `export_key_to_env_file` present; `capture_stripe_credentials` REMOVED in v0.5.0)
 - [ ] `get_version()` returns a version string, quoted from the server (not from memory or this file), and
       the reported `tool_surface_matches_newest` / `expected_tool_count` agree with the tool list above
 - [ ] "Are you connected?" answered by calling the server (that plus one read-only list tool), never from
@@ -326,7 +340,7 @@ Tell users they can say things like:
 - **Single-process Playwright**: The browser lives in-process with the MCP server. No subprocess daemon chain. If the browser crashes, the next call auto-restarts it.
 - **Stdio transport (default)**: Hermes manages the process lifecycle. No manual server start needed.
 - **OS keychain auth**: The VEK (Vault Encryption Key) is stored in the OS keychain by the psamvault CLI at login time.
-- **MCP use, then host binding.** Tools that decrypt a secret check `mcp_use` in `~/.psamvault/policy.json` before decryption. `audit` (the default when the key is absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `allow_tools`, and asks in chat only when `ask_each_time` is true; a missing answer refuses the use. `off` records the use and does not consult the list. A result that starts with `STOP` is final for that call: relay it, including `psamvault policy allow-tool <entry> <tool>` when the tool is not listed, and do not retry or edit `policy.json`. Discovery tools are not gated. There is no separate consent dialog on `audit` or `off`. The in-chat ask exists only for an allowed use under `enforce` when `ask_each_time` is true.
+- **MCP use, then host binding.** Tools that decrypt a secret check `mcp_use` in `~/.psamvault/policy.json` before decryption. `audit` (the default when the key is absent) records the use and allows it, and does not ask. `enforce` refuses a tool that is not in `allow_tools`, and asks in chat only when `ask_each_time` is true; a missing answer refuses the use. `off` records the use and does not consult the list. A result that starts with `STOP` is final for that call: relay it, including `psamvault policy allow-tool <entry> <tool>` when the tool is not listed, and do not retry or edit `policy.json`. Discovery tools are not gated. `generate_and_store_password` is not gated and does write one audit row; the password is not on the row. There is no separate consent dialog on `audit` or `off`. The in-chat ask exists only for an allowed use under `enforce` when `ask_each_time` is true.
 - **Host binding**: after that check allows the use, a stored secret goes only to the entry's own site, the API key's service hosts, or `allow_hosts` in `~/.psamvault/policy.json`. Redirects are checked one hop at a time.
 - **Output scrubbing**: `use_credential` responses and `run_with_credential` stdout/stderr are scrubbed of the secret in its raw form, reversed text, and common encodings. That is defence in depth. The host check is the boundary for where the injected secret may go. A different vault secret is refused by `PSAMVAULT_AGENT=1` on the child (the CLI reveal gate) and, for the obvious spellings, by the command list. The list is a convenience. Full isolation needs a separate OS user.
 

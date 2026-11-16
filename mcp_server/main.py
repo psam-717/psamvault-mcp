@@ -95,6 +95,7 @@ server = Server(
         "- check_credential_exists  → verify a credential exists for a site\n"
         "- get_username_for_site    → get just the username (not password) for a site\n"
         "- browser_login            → open a browser and log into a website silently\n"
+        "- generate_and_store_password → generate a password and store it; the value is never returned\n"
          "\n"
          "🔑  API Key Operations — use and protect API keys:\n"
         "- list_api_keys            → list stored API keys (no key values)\n"
@@ -161,6 +162,14 @@ _TOOL_REGISTRY: dict[str, str] = {
         "Params: site_name (required), login_url, username_selector, "
         "password_selector, submit_selector, timeout_ms (all optional)."
         + _GATED_POLICY
+    ),
+    "generate_and_store_password": (
+        "Generate a password and store it as a new vault entry. "
+        "Returns site, length, classes, and created — never the password. "
+        "Params: site_name (required), username, notes, length (default 20, min 8, max 128), "
+        "upper, lower, digits, symbols (all default true). "
+        "Refuses when the site already exists; run psamvault update yourself. "
+        "Not gated by mcp_use. An audit row is written and does not contain the password."
     ),
 
     # ── API Key Operations ─────────────────────────────────────────────
@@ -372,6 +381,76 @@ TOOL_DEFINITIONS = [
                 }
             },
             "required": ["site_name"]
+        }
+    ),
+    Tool(
+        name="generate_and_store_password",
+        description=(
+            "[🔐 Site Authentication] Generate a cryptographically secure password and store it "
+            "as a new vault site entry. The password is created with the secrets module, "
+            "encrypted locally with the vault key, and sent only as ciphertext. "
+            "The password is never returned, logged, or written to the audit row. "
+            "Returns only site, length, classes, and created. "
+            "Symbols are the CLI safe set !@^*()-_=+[]{}:,. only. "
+            "The CLI's --all-symbols option is not offered here. "
+            "If the site already exists, the call is refused and nothing is overwritten — "
+            "run `psamvault update` yourself to change an existing entry. "
+            "Not gated by mcp_use (no stored secret is revealed). An audit row is still written."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "site_name": {
+                    "type": "string",
+                    "description": (
+                        "Vault site name to create, e.g. 'github.com'. "
+                        "The same characters the psamvault CLI refuses in a site name are refused here."
+                    ),
+                },
+                "username": {
+                    "type": "string",
+                    "description": "Optional username stored with the entry. Never returned.",
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Optional notes stored with the entry. Never returned.",
+                },
+                "length": {
+                    "type": "integer",
+                    "description": (
+                        "Password length. Default 20, the same default as `psamvault generate`. "
+                        "Minimum 8, or the number of enabled classes when that is higher. "
+                        "Maximum 128."
+                    ),
+                    "default": 20,
+                    "minimum": 8,
+                    "maximum": 128,
+                },
+                "upper": {
+                    "type": "boolean",
+                    "description": "Include uppercase A-Z. Default true.",
+                    "default": True,
+                },
+                "lower": {
+                    "type": "boolean",
+                    "description": "Include lowercase a-z. Default true.",
+                    "default": True,
+                },
+                "digits": {
+                    "type": "boolean",
+                    "description": "Include digits 0-9. Default true.",
+                    "default": True,
+                },
+                "symbols": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the safe symbol set !@^*()-_=+[]{}:,. "
+                        "The full string.punctuation set is not available. Default true."
+                    ),
+                    "default": True,
+                },
+            },
+            "required": ["site_name"],
         }
     ),
 
@@ -978,6 +1057,18 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
                 password_selector=arguments.get("password_selector"),
                 submit_selector=arguments.get("submit_selector"),
                 timeout_ms=arguments.get("timeout_ms", 8000),
+            )
+
+        elif name == "generate_and_store_password":
+            result = await tools.generate_and_store_password(
+                site_name=arguments["site_name"],
+                username=arguments.get("username"),
+                notes=arguments.get("notes"),
+                length=arguments.get("length", 20),
+                upper=arguments.get("upper", True),
+                lower=arguments.get("lower", True),
+                digits=arguments.get("digits", True),
+                symbols=arguments.get("symbols", True),
             )
 
         elif name == "scan_and_protect":

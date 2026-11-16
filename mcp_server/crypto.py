@@ -80,6 +80,42 @@ def decrypt_credentials(
     return json.loads(plaintext.decode("utf-8"))
 
 
+def encrypt_credentials(
+    vek: bytes,
+    username: str,
+    password: str,
+    notes: str = "",
+) -> tuple[str, str]:
+    """
+    Encrypt a site-credential bundle using AES-256-GCM.
+
+    Same JSON shape and cipher as the CLI's ``encrypt_credentials``: username,
+    password, and notes in one payload, a fresh 12-byte IV, no associated
+    data. ``psamvault get`` decrypts what this stores. The caller sends only
+    the hex ciphertext and IV.
+
+    Args:
+        vek:      32-byte VEK from the session.
+        username: Plaintext username. May be empty.
+        password: Plaintext password. Never log this argument.
+        notes:    Optional notes. May be empty.
+
+    Returns:
+        (encrypted_blob_hex, iv_hex)
+    """
+    payload = json.dumps({
+        "username": username,
+        "password": password,
+        "notes": notes,
+    }).encode("utf-8")
+
+    iv = os.urandom(12)
+    aesgcm = AESGCM(vek)
+    encrypted_blob = aesgcm.encrypt(iv, payload, None)
+
+    return encrypted_blob.hex(), iv.hex()
+
+
 def encrypt_api_key(
     vek: bytes,
     service: str,

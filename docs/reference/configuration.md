@@ -264,6 +264,8 @@ An explicit `"audit"`, `"enforce"`, or `"off"` sets `notice` to null. An unknown
 
 Tools that decrypt a secret are gated: `use_credential`, `run_with_credential`, `browser_login`, `export_key_to_mcp_config`, `export_key_to_env_file`, `verify_api_key`. Discovery tools are not gated and write no MCP-use row: `get_version`, `search_vault_tools`, `list_vault_sites`, `check_credential_exists`, `get_username_for_site`, `list_api_keys`, `scan_and_protect`.
 
+`generate_and_store_password` is not gated. It creates a password and does not reveal a stored one, so `enforce` does not refuse it and `ask_each_time` is not consulted. It does append one row before the password is generated. The decision is `allow`. The reason is `not-listed` when the mode is `audit` or `enforce`, and `mcp-use-off` when the mode is `off`. `ask` is false. The row's `entry` is the site name. The password is not a field on the row.
+
 The check runs at the start of the gated tool, before `get_vek()` and before the destination check. The destination check still needs the decrypted service identity, so it stays after an allow. A refusal never reads the VEK and never sends the secret.
 
 Under `enforce` with `ask_each_time` true, the server asks with MCP elicitation (`session.elicit_form` in the installed MCP SDK, a boolean `allow` field, message `Allow <tool> to use <entry>?`). Yes keeps the allow. No is deny, reason `ask-declined`. No elicitation capability, a URL-only capability, an error, a timeout (300 seconds), or cancel is deny, reason `ask-unanswered`. `"audit"` and `"off"` do not ask, even when the flag is true. A denial is not asked back into an allow.
@@ -274,7 +276,7 @@ Human commands, all of them terminal-only when they write: `psamvault policy all
 
 ## Audit trail
 
-Every gated call appends one row to `~/.psamvault/audit.jsonl` before decryption, whether the decision was allow or deny. Discovery calls do not. A write failure does not fail the tool.
+Every gated call appends one row to `~/.psamvault/audit.jsonl` before decryption, whether the decision was allow or deny. Discovery calls do not, except `generate_and_store_password`, which appends one `allow` row before it generates the password. A write failure does not fail the tool. The password is never a field on the row.
 
 The row is one compact JSON object per line (no space after `:` or `,`), UTF-8, file mode `0600`, directory mode `0700`. The directory mode is applied when the filesystem accepts `chmod`. A failure to change the directory mode does not drop the row and does not fail the tool. The file mode is applied after the append, and a failure of that `chmod` leaves the row in place. At 1,000,000 bytes the file is renamed to `audit.jsonl.1` (an existing `.1` is replaced). `command` is `mcp <tool>`, `caller` is `mcp`, `policy` is null, `signals` is `[]`, `tty` is false, and `reason` is one of `listed`, `not-listed`, `mcp-use-off`, `ask-declined`, `ask-unanswered`. `ask` is true only when an `elicitation/create` request was sent. It is false when the client has no form elicitation or there is no session to send on, under `audit` and `off`, and when `enforce` refused the tool before a prompt. A prompt that was sent and then declined, cancelled, timed out, or answered with an empty form stays `ask` true. The decision is still `ask-unanswered` when no usable yes arrived, including when nothing was sent. The CLI's `McpPlan.ask` is the earlier flag, "should a prompt be attempted". This row records whether that attempt reached the client. The row has no field for a secret.
 
@@ -379,8 +381,12 @@ The server and its usage skill are a **pinned pair**, and the pairing ships *ins
 | `notes` | A one-line summary of the release. |
 | `tools` | The release's tool **fingerprint** — the sorted list of tool names. |
 
-The newest entry in the contract is **0.5.5** (skill floor 1.9.1, **not** breaking — fixes, documentation and
-a repository tool, with the 13 MCP tools and their names unchanged). Older entries are kept, so an
+The newest entry in the contract is **0.5.6** (skill floor 1.9.1, **not** breaking). That version is an
+unpublished placeholder: the package version stays 0.5.5 until release, and 0.5.6 is not a
+psamvault-cli version. It adds `generate_and_store_password`, so the fingerprint is 14 tools. The
+skill floor is intentionally still 1.9.1. The public usage skill in this repository moves to 1.11.0
+with the new tool. The private skill in `psam-717/private-skills` is not updated here; raise the
+floor to that skill's version when it documents the tool. Older entries are kept, so an
 install can be told what it is missing without reaching the network. The contract's own schema, skill repo/path, and
 `installed_path` (`skills/psam-custom/psamvault-mcp/SKILL.md` under `HERMES_HOME`) head the file.
 
@@ -415,6 +421,6 @@ The contract is enforced in both directions:
 ## See also
 
 - [Installation](./../installation.md) — host wiring and upgrading.
-- [Tool reference](./tools.md) — the 13 tools.
+- [Tool reference](./tools.md) — the 14 tools.
 - [MCP install & connect](./../troubleshooting/MCP-INSTALL-AND-CONNECT.md) — the repair playbook.
 - [PYTHONPATH conflict](./../troubleshooting/PYTHONPATH-CONFLICT.md) — import contamination.
